@@ -84,37 +84,6 @@ fn render_nodal(uv: vec2<f32>) -> vec3<f32> {
     return c;
 }
 
-// ── Mode 5: volumetric emission cloud ────────────────────────────────────
-fn render_cloud(uv: vec2<f32>) -> vec3<f32> {
-    var az = u.time*u.speed*0.1;
-    if u.mouse_down >= 0.5 { az = u.mouse.x * TAU; }
-    let el  = 0.45;
-    let cp  = vec3<f32>(sin(az)*cos(el), sin(el), cos(az)*cos(el)) * (3.0/u.zoom);
-    let fwd = normalize(-cp);
-    let rgt = normalize(cross(vec3<f32>(0.0,1.0,0.0), fwd));
-    let up  = cross(fwd, rgt);
-    let rd  = normalize(fwd + uv.x*rgt + uv.y*up);
-
-    var col      = vec3<f32>(0.0);
-    var transmit = 1.0;
-    var t        = 0.0;
-    let dt       = 0.09;
-    for (var i = 0; i < 55; i++) {
-        if t > 6.0 || transmit < 0.01 { break; }
-        let p   = cp + rd * t;
-        let f   = crystal_field(p);
-        let f2  = cf2(p);
-        let rho = max(mix(f*f, f2*f2, u.field_mix) - u.iso_level*0.05, 0.0);
-        let hue = fract(f*1.5 + u.color_shift + u.time*u.speed*0.05);
-        let ec  = 0.5 + 0.5*cos(TAU*(hue + vec3<f32>(0.0, 0.333, 0.667)));
-        let op  = rho * dt * 3.5;
-        col      += ec * op * transmit * mix(vec3<f32>(1.0), u.crystal_color.xyz, 0.6);
-        transmit *= exp(-op * 2.5);
-        t += dt;
-    }
-    return col;
-}
-
 // ── Mode 6: quantum phase portrait ───────────────────────────────────────
 fn render_phase(uv: vec2<f32>) -> vec3<f32> {
     let z   = u.time * u.speed * 0.12;

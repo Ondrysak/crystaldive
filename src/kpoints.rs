@@ -124,3 +124,52 @@ pub fn build_kpath(sys: CrystalSystem) -> KpathWalker {
     };
     KpathWalker::new(pts, path)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn close(a: [f32; 3], b: [f32; 3], tol: f32) -> bool {
+        (a[0]-b[0]).abs() < tol && (a[1]-b[1]).abs() < tol && (a[2]-b[2]).abs() < tol
+    }
+
+    #[test]
+    fn all_systems_build() {
+        for sys in [
+            CrystalSystem::Cubic, CrystalSystem::Hexagonal, CrystalSystem::Trigonal,
+            CrystalSystem::Tetragonal, CrystalSystem::Orthorhombic,
+            CrystalSystem::Monoclinic, CrystalSystem::Triclinic,
+        ] {
+            let kp = build_kpath(sys);
+            assert!(kp.n_points() >= 4, "{:?}", sys);
+            assert_eq!(kp.label_at(0), "Γ");
+        }
+    }
+
+    #[test]
+    fn tick_advances_smoothly() {
+        let mut kp = build_kpath(CrystalSystem::Cubic);
+        kp.speed = 1.0;
+        let (k0, _) = kp.tick(0.0);
+        assert!(close(k0, [0.0; 3], 1e-3), "first tick should be near Γ");
+        let (k_mid, _) = kp.tick(0.25);
+        assert!(k_mid != [0.0; 3]);
+    }
+
+    #[test]
+    fn snap_to_wraps() {
+        let kp = build_kpath(CrystalSystem::Cubic);
+        let n = kp.n_points();
+        assert_eq!(kp.snap_to(0), kp.snap_to(n));
+    }
+
+    #[test]
+    fn reset_restores_segment_zero() {
+        let mut kp = build_kpath(CrystalSystem::Cubic);
+        kp.speed = 1.0;
+        for _ in 0..10 { kp.tick(0.5); }
+        kp.reset();
+        assert_eq!(kp.seg, 0);
+        assert_eq!(kp.t, 0.0);
+    }
+}

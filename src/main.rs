@@ -1,15 +1,3 @@
-mod audio;
-mod camera;
-mod crystals;
-mod kpoints;
-mod mesh;
-mod modes;
-mod poscar;
-mod reciprocal;
-mod renderer;
-mod symmetry;
-mod ui;
-
 use std::{sync::Arc, time::Instant};
 
 use winit::{
@@ -19,6 +7,7 @@ use winit::{
     window::WindowAttributes,
 };
 
+use crystal_viz::{audio, crystals, kpoints, poscar, reciprocal, renderer, symmetry};
 use crystals::{all_crystals, all_groups, CrystalDef};
 use poscar::Crystal;
 use reciprocal::{crossfade_pack, GpuField};
@@ -50,13 +39,13 @@ impl Default for FieldParams {
     }
 }
 
-const MODE_NAMES: [&str; 39] = [
-    "3D ISO", "BZ SLICE", "FERMI", "DENSITY", "NODAL", "CLOUD", "PHASE",
+const MODE_NAMES: [&str; 36] = [
+    "3D ISO", "BZ SLICE", "FERMI", "DENSITY", "NODAL", "PHASE",
     "STRIPES", "WARP", "LINKS", "XRD", "RECIP", "NONEUC",
     "PHONON", "MOIRE", "EWALD", "WANNIER", "MAGNETIC", "DISPERSION",
-    "KIKUCHI", "DEFECT", "BAND SURFACE", "ORBITAL", "SPIN TEXTURE",
+    "KIKUCHI", "DEFECT", "BAND SURFACE", "SPIN TEXTURE",
     "BZ PATH", "CDW", "QUASICRYSTAL", "THERMAL", "DOMAIN WALL",
-    "FRACTURE", "NEUTRON",
+    "FRACTURE",
     "BERRY", "HOFSTADTER", "STM", "SPECTRAL", "VORTEX KNOT",
     "BLOCH WAVE", "PLASMON", "NEMATIC",
 ];
@@ -394,7 +383,7 @@ impl ApplicationHandler for App {
                     PhysicalKey::Code(KeyCode::Digit2) => gpu.set_supercell(2),
                     PhysicalKey::Code(KeyCode::Digit3) => gpu.set_supercell(3),
                     PhysicalKey::Code(KeyCode::KeyM) => {
-                        self.field_params.mode = (self.field_params.mode + 1) % 13;
+                        self.field_params.mode = (self.field_params.mode + 1) % MODE_NAMES.len() as u32;
                     }
                     PhysicalKey::Code(KeyCode::KeyK) => {
                         if let Some(kp) = &gpu.kpath {

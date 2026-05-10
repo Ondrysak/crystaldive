@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -a \"c:/Users/Ondra/Documents/GitHub/crystaldive\" && du -sh \"c:/Users/Ondra/Documents/GitHub/crystaldive/target\" 2>nul)",
+      "Bash(cargo test *)",
+      "Bash(cargo build *)",
+      "Bash(cargo run *)",
+      "Bash(chmod +x .githooks/pre-commit)",
+      "Bash(git config *)",
+      "Bash(sh .githooks/pre-commit)",
+      "Bash(CRYSTAL_VIZ_TEST_RATIO=2 cargo test --quiet -- --include-ignored mode_perf)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\Ondra\\Documents\\GitHub\\crystaldive"
+    ]
+  }
+}

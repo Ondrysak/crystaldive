@@ -1,0 +1,22 @@
+#!/bin/sh
+# Pre-commit hook for crystaldive.
+#
+# Runs:
+#   1. cargo test         — fast unit tests for pure-Rust modules
+#   2. mode_perf bench     — flags any field render mode running >10× the median
+#
+# Enable with:  git config core.hooksPath .githooks
+#
+# Bypass once:  git commit --no-verify
+
+set -e
+
+echo "[pre-commit] cargo test (unit + mode_perf)"
+# `--include-ignored` runs the GPU-backed mode_perf bench in the same compile,
+# so unit tests and the regression guard share build artifacts.
+# Debug mode is fine — GPU timing is dominated by driver+shader work, not
+# Rust opt level — and avoids holding a lock on the release binary if the
+# viz happens to be running.
+cargo test --quiet -- --include-ignored --nocapture
+
+echo "[pre-commit] ok"

@@ -164,3 +164,77 @@ pub fn crossfade_pack(from: &GpuField, to: &GpuField, t: f32) -> Vec<f32> {
     }
     d
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::poscar::{Atom, Crystal};
+
+    fn nacl() -> Crystal {
+        Crystal {
+            lattice: [[5.64, 0.0, 0.0], [0.0, 5.64, 0.0], [0.0, 0.0, 5.64]],
+            atoms: vec![
+                Atom { species: "Na".into(), pos_cart: [0.0, 0.0, 0.0] },
+                Atom { species: "Cl".into(), pos_cart: [2.82, 2.82, 2.82] },
+            ],
+        }
+    }
+
+    #[test]
+    fn reciprocal_cubic() {
+        let lat = [[2.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 2.0]];
+        let b = reciprocal_lattice(&lat);
+        let expected = std::f32::consts::TAU / 2.0;
+        assert!((b[0][0] - expected).abs() < 1e-4);
+        assert!((b[1][1] - expected).abs() < 1e-4);
+        assert!((b[2][2] - expected).abs() < 1e-4);
+        assert!(b[0][1].abs() < 1e-4 && b[0][2].abs() < 1e-4);
+    }
+
+    #[test]
+    fn gpu_field_construction() {
+        let f = GpuField::from_crystal(&nacl(), 3);
+        assert!(f.count > 0);
+        assert!(f.count <= MAX_G);
+        assert_eq!(f.gvecs.len(), f.count);
+        assert_eq!(f.amps.len(), f.count);
+        assert_eq!(f.phases.len(), f.count);
+        // Amplitudes are normalized to ≤1.
+        for &a in &f.amps { assert!(a >= 0.0 && a <= 1.0 + 1e-4, "amp out of range: {a}"); }
+    }
+
+    #[test]
+    fn gpu_field_amps_sorted_descending() {
+        let f = GpuField::from_crystal(&nacl(), 3);
+        for w in f.amps.windows(2) {
+            assert!(w[0] >= w[1] - 1e-5, "amps not sorted: {:?}", w);
+        }
+    }
+
+    #[test]
+    fn pack_size_matches_texture() {
+        let f = GpuField::from_crystal(&nacl(), 3);
+        let p = f.pack();
+        assert_eq!(p.len(), MAX_G * 4 * 2);
+    }
+
+    #[test]
+    fn seed_kpoint_at_gamma_zero_phase() {
+        let mut f = GpuField::from_crystal(&nacl(), 3);
+        f.seed_kpoint([0.0, 0.0, 0.0], 1.0);
+        for &p in &f.phases {
+            // rem_euclid(TAU) of 0 is 0.
+            assert!(p.abs() < 1e-3, "Γ should give zero phase, got {p}");
+        }
+    }
+
+    #[test]
+    fn crossfade_pack_is_full_size() {
+        let mut a = GpuField::from_crystal(&nacl(), 3);
+        let mut b = GpuField::from_crystal(&nacl(), 3);
+        a.seed_kpoint([0.0; 3], 1.0);
+        b.seed_kpoint([0.5, 0.0, 0.5], 1.0);
+        let mid = crossfade_pack(&a, &b, 0.5);
+        assert_eq!(mid.len(), MAX_G * 4 * 2);
+    }
+}

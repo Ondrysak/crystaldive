@@ -82,3 +82,62 @@ fn len(v: [f32; 3]) -> f32 {
 fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cubic() {
+        let lat = [[3.0, 0.0, 0.0], [0.0, 3.0, 0.0], [0.0, 0.0, 3.0]];
+        assert_eq!(detect(&lat), CrystalSystem::Cubic);
+    }
+
+    #[test]
+    fn tetragonal() {
+        let lat = [[4.0, 0.0, 0.0], [0.0, 4.0, 0.0], [0.0, 0.0, 6.0]];
+        assert_eq!(detect(&lat), CrystalSystem::Tetragonal);
+    }
+
+    #[test]
+    fn orthorhombic() {
+        let lat = [[3.0, 0.0, 0.0], [0.0, 5.0, 0.0], [0.0, 0.0, 7.0]];
+        assert_eq!(detect(&lat), CrystalSystem::Orthorhombic);
+    }
+
+    #[test]
+    fn hexagonal() {
+        // a=b=3, c=5, gamma=120°: a along x, b at 120° from a in xy plane.
+        let lat = [
+            [3.0, 0.0, 0.0],
+            [-1.5, 3.0 * 0.8660254, 0.0],
+            [0.0, 0.0, 5.0],
+        ];
+        assert_eq!(detect(&lat), CrystalSystem::Hexagonal);
+    }
+
+    #[test]
+    fn monoclinic() {
+        // alpha=gamma=90°, beta=110° — second vector tilted in xz.
+        let lat = [
+            [4.0, 0.0, 0.0],
+            [0.0, 5.0, 0.0],
+            [6.0 * (110.0_f32.to_radians()).cos(), 0.0, 6.0 * (110.0_f32.to_radians()).sin()],
+        ];
+        assert_eq!(detect(&lat), CrystalSystem::Monoclinic);
+    }
+
+    #[test]
+    fn names_unique_and_nonempty() {
+        let all = [
+            CrystalSystem::Cubic, CrystalSystem::Hexagonal, CrystalSystem::Trigonal,
+            CrystalSystem::Tetragonal, CrystalSystem::Orthorhombic,
+            CrystalSystem::Monoclinic, CrystalSystem::Triclinic,
+        ];
+        let mut names: Vec<&str> = all.iter().map(|s| s.name()).collect();
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), 7);
+        assert!(names.iter().all(|n| !n.is_empty()));
+    }
+}

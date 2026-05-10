@@ -203,3 +203,87 @@ pub fn element_radius(sym: &str) -> f32 {
         _    => 0.50,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const NACL_VASP5: &str = "NaCl
+1.0
+5.64 0.0  0.0
+0.0  5.64 0.0
+0.0  0.0  5.64
+Na Cl
+1 1
+Direct
+0.0 0.0 0.0
+0.5 0.5 0.5
+";
+
+    const SI_CARTESIAN: &str = "Si diamond
+2.0
+2.715  0.000  0.000
+0.000  2.715  0.000
+0.000  0.000  2.715
+Si
+2
+Cartesian
+0.0  0.0  0.0
+1.3575 1.3575 1.3575
+";
+
+    #[test]
+    fn parse_vasp5_direct_coords() {
+        let c = Crystal::parse(NACL_VASP5).expect("parse");
+        assert_eq!(c.atoms.len(), 2);
+        assert_eq!(c.atoms[0].species, "Na");
+        assert_eq!(c.atoms[1].species, "Cl");
+        // Frac (0.5, 0.5, 0.5) → cart (2.82, 2.82, 2.82) for diagonal lattice.
+        let p = c.atoms[1].pos_cart;
+        for v in p { assert!((v - 2.82).abs() < 1e-3, "expected 2.82, got {v}"); }
+    }
+
+    #[test]
+    fn parse_vasp5_cartesian_with_scale() {
+        let c = Crystal::parse(SI_CARTESIAN).expect("parse");
+        assert_eq!(c.atoms.len(), 2);
+        // scale=2 multiplies the lattice; cartesian atom coords are NOT scaled by VASP convention,
+        // but this parser does not multiply atom coords by scale — verify lattice scaling.
+        assert!((c.lattice[0][0] - 5.43).abs() < 1e-3);
+    }
+
+    #[test]
+    fn cell_center_diagonal() {
+        let c = Crystal::parse(NACL_VASP5).expect("parse");
+        let cc = c.cell_center();
+        for v in cc { assert!((v - 2.82).abs() < 1e-3); }
+    }
+
+    #[test]
+    fn frac_to_cart_diagonal() {
+        let lat = [[3.0, 0.0, 0.0], [0.0, 4.0, 0.0], [0.0, 0.0, 5.0]];
+        let p = frac_to_cart([0.5, 0.25, 0.1], &lat);
+        assert!((p[0] - 1.5).abs() < 1e-5);
+        assert!((p[1] - 1.0).abs() < 1e-5);
+        assert!((p[2] - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn element_color_strips_charge() {
+        // "Na+" should resolve to the same colour as "Na".
+        assert_eq!(element_color("Na+"), element_color("Na"));
+        assert_eq!(element_color("Cl-"), element_color("Cl"));
+    }
+
+    #[test]
+    fn element_radius_unknown_falls_back() {
+        let r = element_radius("Xx");
+        assert!(r > 0.0);
+    }
+
+    #[test]
+    fn parse_rejects_garbage() {
+        assert!(Crystal::parse("not a poscar").is_err());
+        assert!(Crystal::parse("").is_err());
+    }
+}
