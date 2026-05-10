@@ -1,0 +1,12 @@
+{
+  "name": "crystaldive",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:web": "powershell -ExecutionPolicy Bypass -File scripts/build-web.ps1",
+    "deploy:cloudflare": "powershell -ExecutionPolicy Bypass -File scripts/deploy-cloudflare.ps1"
+  },
+  "devDependencies": {
+    "wrangler": "^4.46.0"
+  }
+}

@@ -41,7 +41,7 @@ pub struct FieldParams {
 impl Default for FieldParams {
     fn default() -> Self {
         Self {
-            mode: 0, kscale: 1.4, speed: 0.3, field_mix: 0.55,
+            mode: 4, kscale: 1.4, speed: 0.3, field_mix: 0.55,
             iso_level: 0.5, color_shift: 0.0, zoom: 1.0,
             w_lattice: 1.0, w_motif: 0.6, w_band: 0.4,
         }
