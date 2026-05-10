@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>crystaldive</title>
+    <link rel="icon" href="data:," />
+    <style>
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: #02030a;
+      }
+
+      canvas {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+        outline: none;
+      }
+    </style>
+  </head>
+  <body>
+    <script type="module">
+      if ("GPUAdapter" in globalThis) {
+        const requestDevice = GPUAdapter.prototype.requestDevice;
+        GPUAdapter.prototype.requestDevice = function (descriptor = {}) {
+          if (descriptor.requiredLimits) {
+            delete descriptor.requiredLimits.maxInterStageShaderComponents;
+          }
+          return requestDevice.call(this, descriptor);
+        };
+      }
+
+      import init from "./pkg/crystal-viz.js";
+
+      init().catch((error) => {
+        console.error(error);
+        document.body.textContent =
+          "Failed to start crystaldive. Make sure this page is served over http:// or https:// in a WebGPU-capable browser.";
+      });
+    </script>
+  </body>
+</html>

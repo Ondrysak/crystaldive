@@ -1,4 +1,8 @@
-use std::{sync::Arc, time::Instant};
+use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
 
 use winit::{
     application::ApplicationHandler,
@@ -12,6 +16,11 @@ use crystals::{all_crystals, all_groups, CrystalDef};
 use poscar::Crystal;
 use reciprocal::{crossfade_pack, GpuField};
 use renderer::{FieldUniform, GpuState};
+
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::wasm_bindgen;
+#[cfg(target_arch = "wasm32")]
+use winit::platform::web::{EventLoopExtWebSys, WindowAttributesExtWebSys};
 
 // ── field parameters ──────────────────────────────────────────────────────
 
@@ -257,6 +266,8 @@ struct UiReq {
 
 struct App {
     gpu:          Option<GpuState>,
+    #[cfg(target_arch = "wasm32")]
+    event_proxy:  Option<winit::event_loop::EventLoopProxy<UserEvent>>,
     start_crystal: Crystal,
     start:        Instant,
     prev_t:       f32,
@@ -283,11 +294,18 @@ struct App {
     audio:        Option<audio::AudioCapture>,
 }
 
+enum UserEvent {
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    GpuReady(GpuState),
+}
+
 impl App {
     fn new(crystal: Crystal) -> Self {
         let all = all_crystals();
         Self {
             gpu: None, start_crystal: crystal,
+            #[cfg(target_arch = "wasm32")]
+            event_proxy: None,
             start: Instant::now(), prev_t: 0.0,
             dragging: false, last_mouse: None, auto_rotate: true,
             render_mode: RenderMode::Field,
@@ -335,17 +353,49 @@ impl App {
     }
 }
 
-impl ApplicationHandler for App {
+impl ApplicationHandler<UserEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let attrs = WindowAttributes::default()
             .with_title("crystal-viz")
             .with_inner_size(winit::dpi::LogicalSize::new(1280u32, 720u32));
+        #[cfg(target_arch = "wasm32")]
+        let attrs = attrs.with_append(true);
         let window = Arc::new(event_loop.create_window(attrs).unwrap());
         let crystal = self.start_crystal.clone();
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let proxy = self.event_proxy.clone().expect("missing web event proxy");
+            wasm_bindgen_futures::spawn_local(async move {
+                let mut gpu = GpuState::new(window, crystal).await;
+                let sys = gpu.crystal_system();
+                gpu.kpath = Some(kpoints::build_kpath(sys));
+                let _ = proxy.send_event(UserEvent::GpuReady(gpu));
+            });
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
         let mut gpu = pollster::block_on(GpuState::new(window, crystal));
         let sys = gpu.crystal_system();
         gpu.kpath = Some(kpoints::build_kpath(sys));
         self.gpu = Some(gpu);
+        }
+    }
+
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
+        match event {
+            UserEvent::GpuReady(gpu) => {
+                gpu.window.request_redraw();
+                self.gpu = Some(gpu);
+            }
+        }
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(gpu) = &self.gpu {
+            gpu.window.request_redraw();
+        }
     }
 
     fn window_event(
@@ -879,6 +929,11 @@ impl ApplicationHandler for App {
                     self.switch_to(idx);
                 }
                 if req.screenshot {
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        log::warn!("Screenshots are not wired for the browser build yet");
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
                     if let Some(gpu2) = &mut self.gpu {
                         let png = gpu2.screenshot_field(&field_params_uniform);
                         let path = format!("crystal-viz-{}.png", chrono_stamp());
@@ -896,12 +951,18 @@ impl ApplicationHandler for App {
 
 // ── entry point ───────────────────────────────────────────────────────────
 
+#[cfg(not(target_arch = "wasm32"))]
 fn chrono_stamp() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
     format!("{secs}")
 }
 
+fn default_crystal() -> Crystal {
+    all_crystals()[0].to_crystal()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn main() {
     env_logger::init();
 
@@ -917,7 +978,7 @@ fn main() {
         })
     } else {
         // No POSCAR supplied — start from the built-in crystal library
-        all_crystals()[0].to_crystal()
+        default_crystal()
     };
     println!("Loaded {} atoms", crystal.atoms.len());
     println!("Controls:");
@@ -927,7 +988,23 @@ fn main() {
     println!("  [ / ]    — colour shift       scroll — zoom");
     println!("  1/2/3    — supercell  Space — auto-rotate  (atom mode)");
 
-    let event_loop = EventLoop::new().unwrap();
+    let event_loop = EventLoop::<UserEvent>::with_user_event().build().unwrap();
     event_loop.set_control_flow(ControlFlow::Poll);
     event_loop.run_app(&mut App::new(crystal)).unwrap();
 }
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(start)]
+pub fn start() {
+    console_error_panic_hook::set_once();
+    let _ = console_log::init_with_level(log::Level::Info);
+
+    let event_loop = EventLoop::<UserEvent>::with_user_event().build().unwrap();
+    event_loop.set_control_flow(ControlFlow::Poll);
+    let mut app = App::new(default_crystal());
+    app.event_proxy = Some(event_loop.create_proxy());
+    event_loop.spawn_app(app);
+}
+
+#[cfg(target_arch = "wasm32")]
+fn main() {}

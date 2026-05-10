@@ -3,6 +3,8 @@ use std::sync::Arc;
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 use winit::window::Window;
+#[cfg(target_arch = "wasm32")]
+use winit::platform::web::WindowExtWebSys;
 
 use crate::camera::OrbitCamera;
 use crate::mesh::{cube_mesh, octahedron, uv_sphere, Vertex};
@@ -386,7 +388,7 @@ pub struct GpuState {
 
 impl GpuState {
     pub async fn new(window: Arc<Window>, crystal: Crystal) -> Self {
-        let size = window.inner_size();
+        let size = canvas_size(&window);
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(), ..Default::default()
@@ -514,7 +516,15 @@ impl GpuState {
         self.post.resize(&self.device, &self.queue, new_size.width, new_size.height, self.surface_fmt);
     }
 
+    fn sync_window_size(&mut self) {
+        let size = canvas_size(&self.window);
+        if size != self.size {
+            self.resize(size);
+        }
+    }
+
     pub fn render(&mut self, time: f32, ui_fn: impl FnMut(&egui::Context)) -> Result<(), wgpu::SurfaceError> {
+        self.sync_window_size();
         // Update scene uniform
         let u = make_scene_uniform(&self.camera, aspect(&self.config), time, self.crystal_sys);
         self.queue.write_buffer(&self.scene_buf, 0, bytemuck::bytes_of(&u));
@@ -582,6 +592,7 @@ impl GpuState {
 
     /// Render the field to an offscreen Rgba8 texture and return the PNG bytes.
     /// Call this instead of render_field when a screenshot is needed.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn screenshot_field(&mut self, params: &FieldUniform) -> Vec<u8> {
         let w = self.size.width.max(1);
         let h = self.size.height.max(1);
@@ -677,6 +688,7 @@ impl GpuState {
 
     /// Render the crystal field (bypasses atom/bloom pipeline — writes straight to swapchain).
     pub fn render_field(&mut self, params: &FieldUniform, ui_fn: impl FnMut(&egui::Context)) -> Result<(), wgpu::SurfaceError> {
+        self.sync_window_size();
         self.queue.write_buffer(&self.field_pl.uniform_buf, 0, bytemuck::bytes_of(params));
 
         let output = self.surface.get_current_texture()?;
@@ -795,6 +807,45 @@ fn make_scene_uniform(cam: &OrbitCamera, asp: f32, t: f32, sys: CrystalSystem) -
 }
 
 fn aspect(c: &wgpu::SurfaceConfiguration) -> f32 { c.width as f32 / c.height as f32 }
+
+#[cfg(target_arch = "wasm32")]
+fn canvas_size(window: &Window) -> winit::dpi::PhysicalSize<u32> {
+    let Some(browser_window) = web_sys::window() else {
+        return window.inner_size();
+    };
+
+    let width = browser_window
+        .inner_width()
+        .ok()
+        .and_then(|v| v.as_f64())
+        .unwrap_or(1280.0)
+        .max(1.0);
+    let height = browser_window
+        .inner_height()
+        .ok()
+        .and_then(|v| v.as_f64())
+        .unwrap_or(720.0)
+        .max(1.0);
+    let scale = browser_window.device_pixel_ratio().max(1.0);
+    let physical = winit::dpi::PhysicalSize::new(
+        (width * scale).round().max(1.0) as u32,
+        (height * scale).round().max(1.0) as u32,
+    );
+
+    if let Some(canvas) = window.canvas() {
+        canvas.set_width(physical.width);
+        canvas.set_height(physical.height);
+        let _ = canvas.style().set_property("width", "100vw");
+        let _ = canvas.style().set_property("height", "100vh");
+    }
+
+    physical
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn canvas_size(window: &Window) -> winit::dpi::PhysicalSize<u32> {
+    window.inner_size()
+}
 
 fn make_depth(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> wgpu::TextureView {
     device.create_texture(&wgpu::TextureDescriptor {
