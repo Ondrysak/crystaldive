@@ -1,0 +1,77 @@
+//! Crystal-field shader modes.
+//!
+//! The full WGSL fragment shader is assembled at compile time by concatenating
+//! the prelude, the existing core modes, every per-mode file, and the dispatch
+//! entry point. Adding a mode is purely additive: drop a new `mode_*.wgsl`
+//! file, add an `include_str!` line below, add a case in `dispatch.wgsl`, and
+//! bump `MODE_NAMES` in [`crate::main`].
+//!
+//! Each `mode_*.wgsl` file must define
+//!     `fn render_<name>(uv: vec2<f32>) -> vec3<f32>`
+//! and may freely use any helper from `prelude.wgsl`. WGSL function ordering
+//! within a single module is flexible, so files can be concatenated in any
+//! order. Keep mode-local helpers prefixed with the mode name to avoid
+//! collisions.
+//!
+//! See `CONTRACT.md` in this directory for the full surface available to
+//! mode authors.
+
+pub const FIELD_SHADER: &str = concat!(
+    include_str!("prelude.wgsl"),
+    "\n",
+    include_str!("core_modes.wgsl"),
+    "\n",
+    include_str!("mode_phonon.wgsl"),
+    "\n",
+    include_str!("mode_moire.wgsl"),
+    "\n",
+    include_str!("mode_ewald.wgsl"),
+    "\n",
+    include_str!("mode_wannier.wgsl"),
+    "\n",
+    include_str!("mode_magnetic.wgsl"),
+    "\n",
+    include_str!("mode_dispersion.wgsl"),
+    "\n",
+    include_str!("mode_kikuchi.wgsl"),
+    "\n",
+    include_str!("mode_defect.wgsl"),
+    "\n",
+    include_str!("mode_band_surface.wgsl"),
+    "\n",
+    include_str!("mode_orbital.wgsl"),
+    "\n",
+    include_str!("mode_spin_texture.wgsl"),
+    "\n",
+    include_str!("mode_bz_path.wgsl"),
+    "\n",
+    include_str!("mode_cdw.wgsl"),
+    "\n",
+    include_str!("mode_quasicrystal.wgsl"),
+    "\n",
+    include_str!("mode_thermal.wgsl"),
+    "\n",
+    include_str!("mode_domain_wall.wgsl"),
+    "\n",
+    include_str!("mode_fracture.wgsl"),
+    "\n",
+    include_str!("mode_neutron.wgsl"),
+    "\n",
+    include_str!("mode_berry.wgsl"),
+    "\n",
+    include_str!("mode_hofstadter.wgsl"),
+    "\n",
+    include_str!("mode_stm.wgsl"),
+    "\n",
+    include_str!("mode_spectral.wgsl"),
+    "\n",
+    include_str!("mode_vortex_knot.wgsl"),
+    "\n",
+    include_str!("mode_bloch_wave.wgsl"),
+    "\n",
+    include_str!("mode_plasmon.wgsl"),
+    "\n",
+    include_str!("mode_nematic.wgsl"),
+    "\n",
+    include_str!("dispatch.wgsl"),
+);
