@@ -48,23 +48,34 @@ struct PostParams {
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct FieldUniform {
-    pub time:          f32,   //  0
-    pub kscale:        f32,   //  4
-    pub speed:         f32,   //  8
-    pub field_mix:     f32,   // 12
-    pub iso_level:     f32,   // 16
-    pub color_shift:   f32,   // 20
-    pub zoom:          f32,   // 24
-    pub w_lattice:     f32,   // 28
-    pub w_motif:       f32,   // 32
-    pub w_band:        f32,   // 36
-    pub mode:          u32,   // 40
-    pub num_g:         u32,   // 44
-    pub crystal_color: [f32; 4], // 48  (xyz=colour, w=unused)
-    pub mouse:         [f32; 2], // 64
-    pub mouse_down:    f32,   // 72
-    pub aspect:        f32,   // 76
-}                             // total 80 bytes
+    pub time:           f32,   //   0
+    pub kscale:         f32,   //   4
+    pub speed:          f32,   //   8
+    pub field_mix:      f32,   //  12
+    pub iso_level:      f32,   //  16
+    pub color_shift:    f32,   //  20
+    pub zoom:           f32,   //  24
+    pub w_lattice:      f32,   //  28
+    pub w_motif:        f32,   //  32
+    pub w_band:         f32,   //  36
+    pub mode:           u32,   //  40
+    pub num_g:          u32,   //  44
+    pub crystal_color:  [f32; 4], //  48
+    pub mouse:          [f32; 2], //  64
+    pub mouse_down:     f32,   //  72
+    pub aspect:         f32,   //  76
+    // feedback fields
+    pub fb_enabled:     u32,   //  80
+    pub fb_mirror:      u32,   //  84
+    pub fb_zoom:        f32,   //  88
+    pub fb_offset_x:    f32,   //  92
+    pub fb_offset_y:    f32,   //  96
+    pub fb_rotation:    f32,   // 100
+    pub fb_decay:       f32,   // 104
+    pub fb_color_shift: f32,   // 108
+    pub fb_inject:      f32,   // 112
+    pub _pad:           [f32; 3],  // 116..128 — pad to 128 bytes (WGSL vec4 align)
+}                              // total 128 bytes
 
 pub struct FieldPipeline {
     pub uniform_buf: wgpu::Buffer,
@@ -348,6 +359,233 @@ impl PostProcess {
     }
 }
 
+// ── Feedback / self-similarity pass ──────────────────────────────────────
+
+const FB_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+
+struct FeedbackPass {
+    field_rt:    wgpu::TextureView,
+    accum_a:     wgpu::TextureView,
+    accum_b:     wgpu::TextureView,
+    parity:      bool,
+    sampler:     wgpu::Sampler,
+    feedback_pl: wgpu::RenderPipeline,
+    blit_pl:     wgpu::RenderPipeline,
+    // feedback_pl bind groups: reads field_rt + one accum → writes other accum
+    bg_f_then_a: wgpu::BindGroup, // field + accum_a → writes accum_b
+    bg_f_then_b: wgpu::BindGroup, // field + accum_b → writes accum_a
+    bg_blit_a:   wgpu::BindGroup, // blit accum_a → swapchain
+    bg_blit_b:   wgpu::BindGroup, // blit accum_b → swapchain
+}
+
+impl FeedbackPass {
+    fn make_tex(device: &wgpu::Device, w: u32, h: u32, label: &str) -> wgpu::TextureView {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: FB_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        }).create_view(&wgpu::TextureViewDescriptor::default())
+    }
+
+    fn new(device: &wgpu::Device, w: u32, h: u32, surface_fmt: wgpu::TextureFormat,
+           uniform_buf: &wgpu::Buffer) -> Self {
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("fb sampler"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        let field_rt = Self::make_tex(device, w, h, "fb_field_rt");
+        let accum_a  = Self::make_tex(device, w, h, "fb_accum_a");
+        let accum_b  = Self::make_tex(device, w, h, "fb_accum_b");
+
+        // BGL for feedback shader: uniform + prev_accum + field_rt + sampler
+        let fb_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("fb bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false, min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        // BGL for blit shader: accum tex + sampler
+        let blit_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("blit bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        let make_fb_bg = |prev: &wgpu::TextureView, field: &wgpu::TextureView| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("fb bg"), layout: &fb_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: uniform_buf.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(prev) },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(field) },
+                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&sampler) },
+                ],
+            })
+        };
+        let make_blit_bg = |accum: &wgpu::TextureView| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("blit bg"), layout: &blit_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(accum) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
+                ],
+            })
+        };
+
+        let bg_f_then_a = make_fb_bg(&accum_a, &field_rt);
+        let bg_f_then_b = make_fb_bg(&accum_b, &field_rt);
+        let bg_blit_a   = make_blit_bg(&accum_a);
+        let bg_blit_b   = make_blit_bg(&accum_b);
+
+        let feedback_pl = Self::build_feedback_pl(device, &fb_bgl, FB_FORMAT);
+        let blit_pl     = Self::build_blit_pl(device, &blit_bgl, surface_fmt);
+
+        Self {
+            field_rt, accum_a, accum_b,
+            parity: false,
+            sampler,
+            feedback_pl, blit_pl,
+            bg_f_then_a, bg_f_then_b,
+            bg_blit_a, bg_blit_b,
+        }
+    }
+
+    fn resize(&mut self, device: &wgpu::Device, w: u32, h: u32, surface_fmt: wgpu::TextureFormat,
+              uniform_buf: &wgpu::Buffer) {
+        self.field_rt = Self::make_tex(device, w, h, "fb_field_rt");
+        self.accum_a  = Self::make_tex(device, w, h, "fb_accum_a");
+        self.accum_b  = Self::make_tex(device, w, h, "fb_accum_b");
+
+        let fb_bgl   = self.feedback_pl.get_bind_group_layout(0);
+        let blit_bgl = self.blit_pl.get_bind_group_layout(0);
+
+        let make_fb_bg = |prev: &wgpu::TextureView, field: &wgpu::TextureView| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("fb bg"), layout: &fb_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: uniform_buf.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(prev) },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(field) },
+                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                ],
+            })
+        };
+        let make_blit_bg = |accum: &wgpu::TextureView| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("blit bg"), layout: &blit_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(accum) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                ],
+            })
+        };
+
+        self.bg_f_then_a = make_fb_bg(&self.accum_a, &self.field_rt);
+        self.bg_f_then_b = make_fb_bg(&self.accum_b, &self.field_rt);
+        self.bg_blit_a   = make_blit_bg(&self.accum_a);
+        self.bg_blit_b   = make_blit_bg(&self.accum_b);
+
+        // Rebuild blit pipeline if surface format changed
+        self.blit_pl = Self::build_blit_pl(device, &blit_bgl, surface_fmt);
+    }
+
+    fn build_feedback_pl(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout, fmt: wgpu::TextureFormat) -> wgpu::RenderPipeline {
+        let sm = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("feedback"), source: wgpu::ShaderSource::Wgsl(FEEDBACK_SHADER.into()),
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None, bind_group_layouts: &[bgl], push_constant_ranges: &[],
+        });
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("feedback pl"), layout: Some(&layout),
+            vertex: wgpu::VertexState { module: &sm, entry_point: "vs_screen", buffers: &[], compilation_options: Default::default() },
+            fragment: Some(wgpu::FragmentState {
+                module: &sm, entry_point: "fs_feedback",
+                targets: &[Some(wgpu::ColorTargetState { format: fmt, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None, multisample: wgpu::MultisampleState::default(),
+            multiview: None, cache: None,
+        })
+    }
+
+    fn build_blit_pl(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout, fmt: wgpu::TextureFormat) -> wgpu::RenderPipeline {
+        let sm = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("blit"), source: wgpu::ShaderSource::Wgsl(BLIT_SHADER.into()),
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None, bind_group_layouts: &[bgl], push_constant_ranges: &[],
+        });
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("blit pl"), layout: Some(&layout),
+            vertex: wgpu::VertexState { module: &sm, entry_point: "vs_screen", buffers: &[], compilation_options: Default::default() },
+            fragment: Some(wgpu::FragmentState {
+                module: &sm, entry_point: "fs_blit",
+                targets: &[Some(wgpu::ColorTargetState { format: fmt, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None, multisample: wgpu::MultisampleState::default(),
+            multiview: None, cache: None,
+        })
+    }
+}
+
 // ── Main GPU state ────────────────────────────────────────────────────────
 
 pub struct GpuState {
@@ -381,6 +619,10 @@ pub struct GpuState {
     pub field_pl:    FieldPipeline,
     pub gpu_field:   GpuField,
     pub kpath:       Option<crate::kpoints::KpathWalker>,
+
+    // ── video-feedback self-similarity ────────────────────────────────
+    feedback:        FeedbackPass,
+    pub fb_clear:    bool,  // set to true to wipe accumulators next frame
 
     // ── egui overlay ──────────────────────────────────────────────────
     pub egui:        EguiRenderer,
@@ -473,6 +715,10 @@ impl GpuState {
         gpu_field.seed_kpoint([0.0, 0.0, 0.0], 1.0); // start at Γ
         field_pl.upload_gfield(&queue, &gpu_field.pack());
 
+        // ── feedback pass ─────────────────────────────────────────────
+        let feedback = FeedbackPass::new(&device, size.width.max(1), size.height.max(1),
+                                         surface_fmt, &field_pl.uniform_buf);
+
         // ── egui ──────────────────────────────────────────────────────
         let egui = EguiRenderer::new(&device, surface_fmt, &window);
 
@@ -486,6 +732,8 @@ impl GpuState {
             crystal, crystal_sys,
             field_pl, gpu_field,
             kpath: None, // set by caller after construction
+            feedback,
+            fb_clear: false,
             egui,
         }
     }
@@ -514,6 +762,8 @@ impl GpuState {
         self.surface.configure(&self.device, &self.config);
         self.depth_view = make_depth(&self.device, &self.config);
         self.post.resize(&self.device, &self.queue, new_size.width, new_size.height, self.surface_fmt);
+        self.feedback.resize(&self.device, new_size.width, new_size.height, self.surface_fmt,
+                             &self.field_pl.uniform_buf);
     }
 
     fn sync_window_size(&mut self) {
@@ -694,7 +944,9 @@ impl GpuState {
         let output = self.surface.get_current_texture()?;
         let view   = output.texture.create_view(&Default::default());
         let mut enc = self.device.create_command_encoder(&Default::default());
-        {
+
+        if params.fb_enabled == 0 {
+            // ── direct path (no feedback) — unchanged from original ────
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("field pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -710,6 +962,51 @@ impl GpuState {
             pass.set_pipeline(&self.field_pl.field_pl);
             pass.set_bind_group(0, &self.field_pl.uniform_bg, &[]);
             pass.draw(0..3, 0..1);
+        } else {
+            // ── feedback path ─────────────────────────────────────────
+            // 1. Render crystal field → field_rt (offscreen)
+            {
+                let clear_col = if self.fb_clear { wgpu::Color::BLACK } else { wgpu::Color::BLACK };
+                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("field → field_rt"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &self.feedback.field_rt, resolve_target: None,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(clear_col), store: wgpu::StoreOp::Store },
+                    })],
+                    depth_stencil_attachment: None, occlusion_query_set: None, timestamp_writes: None,
+                });
+                pass.set_pipeline(&self.field_pl.field_pl);
+                pass.set_bind_group(0, &self.field_pl.uniform_bg, &[]);
+                pass.draw(0..3, 0..1);
+            }
+
+            // 2. Composite: prev_accum + field_rt → new_accum
+            let (dst_accum, fb_bg) = if self.feedback.parity {
+                (&self.feedback.accum_b, &self.feedback.bg_f_then_a)
+            } else {
+                (&self.feedback.accum_a, &self.feedback.bg_f_then_b)
+            };
+            {
+                let load = if self.fb_clear { wgpu::LoadOp::Clear(wgpu::Color::BLACK) } else { wgpu::LoadOp::Load };
+                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("feedback composite"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: dst_accum, resolve_target: None,
+                        ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
+                    })],
+                    depth_stencil_attachment: None, occlusion_query_set: None, timestamp_writes: None,
+                });
+                pass.set_pipeline(&self.feedback.feedback_pl);
+                pass.set_bind_group(0, fb_bg, &[]);
+                pass.draw(0..3, 0..1);
+            }
+
+            // 3. Blit new_accum → swapchain
+            let blit_bg = if self.feedback.parity { &self.feedback.bg_blit_b } else { &self.feedback.bg_blit_a };
+            fullscreen_pass(&mut enc, &view, &self.feedback.blit_pl, blit_bg, true);
+
+            self.feedback.parity = !self.feedback.parity;
+            self.fb_clear = false;
         }
 
         // ── egui overlay ──────────────────────────────────────────────
@@ -1288,5 +1585,94 @@ struct VOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> }
     let mapped = hdr / (hdr + vec3<f32>(1.0));
     let gamma  = pow(mapped, vec3<f32>(1.0/2.2));
     return vec4<f32>(gamma, 1.0);
+}
+"#;
+
+// ── Feedback / self-similarity shaders ───────────────────────────────────
+
+const FEEDBACK_SHADER: &str = r#"
+struct FU {
+    time: f32, kscale: f32, speed: f32, field_mix: f32,
+    iso_level: f32, color_shift: f32, zoom: f32,
+    w_lattice: f32, w_motif: f32, w_band: f32,
+    mode: u32, num_g: u32,
+    crystal_color: vec4<f32>,
+    mouse: vec2<f32>, mouse_down: f32, aspect: f32,
+    fb_enabled: u32, fb_mirror: u32,
+    fb_zoom: f32, fb_offset_x: f32, fb_offset_y: f32,
+    fb_rotation: f32, fb_decay: f32, fb_color_shift: f32, fb_inject: f32,
+    _pad: f32,
+}
+@group(0) @binding(0) var<uniform> u: FU;
+@group(0) @binding(1) var prev_accum: texture_2d<f32>;
+@group(0) @binding(2) var field_rt:   texture_2d<f32>;
+@group(0) @binding(3) var smp: sampler;
+
+struct VOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> }
+@vertex fn vs_screen(@builtin(vertex_index) vi: u32) -> VOut {
+    var uvs = array<vec2<f32>,3>(vec2(0.0,0.0),vec2(2.0,0.0),vec2(0.0,2.0));
+    let uv = uvs[vi];
+    var o: VOut;
+    o.pos = vec4<f32>(uv.x*2.0-1.0, 1.0-uv.y*2.0, 0.0, 1.0);
+    o.uv  = uv;
+    return o;
+}
+
+fn rotate_hue(c: vec3<f32>, h: f32) -> vec3<f32> {
+    let k = vec3<f32>(0.57735, 0.57735, 0.57735);
+    let cs = cos(h); let sn = sin(h);
+    return c * cs + cross(k, c) * sn + k * dot(k, c) * (1.0 - cs);
+}
+
+fn mirror_uv(uv: vec2<f32>, mode: u32) -> vec2<f32> {
+    var v = fract(uv);
+    switch mode {
+        case 1u: { v.x = abs(fract(v.x * 0.5) * 2.0 - 1.0); }
+        case 2u: { v.y = abs(fract(v.y * 0.5) * 2.0 - 1.0); }
+        case 3u: {
+            v.x = abs(fract(v.x * 0.5) * 2.0 - 1.0);
+            v.y = abs(fract(v.y * 0.5) * 2.0 - 1.0);
+        }
+        case 4u: {
+            v.x = abs(fract(v.x * 0.5) * 2.0 - 1.0);
+            v.y = abs(fract(v.y * 0.5) * 2.0 - 1.0);
+        }
+        default: {}
+    }
+    return v;
+}
+
+@fragment fn fs_feedback(f: VOut) -> @location(0) vec4<f32> {
+    let c = vec2<f32>(0.5, 0.5);
+    let p = f.uv - c;
+    let cr = cos(u.fb_rotation); let sr = sin(u.fb_rotation);
+    let rotated = vec2<f32>(cr * p.x - sr * p.y, sr * p.x + cr * p.y) / u.fb_zoom;
+    let prev_uv = mirror_uv(rotated + c + vec2<f32>(u.fb_offset_x, u.fb_offset_y), u.fb_mirror);
+
+    let prev = textureSample(prev_accum, smp, prev_uv).rgb;
+    let cur  = textureSample(field_rt,   smp, f.uv).rgb;
+
+    let prev_shifted = rotate_hue(prev, u.fb_color_shift);
+    let mixed = prev_shifted * u.fb_decay + cur * u.fb_inject;
+    return vec4<f32>(mixed, 1.0);
+}
+"#;
+
+const BLIT_SHADER: &str = r#"
+struct VOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> }
+@vertex fn vs_screen(@builtin(vertex_index) vi: u32) -> VOut {
+    var uvs = array<vec2<f32>,3>(vec2(0.0,0.0),vec2(2.0,0.0),vec2(0.0,2.0));
+    let uv = uvs[vi];
+    var o: VOut;
+    o.pos = vec4<f32>(uv.x*2.0-1.0, 1.0-uv.y*2.0, 0.0, 1.0);
+    o.uv  = uv;
+    return o;
+}
+@group(0) @binding(0) var accum: texture_2d<f32>;
+@group(0) @binding(1) var smp: sampler;
+@fragment fn fs_blit(f: VOut) -> @location(0) vec4<f32> {
+    let c = textureSample(accum, smp, f.uv).rgb;
+    let mapped = c / (c + vec3<f32>(1.0));
+    return vec4<f32>(pow(mapped, vec3<f32>(1.0/2.2)), 1.0);
 }
 "#;

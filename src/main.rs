@@ -26,16 +26,26 @@ use winit::platform::web::{EventLoopExtWebSys, WindowAttributesExtWebSys};
 
 #[derive(Clone)]
 pub struct FieldParams {
-    pub mode:        u32,
-    pub kscale:      f32,
-    pub speed:       f32,
-    pub field_mix:   f32,
-    pub iso_level:   f32,
-    pub color_shift: f32,
-    pub zoom:        f32,
-    pub w_lattice:   f32,
-    pub w_motif:     f32,
-    pub w_band:      f32,
+    pub mode:           u32,
+    pub kscale:         f32,
+    pub speed:          f32,
+    pub field_mix:      f32,
+    pub iso_level:      f32,
+    pub color_shift:    f32,
+    pub zoom:           f32,
+    pub w_lattice:      f32,
+    pub w_motif:        f32,
+    pub w_band:         f32,
+    // feedback
+    pub fb_enabled:     bool,
+    pub fb_mirror:      u32,
+    pub fb_zoom:        f32,
+    pub fb_offset_x:    f32,
+    pub fb_offset_y:    f32,
+    pub fb_rotation:    f32,
+    pub fb_decay:       f32,
+    pub fb_color_shift: f32,
+    pub fb_inject:      f32,
 }
 
 impl Default for FieldParams {
@@ -44,6 +54,9 @@ impl Default for FieldParams {
             mode: 4, kscale: 1.4, speed: 0.3, field_mix: 0.55,
             iso_level: 0.5, color_shift: 0.0, zoom: 1.0,
             w_lattice: 1.0, w_motif: 0.6, w_band: 0.4,
+            fb_enabled: false, fb_mirror: 0,
+            fb_zoom: 1.0, fb_offset_x: 0.0, fb_offset_y: 0.0,
+            fb_rotation: 0.0, fb_decay: 0.0, fb_color_shift: 0.0, fb_inject: 1.0,
         }
     }
 }
@@ -262,16 +275,25 @@ fn lerp_fp(a: &FieldParams, b: &FieldParams, t: f32) -> FieldParams {
     let d = b.color_shift - a.color_shift;
     let cs_delta = if d > 0.5 { d - 1.0 } else if d < -0.5 { d + 1.0 } else { d };
     FieldParams {
-        mode:        if t < 0.5 { a.mode } else { b.mode },
-        kscale:      l(a.kscale,    b.kscale),
-        speed:       l(a.speed,     b.speed),
-        field_mix:   l(a.field_mix, b.field_mix),
-        iso_level:   l(a.iso_level, b.iso_level),
-        color_shift: (a.color_shift + cs_delta * t).rem_euclid(1.0),
-        zoom:        l(a.zoom,      b.zoom),
-        w_lattice:   l(a.w_lattice, b.w_lattice),
-        w_motif:     l(a.w_motif,   b.w_motif),
-        w_band:      l(a.w_band,    b.w_band),
+        mode:           if t < 0.5 { a.mode } else { b.mode },
+        kscale:         l(a.kscale,    b.kscale),
+        speed:          l(a.speed,     b.speed),
+        field_mix:      l(a.field_mix, b.field_mix),
+        iso_level:      l(a.iso_level, b.iso_level),
+        color_shift:    (a.color_shift + cs_delta * t).rem_euclid(1.0),
+        zoom:           l(a.zoom,      b.zoom),
+        w_lattice:      l(a.w_lattice, b.w_lattice),
+        w_motif:        l(a.w_motif,   b.w_motif),
+        w_band:         l(a.w_band,    b.w_band),
+        fb_enabled:     if t < 0.5 { a.fb_enabled } else { b.fb_enabled },
+        fb_mirror:      if t < 0.5 { a.fb_mirror } else { b.fb_mirror },
+        fb_zoom:        l(a.fb_zoom,        b.fb_zoom),
+        fb_offset_x:    l(a.fb_offset_x,    b.fb_offset_x),
+        fb_offset_y:    l(a.fb_offset_y,    b.fb_offset_y),
+        fb_rotation:    l(a.fb_rotation,    b.fb_rotation),
+        fb_decay:       l(a.fb_decay,       b.fb_decay),
+        fb_color_shift: l(a.fb_color_shift, b.fb_color_shift),
+        fb_inject:      l(a.fb_inject,      b.fb_inject),
     }
 }
 
@@ -280,6 +302,7 @@ fn sp(mode: u32, ks: f32, sp: f32, fm: f32, il: f32, cs: f32, zm: f32, wl: f32, 
     SeqStep::new(FieldParams {
         mode, kscale: ks, speed: sp, field_mix: fm, iso_level: il,
         color_shift: cs, zoom: zm, w_lattice: wl, w_motif: wm, w_band: wb,
+        ..FieldParams::default()
     })
 }
 
@@ -331,6 +354,7 @@ fn seq_preset_chromatic() -> Vec<SeqStep> {
             w_lattice:   0.5 + 1.2 * (phi * TAU).cos().abs(),
             w_motif:     0.3 + 1.0 * (phi * TAU * 1.7).sin().abs(),
             w_band:      0.4 + 1.2 * (phi * TAU * 0.9).cos().abs(),
+            ..FieldParams::default()
         })
     }).collect()
 }
@@ -478,6 +502,8 @@ fn randomize_fp(seed: f32) -> FieldParams {
         w_lattice:   r(8.0) * 2.0,
         w_motif:     r(9.0) * 2.0,
         w_band:      r(10.0) * 2.0,
+        // feedback stays off in random presets
+        ..FieldParams::default()
     }
 }
 
@@ -553,6 +579,7 @@ fn tour_random_field_params(t: f32, crystal_idx: usize) -> FieldParams {
         w_lattice: morph(9.0, 0.0, 2.0).clamp(0.0, 2.0),
         w_motif: morph(10.0, 0.0, 2.0).clamp(0.0, 2.0),
         w_band: morph(11.0, 0.0, 2.0).clamp(0.0, 2.0),
+        ..FieldParams::default()
     }
 }
 
@@ -578,6 +605,7 @@ fn tour_field_params(t: f32, crystal_idx: usize, style: TourStyle) -> FieldParam
         w_lattice: (0.75 + 0.65 * (TAU * (local + 0.10)).sin().abs()).clamp(0.0, 2.0),
         w_motif: (0.38 + 0.92 * (TAU * (local * 0.7 + 0.35)).sin().abs()).clamp(0.0, 2.0),
         w_band: (0.48 + 1.05 * (TAU * (local * 1.2 + drift * 0.07)).cos().abs()).clamp(0.0, 2.0),
+        ..FieldParams::default()
     }
 }
 
@@ -599,16 +627,26 @@ fn apply_modulation(
         }};
     }
     FieldParams {
-        mode:        fp.mode,
-        kscale:      modulate!(fp.kscale,      lfo.kscale,      mic.kscale,      0.1, 5.0),
-        speed:       modulate!(fp.speed,       lfo.speed,       mic.speed,       0.0, 2.0),
-        field_mix:   modulate!(fp.field_mix,   lfo.field_mix,   mic.field_mix,   0.0, 1.0),
-        iso_level:   modulate!(fp.iso_level,   lfo.iso_level,   mic.iso_level,   0.0, 1.0),
-        color_shift: modulate!(fp.color_shift, lfo.color_shift, mic.color_shift, 0.0, 1.0),
-        zoom:        modulate!(fp.zoom,        lfo.zoom,        mic.zoom,        0.2, 5.0),
-        w_lattice:   modulate!(fp.w_lattice,   lfo.w_lattice,   mic.w_lattice,   0.0, 2.0),
-        w_motif:     modulate!(fp.w_motif,     lfo.w_motif,     mic.w_motif,     0.0, 2.0),
-        w_band:      modulate!(fp.w_band,      lfo.w_band,      mic.w_band,      0.0, 2.0),
+        mode:           fp.mode,
+        kscale:         modulate!(fp.kscale,      lfo.kscale,      mic.kscale,      0.1, 5.0),
+        speed:          modulate!(fp.speed,       lfo.speed,       mic.speed,       0.0, 2.0),
+        field_mix:      modulate!(fp.field_mix,   lfo.field_mix,   mic.field_mix,   0.0, 1.0),
+        iso_level:      modulate!(fp.iso_level,   lfo.iso_level,   mic.iso_level,   0.0, 1.0),
+        color_shift:    modulate!(fp.color_shift, lfo.color_shift, mic.color_shift, 0.0, 1.0),
+        zoom:           modulate!(fp.zoom,        lfo.zoom,        mic.zoom,        0.2, 5.0),
+        w_lattice:      modulate!(fp.w_lattice,   lfo.w_lattice,   mic.w_lattice,   0.0, 2.0),
+        w_motif:        modulate!(fp.w_motif,     lfo.w_motif,     mic.w_motif,     0.0, 2.0),
+        w_band:         modulate!(fp.w_band,      lfo.w_band,      mic.w_band,      0.0, 2.0),
+        // feedback params pass through unmodulated
+        fb_enabled:     fp.fb_enabled,
+        fb_mirror:      fp.fb_mirror,
+        fb_zoom:        fp.fb_zoom,
+        fb_offset_x:    fp.fb_offset_x,
+        fb_offset_y:    fp.fb_offset_y,
+        fb_rotation:    fp.fb_rotation,
+        fb_decay:       fp.fb_decay,
+        fb_color_shift: fp.fb_color_shift,
+        fb_inject:      fp.fb_inject,
     }
 }
 
@@ -703,6 +741,7 @@ struct UiReq {
     seq_preset:        Option<usize>,
     seq_curve:         Option<TranCurve>,
     seq_dur:           Option<f32>,
+    fb_reset:          bool,
 }
 
 struct App {
@@ -1074,22 +1113,32 @@ impl ApplicationHandler<UserEvent> for App {
                 // freely mutate fp.* without conflicting with the match arm below.
                 let cdef = self.all_crystals[cur_crystal_idx];
                 let field_params_uniform = FieldUniform {
-                    time:          t,
-                    kscale:        fp_eff.kscale,
-                    speed:         fp_eff.speed,
-                    field_mix:     fp_eff.field_mix,
-                    iso_level:     fp_eff.iso_level,
-                    color_shift:   fp_eff.color_shift,
-                    zoom:          fp_eff.zoom,
-                    w_lattice:     fp_eff.w_lattice,
-                    w_motif:       fp_eff.w_motif,
-                    w_band:        fp_eff.w_band,
-                    mode:          fp_eff.mode,
-                    num_g:         gpu.gpu_field.count as u32,
-                    crystal_color: [cdef.color[0], cdef.color[1], cdef.color[2], 0.0],
-                    mouse:         self.mouse_norm,
-                    mouse_down:    if self.mouse_btn_down { 1.0 } else { 0.0 },
-                    aspect:        gpu.size.width as f32 / gpu.size.height.max(1) as f32,
+                    time:           t,
+                    kscale:         fp_eff.kscale,
+                    speed:          fp_eff.speed,
+                    field_mix:      fp_eff.field_mix,
+                    iso_level:      fp_eff.iso_level,
+                    color_shift:    fp_eff.color_shift,
+                    zoom:           fp_eff.zoom,
+                    w_lattice:      fp_eff.w_lattice,
+                    w_motif:        fp_eff.w_motif,
+                    w_band:         fp_eff.w_band,
+                    mode:           fp_eff.mode,
+                    num_g:          gpu.gpu_field.count as u32,
+                    crystal_color:  [cdef.color[0], cdef.color[1], cdef.color[2], 0.0],
+                    mouse:          self.mouse_norm,
+                    mouse_down:     if self.mouse_btn_down { 1.0 } else { 0.0 },
+                    aspect:         gpu.size.width as f32 / gpu.size.height.max(1) as f32,
+                    fb_enabled:     if fp_eff.fb_enabled { 1 } else { 0 },
+                    fb_mirror:      fp_eff.fb_mirror,
+                    fb_zoom:        fp_eff.fb_zoom,
+                    fb_offset_x:    fp_eff.fb_offset_x,
+                    fb_offset_y:    fp_eff.fb_offset_y,
+                    fb_rotation:    fp_eff.fb_rotation,
+                    fb_decay:       fp_eff.fb_decay,
+                    fb_color_shift: fp_eff.fb_color_shift,
+                    fb_inject:      fp_eff.fb_inject,
+                    _pad:           [0.0; 3],
                 };
 
                 // Snapshot search string
@@ -1216,6 +1265,53 @@ impl ApplicationHandler<UserEvent> for App {
                                 sld!(ui, "w_lattice", &mut fp.w_lattice,   fp_eff.w_lattice,   &mut lfo.w_lattice,   &mut mic.w_lattice,   0.0_f32, 2.0_f32);
                                 sld!(ui, "w_motif  ", &mut fp.w_motif,     fp_eff.w_motif,     &mut lfo.w_motif,     &mut mic.w_motif,     0.0_f32, 2.0_f32);
                                 sld!(ui, "w_band   ", &mut fp.w_band,      fp_eff.w_band,      &mut lfo.w_band,      &mut mic.w_band,      0.0_f32, 2.0_f32);
+
+                                ui.separator();
+
+                                // ── FEEDBACK / SELF-SIMILARITY ────────────────────────────
+                                ui.label(egui::RichText::new("FEEDBACK / SELF-SIMILARITY")
+                                    .small().color(egui::Color32::from_rgb(220, 140, 80)));
+                                ui.horizontal(|ui| {
+                                    let fb_label = if fp.fb_enabled { "■ ON" } else { "□ OFF" };
+                                    if ui.small_button(fb_label).clicked() {
+                                        fp.fb_enabled = !fp.fb_enabled;
+                                        if fp.fb_enabled { req.fb_reset = true; }
+                                    }
+                                    if ui.small_button("RESET").clicked() { req.fb_reset = true; }
+                                    ui.label(egui::RichText::new("mirror").small());
+                                    let mirror_labels = ["none","H","V","HV","quad"];
+                                    if ui.small_button(mirror_labels[fp.fb_mirror.min(4) as usize]).clicked() {
+                                        fp.fb_mirror = (fp.fb_mirror + 1) % 5;
+                                    }
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("fb_zoom  ").small());
+                                    ui.add(egui::Slider::new(&mut fp.fb_zoom, 0.90_f32..=1.10_f32).fixed_decimals(3));
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("fb_decay ").small());
+                                    ui.add(egui::Slider::new(&mut fp.fb_decay, 0.0_f32..=0.99_f32).fixed_decimals(2));
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("fb_inject").small());
+                                    ui.add(egui::Slider::new(&mut fp.fb_inject, 0.0_f32..=2.0_f32).fixed_decimals(2));
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("fb_rotate").small());
+                                    ui.add(egui::Slider::new(&mut fp.fb_rotation, -0.3_f32..=0.3_f32).fixed_decimals(3));
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("fb_hue   ").small());
+                                    ui.add(egui::Slider::new(&mut fp.fb_color_shift, -1.0_f32..=1.0_f32).fixed_decimals(2));
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("fb_pan_x ").small());
+                                    ui.add(egui::Slider::new(&mut fp.fb_offset_x, -0.1_f32..=0.1_f32).fixed_decimals(3));
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("fb_pan_y ").small());
+                                    ui.add(egui::Slider::new(&mut fp.fb_offset_y, -0.1_f32..=0.1_f32).fixed_decimals(3));
+                                });
 
                                 ui.separator();
 
@@ -1656,6 +1752,9 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 if let Some(c) = req.seq_curve { self.sequencer.curve = c; }
                 if let Some(d) = req.seq_dur { self.sequencer.step_dur = d; }
+                if req.fb_reset {
+                    if let Some(gpu) = &mut self.gpu { gpu.fb_clear = true; }
+                }
                 if req.prev {
                     self.tour.active = false;
                     let total = self.all_crystals.len();
@@ -1768,6 +1867,7 @@ mod seq_tests {
             color_shift: i as f32 / n as f32,
             zoom: 1.0,
             w_lattice: 1.0, w_motif: 0.5, w_band: 0.5,
+            ..FieldParams::default()
         })).collect::<Vec<_>>();
         let from_params = steps[0].params.clone();
         Sequencer {
