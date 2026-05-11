@@ -137,18 +137,31 @@ const TAU: f32 = std::f32::consts::PI * 2.0;
 
 #[derive(Clone)]
 pub struct LfoParams {
-    pub kscale:      bool,
-    pub speed:       bool,
-    pub field_mix:   bool,
-    pub iso_level:   bool,
-    pub color_shift: bool,
-    pub zoom:        bool,
-    pub w_lattice:   bool,
-    pub w_motif:     bool,
-    pub w_band:      bool,
-    pub rate:        f32,
-    pub depth:       f32,
-    pub wave:        LfoWave,
+    // field params
+    pub kscale:         bool,
+    pub speed:          bool,
+    pub field_mix:      bool,
+    pub iso_level:      bool,
+    pub color_shift:    bool,
+    pub zoom:           bool,
+    pub w_lattice:      bool,
+    pub w_motif:        bool,
+    pub w_band:         bool,
+    // feedback params
+    pub fb_zoom:        bool,
+    pub fb_decay:       bool,
+    pub fb_offset_x:    bool,
+    pub fb_offset_y:    bool,
+    pub fb_rotation:    bool,
+    pub fb_color_shift: bool,
+    pub fb_saturation:  bool,
+    pub fb_brightness:  bool,
+    pub fb_inject:      bool,
+    pub fb_fold_angle:  bool,
+    // global
+    pub rate:           f32,
+    pub depth:          f32,
+    pub wave:           LfoWave,
 }
 
 impl Default for LfoParams {
@@ -156,7 +169,11 @@ impl Default for LfoParams {
         Self {
             kscale: false, speed: false, field_mix: false, iso_level: false,
             color_shift: false, zoom: false, w_lattice: false, w_motif: false,
-            w_band: false, rate: 0.2, depth: 0.3, wave: LfoWave::Sine,
+            w_band: false,
+            fb_zoom: false, fb_decay: false, fb_offset_x: false, fb_offset_y: false,
+            fb_rotation: false, fb_color_shift: false, fb_saturation: false,
+            fb_brightness: false, fb_inject: false, fb_fold_angle: false,
+            rate: 0.2, depth: 0.3, wave: LfoWave::Sine,
         }
     }
 }
@@ -202,16 +219,28 @@ impl MicSrc {
 
 #[derive(Clone)]
 pub struct MicParams {
-    pub kscale:      MicSrc,
-    pub speed:       MicSrc,
-    pub field_mix:   MicSrc,
-    pub iso_level:   MicSrc,
-    pub color_shift: MicSrc,
-    pub zoom:        MicSrc,
-    pub w_lattice:   MicSrc,
-    pub w_motif:     MicSrc,
-    pub w_band:      MicSrc,
-    pub depth:       f32,
+    // field params
+    pub kscale:         MicSrc,
+    pub speed:          MicSrc,
+    pub field_mix:      MicSrc,
+    pub iso_level:      MicSrc,
+    pub color_shift:    MicSrc,
+    pub zoom:           MicSrc,
+    pub w_lattice:      MicSrc,
+    pub w_motif:        MicSrc,
+    pub w_band:         MicSrc,
+    // feedback params
+    pub fb_zoom:        MicSrc,
+    pub fb_decay:       MicSrc,
+    pub fb_offset_x:    MicSrc,
+    pub fb_offset_y:    MicSrc,
+    pub fb_rotation:    MicSrc,
+    pub fb_color_shift: MicSrc,
+    pub fb_saturation:  MicSrc,
+    pub fb_brightness:  MicSrc,
+    pub fb_inject:      MicSrc,
+    pub fb_fold_angle:  MicSrc,
+    pub depth:          f32,
 }
 
 impl Default for MicParams {
@@ -220,6 +249,10 @@ impl Default for MicParams {
             kscale: MicSrc::Off, speed: MicSrc::Off, field_mix: MicSrc::Off,
             iso_level: MicSrc::Off, color_shift: MicSrc::Off, zoom: MicSrc::Off,
             w_lattice: MicSrc::Off, w_motif: MicSrc::Off, w_band: MicSrc::Off,
+            fb_zoom: MicSrc::Off, fb_decay: MicSrc::Off, fb_offset_x: MicSrc::Off,
+            fb_offset_y: MicSrc::Off, fb_rotation: MicSrc::Off, fb_color_shift: MicSrc::Off,
+            fb_saturation: MicSrc::Off, fb_brightness: MicSrc::Off,
+            fb_inject: MicSrc::Off, fb_fold_angle: MicSrc::Off,
             depth: 0.5,
         }
     }
@@ -500,18 +533,39 @@ fn hue_to_rgb(h: f32) -> (u8, u8, u8) {
 
 fn randomize_fp(seed: f32) -> FieldParams {
     let r = |s: f32| tour_rand(seed + s * 13.17);
+    let fb_on = r(11.0) > 0.55; // ~45% chance of feedback
+    let mirror_roll = r(12.0);
+    let fb_mirror = if mirror_roll < 0.25 { 0u32 }
+        else if mirror_roll < 0.45 { 1 }
+        else if mirror_roll < 0.60 { 3 }
+        else if mirror_roll < 0.72 { 5 }
+        else if mirror_roll < 0.82 { 6 }
+        else if mirror_roll < 0.90 { 7 }
+        else { 9 };
     FieldParams {
-        mode:        ((r(1.0) * MODE_NAMES.len() as f32) as u32).min(MODE_NAMES.len() as u32 - 1),
-        kscale:      0.3 + r(2.0) * 3.5,
-        speed:       r(3.0) * 1.6,
-        field_mix:   r(4.0),
-        iso_level:   0.05 + r(5.0) * 0.9,
-        color_shift: r(6.0),
-        zoom:        0.4 + r(7.0) * 1.9,
-        w_lattice:   r(8.0) * 2.0,
-        w_motif:     r(9.0) * 2.0,
-        w_band:      r(10.0) * 2.0,
-        // feedback stays off in random presets
+        mode:           ((r(1.0) * MODE_NAMES.len() as f32) as u32).min(MODE_NAMES.len() as u32 - 1),
+        kscale:         0.3 + r(2.0) * 3.5,
+        speed:          r(3.0) * 1.6,
+        field_mix:      r(4.0),
+        iso_level:      0.05 + r(5.0) * 0.9,
+        color_shift:    r(6.0),
+        zoom:           0.4 + r(7.0) * 1.9,
+        w_lattice:      r(8.0) * 2.0,
+        w_motif:        r(9.0) * 2.0,
+        w_band:         r(10.0) * 2.0,
+        fb_enabled:     fb_on,
+        fb_mirror,
+        fb_zoom:        0.93 + r(13.0) * 0.09,
+        fb_decay:       0.60 + r(14.0) * 0.38,
+        fb_color_shift: (r(15.0) - 0.5) * 0.6,
+        fb_inject:      0.5 + r(16.0) * 0.5,
+        fb_saturation:  0.7 + r(17.0) * 0.6,
+        fb_brightness:  0.8 + r(18.0) * 0.4,
+        fb_rotation:    (r(19.0) - 0.5) * 0.06,
+        fb_offset_x:    (r(20.0) - 0.5) * 0.04,
+        fb_offset_y:    (r(21.0) - 0.5) * 0.04,
+        fb_fold_angle:  (r(22.0) - 0.5) * 2.0,
+        fb_blend_mode:  (r(23.0) * 4.0) as u32, // modes 0-3 most useful
         ..FieldParams::default()
     }
 }
@@ -541,18 +595,25 @@ impl TourStyle {
 
 fn tour_lfo_preset() -> LfoParams {
     LfoParams {
-        kscale: true,
-        speed: true,
-        field_mix: true,
-        iso_level: true,
-        color_shift: true,
-        zoom: true,
-        w_lattice: true,
-        w_motif: true,
-        w_band: true,
-        rate: 0.18,
-        depth: 0.18,
-        wave: LfoWave::Triangle,
+        kscale: true, speed: true, field_mix: true, iso_level: true,
+        color_shift: true, zoom: true, w_lattice: true, w_motif: true, w_band: true,
+        fb_zoom: true, fb_decay: false, fb_color_shift: true,
+        fb_saturation: true, fb_brightness: false,
+        fb_rotation: true, fb_offset_x: false, fb_offset_y: false,
+        fb_inject: false, fb_fold_angle: true,
+        rate: 0.18, depth: 0.18, wave: LfoWave::Triangle,
+    }
+}
+
+fn tour_lfo_preset_fb_heavy() -> LfoParams {
+    LfoParams {
+        kscale: false, speed: true, field_mix: false, iso_level: false,
+        color_shift: true, zoom: false, w_lattice: false, w_motif: false, w_band: false,
+        fb_zoom: true, fb_decay: true, fb_color_shift: true,
+        fb_saturation: true, fb_brightness: true,
+        fb_rotation: true, fb_offset_x: true, fb_offset_y: true,
+        fb_inject: false, fb_fold_angle: true,
+        rate: 0.07, depth: 0.25, wave: LfoWave::Sine,
     }
 }
 
@@ -577,17 +638,38 @@ fn tour_random_field_params(t: f32, crystal_idx: usize) -> FieldParams {
         min + (max - min) * (a + (b - a) * ease)
     };
 
+    let fb_on = tour_rand(seed + 77.0) > 0.45;
+    let mirror_roll = tour_rand(seed + 88.0);
+    let fb_mirror = if mirror_roll < 0.3 { 0u32 }
+        else if mirror_roll < 0.5 { 1 }
+        else if mirror_roll < 0.65 { 5 }
+        else if mirror_roll < 0.78 { 6 }
+        else if mirror_roll < 0.88 { 7 }
+        else { 9 };
     FieldParams {
         mode: mode.min((MODE_NAMES.len() - 1) as u32),
-        kscale: (morph(3.0, 0.25, 3.8) + burst * 0.55).clamp(0.1, 5.0),
-        speed: (morph(4.0, 0.05, 1.75) + burst * 0.25).clamp(0.0, 2.0),
-        field_mix: morph(5.0, 0.0, 1.0).clamp(0.0, 1.0),
-        iso_level: morph(6.0, 0.05, 0.96).clamp(0.0, 1.0),
+        kscale:      (morph(3.0, 0.25, 3.8) + burst * 0.55).clamp(0.1, 5.0),
+        speed:       (morph(4.0, 0.05, 1.75) + burst * 0.25).clamp(0.0, 2.0),
+        field_mix:   morph(5.0, 0.0, 1.0).clamp(0.0, 1.0),
+        iso_level:   morph(6.0, 0.05, 0.96).clamp(0.0, 1.0),
         color_shift: (morph(7.0, 0.0, 1.0) + t * 0.025).rem_euclid(1.0),
-        zoom: (morph(8.0, 0.35, 2.15) + burst * 0.25).clamp(0.2, 5.0),
-        w_lattice: morph(9.0, 0.0, 2.0).clamp(0.0, 2.0),
-        w_motif: morph(10.0, 0.0, 2.0).clamp(0.0, 2.0),
-        w_band: morph(11.0, 0.0, 2.0).clamp(0.0, 2.0),
+        zoom:        (morph(8.0, 0.35, 2.15) + burst * 0.25).clamp(0.2, 5.0),
+        w_lattice:   morph(9.0, 0.0, 2.0).clamp(0.0, 2.0),
+        w_motif:     morph(10.0, 0.0, 2.0).clamp(0.0, 2.0),
+        w_band:      morph(11.0, 0.0, 2.0).clamp(0.0, 2.0),
+        fb_enabled:  fb_on,
+        fb_mirror,
+        fb_zoom:        morph(12.0, 0.93, 1.02),
+        fb_decay:       morph(13.0, 0.65, 0.97),
+        fb_color_shift: morph(14.0, -0.3, 0.3),
+        fb_inject:      morph(15.0, 0.5, 1.0),
+        fb_saturation:  morph(16.0, 0.7, 1.4),
+        fb_brightness:  morph(17.0, 0.85, 1.15),
+        fb_rotation:    morph(18.0, -0.03, 0.03),
+        fb_offset_x:    morph(19.0, -0.02, 0.02),
+        fb_offset_y:    morph(20.0, -0.02, 0.02),
+        fb_fold_angle:  morph(21.0, -1.57, 1.57),
+        fb_blend_mode:  (tour_rand(seed + 99.0) * 4.0) as u32,
         ..FieldParams::default()
     }
 }
@@ -603,17 +685,33 @@ fn tour_field_params(t: f32, crystal_idx: usize, style: TourStyle) -> FieldParam
     let punch = (TAU * local).sin().max(0.0).powf(1.8);
     let snap = if local < 0.16 { (1.0 - local / 0.16).powf(2.0) } else { 0.0 };
 
+    let fb_on = (scene % 3) != 0; // feedback in 2/3 of curated scenes
+    let fb_mirrors = [0u32, 1, 3, 5, 6, 7, 8, 9];
+    let fb_mirror = fb_mirrors[scene % fb_mirrors.len()];
     FieldParams {
         mode: TOUR_MODES[(scene + crystal_idx) % TOUR_MODES.len()],
-        kscale: (1.05 + 0.72 * (TAU * drift).sin().abs() + 0.45 * snap).clamp(0.1, 5.0),
-        speed: (0.22 + 0.82 * punch + 0.18 * (TAU * (drift * 0.37)).sin().abs()).clamp(0.0, 2.0),
-        field_mix: (0.50 + 0.38 * (TAU * (local + drift * 0.11)).sin()).clamp(0.0, 1.0),
-        iso_level: (0.42 + 0.36 * (TAU * (local * 0.5 + drift * 0.19)).cos()).clamp(0.0, 1.0),
+        kscale:      (1.05 + 0.72 * (TAU * drift).sin().abs() + 0.45 * snap).clamp(0.1, 5.0),
+        speed:       (0.22 + 0.82 * punch + 0.18 * (TAU * (drift * 0.37)).sin().abs()).clamp(0.0, 2.0),
+        field_mix:   (0.50 + 0.38 * (TAU * (local + drift * 0.11)).sin()).clamp(0.0, 1.0),
+        iso_level:   (0.42 + 0.36 * (TAU * (local * 0.5 + drift * 0.19)).cos()).clamp(0.0, 1.0),
         color_shift: (drift * 0.22 + 0.08 * (TAU * local).sin()).rem_euclid(1.0),
-        zoom: (0.78 + 0.36 * (TAU * (local * 0.75)).sin().abs() + 0.22 * snap).clamp(0.2, 5.0),
-        w_lattice: (0.75 + 0.65 * (TAU * (local + 0.10)).sin().abs()).clamp(0.0, 2.0),
-        w_motif: (0.38 + 0.92 * (TAU * (local * 0.7 + 0.35)).sin().abs()).clamp(0.0, 2.0),
-        w_band: (0.48 + 1.05 * (TAU * (local * 1.2 + drift * 0.07)).cos().abs()).clamp(0.0, 2.0),
+        zoom:        (0.78 + 0.36 * (TAU * (local * 0.75)).sin().abs() + 0.22 * snap).clamp(0.2, 5.0),
+        w_lattice:   (0.75 + 0.65 * (TAU * (local + 0.10)).sin().abs()).clamp(0.0, 2.0),
+        w_motif:     (0.38 + 0.92 * (TAU * (local * 0.7 + 0.35)).sin().abs()).clamp(0.0, 2.0),
+        w_band:      (0.48 + 1.05 * (TAU * (local * 1.2 + drift * 0.07)).cos().abs()).clamp(0.0, 2.0),
+        fb_enabled:  fb_on,
+        fb_mirror,
+        fb_zoom:        (0.96 + 0.04 * (TAU * (local * 0.3 + drift * 0.07)).sin()).clamp(0.90, 1.10),
+        fb_decay:       (0.82 + 0.12 * (TAU * (local * 0.5)).cos()).clamp(0.30, 0.99),
+        fb_color_shift: 0.08 * (TAU * (drift * 0.11 + local * 0.3)).sin(),
+        fb_inject:      (0.7 + 0.3 * punch).clamp(0.0, 1.0),
+        fb_saturation:  (1.0 + 0.3 * (TAU * (local * 0.7 + drift * 0.13)).sin()).clamp(0.0, 2.0),
+        fb_brightness:  (1.0 + 0.15 * (TAU * local).cos()).clamp(0.0, 2.0),
+        fb_rotation:    0.015 * (TAU * (drift * 0.07 + local * 0.25)).sin(),
+        fb_offset_x:    0.012 * (TAU * (drift * 0.13 + local * 0.4)).sin(),
+        fb_offset_y:    0.012 * (TAU * (drift * 0.09 + local * 0.35)).cos(),
+        fb_fold_angle:  1.2 * (TAU * (drift * 0.05 + local * 0.2)).sin(),
+        fb_blend_mode:  (scene % 4) as u32,
         ..FieldParams::default()
     }
 }
@@ -646,20 +744,20 @@ fn apply_modulation(
         w_lattice:      modulate!(fp.w_lattice,   lfo.w_lattice,   mic.w_lattice,   0.0, 2.0),
         w_motif:        modulate!(fp.w_motif,     lfo.w_motif,     mic.w_motif,     0.0, 2.0),
         w_band:         modulate!(fp.w_band,      lfo.w_band,      mic.w_band,      0.0, 2.0),
-        // feedback params pass through unmodulated
+        // feedback params — modulated when fb_enabled
         fb_enabled:     fp.fb_enabled,
         fb_mirror:      fp.fb_mirror,
-        fb_zoom:        fp.fb_zoom,
-        fb_offset_x:    fp.fb_offset_x,
-        fb_offset_y:    fp.fb_offset_y,
-        fb_rotation:    fp.fb_rotation,
-        fb_decay:       fp.fb_decay,
-        fb_color_shift: fp.fb_color_shift,
-        fb_inject:      fp.fb_inject,
-        fb_fold_angle:  fp.fb_fold_angle,
-        fb_saturation:  fp.fb_saturation,
-        fb_brightness:  fp.fb_brightness,
         fb_blend_mode:  fp.fb_blend_mode,
+        fb_zoom:        modulate!(fp.fb_zoom,        lfo.fb_zoom,        mic.fb_zoom,        0.90, 1.10),
+        fb_decay:       modulate!(fp.fb_decay,       lfo.fb_decay,       mic.fb_decay,       0.30, 0.99),
+        fb_offset_x:    modulate!(fp.fb_offset_x,    lfo.fb_offset_x,    mic.fb_offset_x,   -0.10, 0.10),
+        fb_offset_y:    modulate!(fp.fb_offset_y,    lfo.fb_offset_y,    mic.fb_offset_y,   -0.10, 0.10),
+        fb_rotation:    modulate!(fp.fb_rotation,    lfo.fb_rotation,    mic.fb_rotation,   -0.30, 0.30),
+        fb_color_shift: modulate!(fp.fb_color_shift, lfo.fb_color_shift, mic.fb_color_shift,-1.00, 1.00),
+        fb_saturation:  modulate!(fp.fb_saturation,  lfo.fb_saturation,  mic.fb_saturation,  0.00, 2.00),
+        fb_brightness:  modulate!(fp.fb_brightness,  lfo.fb_brightness,  mic.fb_brightness,  0.00, 2.00),
+        fb_inject:      modulate!(fp.fb_inject,      lfo.fb_inject,      mic.fb_inject,      0.00, 1.00),
+        fb_fold_angle:  modulate!(fp.fb_fold_angle,  lfo.fb_fold_angle,  mic.fb_fold_angle, -3.14, 3.14),
     }
 }
 
@@ -1305,48 +1403,18 @@ impl ApplicationHandler<UserEvent> for App {
                                         fp.fb_blend_mode = (fp.fb_blend_mode + 1) % 12;
                                     }
                                 });
+                                sld!(ui, "fb_zoom  ", &mut fp.fb_zoom,        fp_eff.fb_zoom,        &mut lfo.fb_zoom,        &mut mic.fb_zoom,        0.90_f32, 1.10_f32);
+                                sld!(ui, "fb_decay ", &mut fp.fb_decay,       fp_eff.fb_decay,       &mut lfo.fb_decay,       &mut mic.fb_decay,       0.30_f32, 0.99_f32);
+                                sld!(ui, "fb_inject", &mut fp.fb_inject,      fp_eff.fb_inject,      &mut lfo.fb_inject,      &mut mic.fb_inject,      0.00_f32, 1.00_f32);
+                                sld!(ui, "fb_sat   ", &mut fp.fb_saturation,  fp_eff.fb_saturation,  &mut lfo.fb_saturation,  &mut mic.fb_saturation,  0.00_f32, 2.00_f32);
+                                sld!(ui, "fb_bright", &mut fp.fb_brightness,  fp_eff.fb_brightness,  &mut lfo.fb_brightness,  &mut mic.fb_brightness,  0.00_f32, 2.00_f32);
+                                sld!(ui, "fb_rotate", &mut fp.fb_rotation,    fp_eff.fb_rotation,    &mut lfo.fb_rotation,    &mut mic.fb_rotation,   -0.30_f32, 0.30_f32);
+                                sld!(ui, "fb_hue   ", &mut fp.fb_color_shift, fp_eff.fb_color_shift, &mut lfo.fb_color_shift, &mut mic.fb_color_shift,-1.00_f32, 1.00_f32);
+                                sld!(ui, "fb_pan_x ", &mut fp.fb_offset_x,    fp_eff.fb_offset_x,    &mut lfo.fb_offset_x,    &mut mic.fb_offset_x,   -0.10_f32, 0.10_f32);
+                                sld!(ui, "fb_pan_y ", &mut fp.fb_offset_y,    fp_eff.fb_offset_y,    &mut lfo.fb_offset_y,    &mut mic.fb_offset_y,   -0.10_f32, 0.10_f32);
                                 if fp.fb_mirror >= 5 {
-                                    ui.horizontal(|ui| {
-                                        ui.label(egui::RichText::new("fold_ang ").small());
-                                        ui.add(egui::Slider::new(&mut fp.fb_fold_angle, -3.14_f32..=3.14_f32).fixed_decimals(2));
-                                    });
+                                    sld!(ui, "fold_ang ", &mut fp.fb_fold_angle, fp_eff.fb_fold_angle, &mut lfo.fb_fold_angle, &mut mic.fb_fold_angle, -3.14_f32, 3.14_f32);
                                 }
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("fb_zoom  ").small());
-                                    ui.add(egui::Slider::new(&mut fp.fb_zoom, 0.90_f32..=1.10_f32).fixed_decimals(3));
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("fb_decay ").small());
-                                    ui.add(egui::Slider::new(&mut fp.fb_decay, 0.3_f32..=0.99_f32).fixed_decimals(2));
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("fb_inject").small());
-                                    ui.add(egui::Slider::new(&mut fp.fb_inject, 0.0_f32..=1.0_f32).fixed_decimals(2));
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("fb_sat   ").small());
-                                    ui.add(egui::Slider::new(&mut fp.fb_saturation, 0.0_f32..=2.0_f32).fixed_decimals(2));
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("fb_bright").small());
-                                    ui.add(egui::Slider::new(&mut fp.fb_brightness, 0.0_f32..=2.0_f32).fixed_decimals(2));
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("fb_rotate").small());
-                                    ui.add(egui::Slider::new(&mut fp.fb_rotation, -0.3_f32..=0.3_f32).fixed_decimals(3));
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("fb_hue   ").small());
-                                    ui.add(egui::Slider::new(&mut fp.fb_color_shift, -1.0_f32..=1.0_f32).fixed_decimals(2));
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("fb_pan_x ").small());
-                                    ui.add(egui::Slider::new(&mut fp.fb_offset_x, -0.1_f32..=0.1_f32).fixed_decimals(3));
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("fb_pan_y ").small());
-                                    ui.add(egui::Slider::new(&mut fp.fb_offset_y, -0.1_f32..=0.1_f32).fixed_decimals(3));
-                                });
 
                                 ui.separator();
 
@@ -1722,13 +1790,9 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 if req.tour_style_toggle {
                     self.tour_style = self.tour_style.next();
-                    self.lfo.wave = match self.tour_style {
-                        TourStyle::Curated => LfoWave::Triangle,
-                        TourStyle::Random => LfoWave::Steps,
-                    };
-                    self.lfo.depth = match self.tour_style {
-                        TourStyle::Curated => 0.18,
-                        TourStyle::Random => 0.28,
+                    self.lfo = match self.tour_style {
+                        TourStyle::Curated => tour_lfo_preset(),
+                        TourStyle::Random  => tour_lfo_preset_fb_heavy(),
                     };
                 }
                 if req.seq_toggle {
