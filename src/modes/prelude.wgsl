@@ -67,6 +67,36 @@ fn sdf(p: vec3<f32>) -> f32 {
     return abs(mix(crystal_field(p), cf2(p), u.field_mix)) - u.iso_level*0.3;
 }
 
+
+// Crystal_field + cf2 in a single G-vector loop: saves loop overhead and shared
+// per-G computations (dot(G,G), t*(1+i*0.01)) vs calling both functions separately.
+fn sdf_combined(p: vec3<f32>) -> f32 {
+    let p2 = p * 1.37 + vec3<f32>(1.618, 2.718, 3.141);
+    var v1 = 0.0; var v2 = 0.0; var ns = 0.0;
+    let t  = u.time * u.speed;
+    for (var i = 0i; i < 64i; i++) {
+        if (i >= i32(u.num_g)) { break; }
+        let ga  = textureLoad(g_tex, vec2<i32>(i, 0), 0);
+        let ph  = textureLoad(g_tex, vec2<i32>(i, 1), 0).r;
+        let G   = ga.xyz * u.kscale;
+        let amp = ga.w;
+        let gg      = dot(G, G);
+        let lat_t   = t * (1.0 + f32(i) * 0.01);
+        let gx1 = dot(G, p);
+        let gx2 = dot(G, p2);
+        v1 += amp * (u.w_lattice * cos(gx1 + ph + lat_t)
+                   + u.w_motif  * cos(gx1 * 1.13 + ph * 1.7 + t * 0.7)
+                   + u.w_band   * cos(gx1 + gg * 0.12 + t * 0.4));
+        v2 += amp * (u.w_lattice * cos(gx2 + ph + lat_t)
+                   + u.w_motif  * cos(gx2 * 1.13 + ph * 1.7 + t * 0.7)
+                   + u.w_band   * cos(gx2 + gg * 0.12 + t * 0.4));
+        ns += amp;
+    }
+    let inv_ns = 1.0 / max(ns, 0.001);
+    return abs(mix(v1 * inv_ns, v2 * inv_ns, u.field_mix)) - u.iso_level * 0.3;
+}
+
+
 // Tetrahedron normal (Inigo Quilez) — 4 sdf samples instead of 6.
 fn calc_normal(p: vec3<f32>) -> vec3<f32> {
     let e  = 0.004;

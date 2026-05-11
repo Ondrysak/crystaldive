@@ -16,12 +16,54 @@ fn render_rm(uv: vec2<f32>) -> vec3<f32> {
     let rd  = normalize(fwd + uv.x*rgt + uv.y*up);
     var t   = 0.0;
     var col = vec3<f32>(0.01, 0.005, 0.02);
+    // sdf_combined merges crystal_field + cf2 in one G-vector loop per SDF call.
     for (var i = 0; i < 80; i++) {
         let p = cp + rd*t;
-        let d = sdf(p);
+        let d = sdf_combined(p);
         if d < 0.003 {
-            let nm = calc_normal(p);
-            col = cfield_col(crystal_field(p), cf2(p), nm) * (0.5 + 0.5*(1.0-f32(i)/80.0));
+            // Analytical 3-D gradient of sdf, inlined to avoid adding VGPR pressure
+            // to all 36 modes via a shared prelude function.
+            let cf_v  = crystal_field(p);
+            let cf2_v = cf2(p);
+            let mixed = mix(cf_v, cf2_v, u.field_mix);
+            let sgn   = sign(mixed);
+            let t_n   = u.time * u.speed;
+            let p2    = p * 1.37 + vec3<f32>(1.618, 2.718, 3.141);
+            var gx1 = 0.0; var gy1 = 0.0; var gz1 = 0.0; var ns_n = 0.0;
+            for (var j = 0i; j < 64i; j++) {
+                if (j >= i32(u.num_g)) { break; }
+                let ga_n = textureLoad(g_tex, vec2<i32>(j, 0), 0);
+                let ph_n = textureLoad(g_tex, vec2<i32>(j, 1), 0).r;
+                let G_n  = ga_n.xyz * u.kscale;
+                let gx_n = dot(G_n, p);
+                let ds   = u.w_lattice * sin(gx_n + ph_n + t_n*(1.0 + f32(j)*0.01))
+                         + u.w_motif  * sin(gx_n*1.13 + ph_n*1.7 + t_n*0.7) * 1.13
+                         + u.w_band   * sin(gx_n + dot(G_n,G_n)*0.12 + t_n*0.4);
+                gx1 -= ga_n.w * G_n.x * ds;
+                gy1 -= ga_n.w * G_n.y * ds;
+                gz1 -= ga_n.w * G_n.z * ds;
+                ns_n += ga_n.w;
+            }
+            var gx2 = 0.0; var gy2 = 0.0; var gz2 = 0.0;
+            for (var j = 0i; j < 64i; j++) {
+                if (j >= i32(u.num_g)) { break; }
+                let ga_n = textureLoad(g_tex, vec2<i32>(j, 0), 0);
+                let ph_n = textureLoad(g_tex, vec2<i32>(j, 1), 0).r;
+                let G_n  = ga_n.xyz * u.kscale;
+                let gx_n = dot(G_n, p2);
+                let ds   = u.w_lattice * sin(gx_n + ph_n + t_n*(1.0 + f32(j)*0.01))
+                         + u.w_motif  * sin(gx_n*1.13 + ph_n*1.7 + t_n*0.7) * 1.13
+                         + u.w_band   * sin(gx_n + dot(G_n,G_n)*0.12 + t_n*0.4);
+                gx2 -= ga_n.w * G_n.x * ds;
+                gy2 -= ga_n.w * G_n.y * ds;
+                gz2 -= ga_n.w * G_n.z * ds;
+            }
+            let inv_ns = 1.0 / max(ns_n, 0.001);
+            let g1  = vec3<f32>(gx1, gy1, gz1) * inv_ns;
+            let g2  = vec3<f32>(gx2, gy2, gz2) * (inv_ns * 1.37);
+            let nm  = normalize(sgn * ((1.0 - u.field_mix) * g1 + u.field_mix * g2)
+                              + vec3<f32>(1e-12));
+            col = cfield_col(cf_v, cf2_v, nm) * (0.5 + 0.5*(1.0-f32(i)/80.0));
             break;
         }
         if t > 8.0 { break; }
@@ -130,11 +172,12 @@ fn render_stripes(uv: vec2<f32>) -> vec3<f32> {
 fn render_warp(uv: vec2<f32>) -> vec3<f32> {
     let z  = u.time * u.speed * 0.1;
     let p0 = vec3<f32>(uv * 2.0 / u.zoom, z);
-    let e  = 0.035;
-    let gx = crystal_field(p0 + vec3<f32>(e, 0.0, 0.0))
-           - crystal_field(p0 - vec3<f32>(e, 0.0, 0.0));
-    let gy = crystal_field(p0 + vec3<f32>(0.0, e, 0.0))
-           - crystal_field(p0 - vec3<f32>(0.0, e, 0.0));
+    // Analytical gradient replaces 4 finite-difference crystal_field calls.
+    // Scale by 2*e to match the central-difference magnitude that the warp factor expects.
+    let e   = 0.035;
+    let vg  = crystal_field_val_grad_xy(p0);
+    let gx  = vg.y * (2.0 * e);
+    let gy  = vg.z * (2.0 * e);
 
     let warp   = (u.field_mix * 0.6 + 0.1);
     let pw     = vec3<f32>((uv + vec2<f32>(gx, gy) * warp) * 2.0 / u.zoom, z);
