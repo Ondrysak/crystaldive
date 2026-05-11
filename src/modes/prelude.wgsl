@@ -82,6 +82,32 @@ fn calc_normal(p: vec3<f32>) -> vec3<f32> {
     );
 }
 
+// Returns vec3(value, dvalue/dx, dvalue/dy) for crystal_field in a single G-vector pass.
+// Use instead of 4 finite-difference calls when the 2-D Jacobian is needed.
+fn crystal_field_val_grad_xy(x: vec3<f32>) -> vec3<f32> {
+    var v = 0.0; var ns = 0.0;
+    var gx_acc = 0.0; var gy_acc = 0.0;
+    let t = u.time * u.speed;
+    for (var i = 0i; i < 64i; i++) {
+        if (i >= i32(u.num_g)) { break; }
+        let ga  = textureLoad(g_tex, vec2<i32>(i, 0), 0);
+        let ph  = textureLoad(g_tex, vec2<i32>(i, 1), 0).r;
+        let G   = ga.xyz * u.kscale;
+        let amp = ga.w;
+        let gx  = dot(G, x);
+        let lat_arg   = gx + ph + t * (1.0 + f32(i) * 0.01);
+        let motif_arg = gx * 1.13 + ph * 1.7 + t * 0.7;
+        let band_arg  = gx + dot(G, G) * 0.12 + t * 0.4;
+        v  += amp * (u.w_lattice * cos(lat_arg) + u.w_motif * cos(motif_arg) + u.w_band * cos(band_arg));
+        ns += amp;
+        let ds = u.w_lattice * sin(lat_arg) + u.w_motif * sin(motif_arg) * 1.13 + u.w_band * sin(band_arg);
+        gx_acc -= amp * G.x * ds;
+        gy_acc -= amp * G.y * ds;
+    }
+    let inv_ns = 1.0 / max(ns, 0.001);
+    return vec3<f32>(v * inv_ns, gx_acc * inv_ns, gy_acc * inv_ns);
+}
+
 fn cfield_col(f: f32, f2: f32, n: vec3<f32>) -> vec3<f32> {
     let hue = fract(f*2.0 + f2*0.7 + u.color_shift + u.time*u.speed*0.1);
     var col  = 0.5 + 0.5*cos(TAU*(hue + vec3<f32>(0.0, 0.333, 0.667)));

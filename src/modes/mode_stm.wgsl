@@ -24,12 +24,11 @@ fn stm_density(r: vec2<f32>) -> f32 {
     let rho_base = psi_real * psi_real + psi_imag * psi_imag;
 
     let kF = u.kscale * (3.0 + u.field_mix * 4.0);
-    // iso_level controls QPI ring contrast (higher → sharper rings).
     let qpi_amp = 0.18 * (0.6 + 1.4 * u.iso_level);
 
     var qpi = 0.0;
     for (var i = 0; i < 5; i++) {
-        let imp_p = stm_impurity_pos(i);
+        let imp_p  = stm_impurity_pos(i);
         let imp_ph = stm_impurity_phase(i);
         let d = length(r - imp_p);
         let env = exp(-d * 0.7);
@@ -45,6 +44,52 @@ fn stm_z(r: vec2<f32>) -> f32 {
     return pow(max(rho, 0.0), 0.6);
 }
 
+// Returns vec3(rho, d_rho/dx, d_rho/dy) analytically in two G-vector passes
+// (one for crystal_field, one for cf2), replacing 4 finite-difference stm_z calls.
+fn stm_density_val_grad(r: vec2<f32>) -> vec3<f32> {
+    let p3 = vec3<f32>(r, 0.0);
+    // crystal_field pass
+    let vg1 = crystal_field_val_grad_xy(p3);
+    let f1   = vg1.x;
+    // cf2 pass: cf2(p) = crystal_field(p*1.37 + offset)
+    let vg2 = crystal_field_val_grad_xy(p3 * 1.37 + vec3<f32>(1.618, 2.718, 3.141));
+    let f2   = vg2.x;
+
+    let rho_base  = f1 * f1 + f2 * f2;
+    var d_rho_dx  = 2.0 * (f1 * vg1.y + f2 * vg2.y * 1.37);
+    var d_rho_dy  = 2.0 * (f1 * vg1.z + f2 * vg2.z * 1.37);
+
+    let kF      = u.kscale * (3.0 + u.field_mix * 4.0);
+    let qpi_amp = 0.18 * (0.6 + 1.4 * u.iso_level);
+
+    var qpi = 0.0;
+    for (var i = 0; i < 5; i++) {
+        let imp_p  = stm_impurity_pos(i);
+        let imp_ph = stm_impurity_phase(i);
+        let dr     = r - imp_p;
+        let d      = length(dr);
+        let d_safe = max(d, 0.15);
+        let env    = exp(-d * 0.7);
+        let phase  = 2.0 * kF * d + imp_ph;
+        let cos_ph = cos(phase);
+        let sin_ph = sin(phase);
+
+        qpi += cos_ph * env / d_safe * qpi_amp;
+
+        // Analytical gradient of this QPI term w.r.t. r.
+        if d > 0.001 {
+            let inv_d  = 1.0 / d;
+            let df_dd  = (-sin_ph * 2.0 * kF - cos_ph * 0.7) * env / d_safe
+                       + select(0.0, -cos_ph * env / (d * d_safe), d > 0.15);
+            let d_dr   = df_dd * inv_d * qpi_amp;
+            d_rho_dx  += d_dr * dr.x;
+            d_rho_dy  += d_dr * dr.y;
+        }
+    }
+
+    return vec3<f32>(rho_base + qpi, d_rho_dx, d_rho_dy);
+}
+
 // Hue rotation around the luma axis — driven by u.color_shift.
 fn stm_hue_rotate(c: vec3<f32>, h: f32) -> vec3<f32> {
     let k = vec3<f32>(0.57735, 0.57735, 0.57735);
@@ -56,15 +101,14 @@ fn stm_hue_rotate(c: vec3<f32>, h: f32) -> vec3<f32> {
 fn render_stm(uv: vec2<f32>) -> vec3<f32> {
     let r = uv * 3.0 / u.zoom;
 
-    // Tip height + finite-difference gradients for shaded-relief normal.
-    let eps = 0.012;
-    let z_tip = stm_z(r);
-    let zx_p = stm_z(r + vec2<f32>(eps, 0.0));
-    let zx_m = stm_z(r - vec2<f32>(eps, 0.0));
-    let zy_p = stm_z(r + vec2<f32>(0.0, eps));
-    let zy_m = stm_z(r - vec2<f32>(0.0, eps));
-    let dz_dx = (zx_p - zx_m) / (2.0 * eps);
-    let dz_dy = (zy_p - zy_m) / (2.0 * eps);
+    // Analytical gradient replaces 4 finite-difference stm_z calls (saves 8 crystal_field evals).
+    let rho_vg = stm_density_val_grad(r);
+    let rho    = rho_vg.x;
+    let z_tip  = pow(max(rho, 0.0), 0.6);
+    // ∂z/∂r = 0.6 * rho^{-0.4} * ∂rho/∂r
+    let dz_drho = select(0.0, 0.6 * pow(rho, -0.4), rho > 1e-6);
+    let dz_dx   = dz_drho * rho_vg.y;
+    let dz_dy   = dz_drho * rho_vg.z;
     let n = normalize(vec3<f32>(-dz_dx, -dz_dy, 1.0));
 
     // Lambert shading with a fixed grazing light source.

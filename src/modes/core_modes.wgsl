@@ -164,6 +164,7 @@ fn sd_link(p: vec3<f32>, le: f32, r1: f32, r2: f32) -> f32 {
     return length(vec2<f32>(length(q.xy) - r1, q.z)) - r2;
 }
 
+// Full SDF with crystal_field noise perturbation (only called near surface, ≤0.15 from geom).
 fn links_scene(p: vec3<f32>) -> f32 {
     let noise  = crystal_field(p * 0.85) * 0.10 * max(1.0 - length(p) * 0.9, 0.0);
     let q      = p + noise;
@@ -172,6 +173,24 @@ fn links_scene(p: vec3<f32>) -> f32 {
     let cell_sz = 1.1;
     let cell_y  = floor(q.y / cell_sz + 0.5);
     let lp      = vec3<f32>(q.x, q.y - cell_y * cell_sz, q.z);
+    var lq: vec3<f32>;
+    if (i32(cell_y) & 1) != 0 {
+        lq = vec3<f32>(lp.z, lp.y, lp.x);
+    } else {
+        lq = lp;
+    }
+    let link = sd_link(lq, 0.28, 0.22, 0.035);
+    return smin_links(sphere, link, 0.18);
+}
+
+// Cheap geometric-only SDF (no crystal_field) for the ray march bulk steps.
+// Valid SDF — Lipschitz ≤ 1 — so it never over-steps. Threshold 0.15 > noise
+// amplitude, guaranteeing links_scene is only called very close to the surface.
+fn links_scene_fast(p: vec3<f32>) -> f32 {
+    let sphere  = abs(length(p) - 0.65) - 0.04;
+    let cell_sz = 1.1;
+    let cell_y  = floor(p.y / cell_sz + 0.5);
+    let lp      = vec3<f32>(p.x, p.y - cell_y * cell_sz, p.z);
     var lq: vec3<f32>;
     if (i32(cell_y) & 1) != 0 {
         lq = vec3<f32>(lp.z, lp.y, lp.x);
@@ -216,9 +235,18 @@ fn render_links(uv: vec2<f32>) -> vec3<f32> {
                    vec3<f32>(0.04, 0.12, 0.18),
                    smoothstep(-0.6, 0.6, bg_f)) * 0.55;
 
+    // March with the cheap geometric SDF; switch to the full (noisy) SDF only
+    // within 0.15 of the surface (> max noise amplitude 0.10, so always safe).
     var ray_t = 0.0;
     for (var i = 0; i < 90; i++) {
-        let p = cp + rd * ray_t;
+        let p      = cp + rd * ray_t;
+        let fast_d = links_scene_fast(p);
+        if ray_t > 6.5 { break; }
+        if fast_d > 0.15 {
+            ray_t += fast_d;
+            continue;
+        }
+        // Near surface: evaluate the full SDF including crystal_field noise.
         let d = links_scene(p);
         if d < 0.003 {
             let nm     = links_normal(p);
@@ -242,7 +270,6 @@ fn render_links(uv: vec2<f32>) -> vec3<f32> {
             col *= 0.35 + 0.65 * (1.0 - f32(i) / 90.0);
             break;
         }
-        if ray_t > 6.5 { break; }
         ray_t += max(d, 0.003);
     }
     return col;

@@ -6,33 +6,6 @@ fn nematic_director(p: vec3<f32>) -> vec2<f32> {
     return vec2<f32>(h1, h2);
 }
 
-// Returns vec3(value, dvalue/dx, dvalue/dy) via a single G-vector pass.
-// Replaces 4 finite-difference crystal_field calls for each Jacobian row.
-fn crystal_field_val_grad_xy(x: vec3<f32>) -> vec3<f32> {
-    var v = 0.0; var ns = 0.0;
-    var gx_acc = 0.0; var gy_acc = 0.0;
-    let t = u.time * u.speed;
-    for (var i = 0i; i < 64i; i++) {
-        if (i >= i32(u.num_g)) { break; }
-        let ga  = textureLoad(g_tex, vec2<i32>(i, 0), 0);
-        let ph  = textureLoad(g_tex, vec2<i32>(i, 1), 0).r;
-        let G   = ga.xyz * u.kscale;
-        let amp = ga.w;
-        let gx  = dot(G, x);
-        let lat_arg   = gx + ph + t * (1.0 + f32(i) * 0.01);
-        let motif_arg = gx * 1.13 + ph * 1.7 + t * 0.7;
-        let band_arg  = gx + dot(G, G) * 0.12 + t * 0.4;
-        v  += amp * (u.w_lattice * cos(lat_arg) + u.w_motif * cos(motif_arg) + u.w_band * cos(band_arg));
-        ns += amp;
-        // dv/dx = -amp*(w_lat*G.x*sin(lat) + w_mot*G.x*1.13*sin(mot) + w_band*G.x*sin(band))
-        let ds = u.w_lattice * sin(lat_arg) + u.w_motif * sin(motif_arg) * 1.13 + u.w_band * sin(band_arg);
-        gx_acc -= amp * G.x * ds;
-        gy_acc -= amp * G.y * ds;
-    }
-    let inv_ns = 1.0 / max(ns, 0.001);
-    return vec3<f32>(v * inv_ns, gx_acc * inv_ns, gy_acc * inv_ns);
-}
-
 fn render_nematic(uv: vec2<f32>) -> vec3<f32> {
     let r = uv * 2.0 / u.zoom;
     let t = u.time * u.speed;
