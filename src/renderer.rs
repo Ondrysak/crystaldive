@@ -369,6 +369,8 @@ struct FeedbackPass {
     accum_b:     wgpu::TextureView,
     parity:      bool,
     sampler:     wgpu::Sampler,
+    // field_hdr_pl renders the field shader targeting Rgba16Float (not surface_fmt)
+    field_hdr_pl: wgpu::RenderPipeline,
     feedback_pl: wgpu::RenderPipeline,
     blit_pl:     wgpu::RenderPipeline,
     // feedback_pl bind groups: reads field_rt + one accum → writes other accum
@@ -392,7 +394,7 @@ impl FeedbackPass {
     }
 
     fn new(device: &wgpu::Device, w: u32, h: u32, surface_fmt: wgpu::TextureFormat,
-           uniform_buf: &wgpu::Buffer) -> Self {
+           uniform_buf: &wgpu::Buffer, field_bgl: &wgpu::BindGroupLayout) -> Self {
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("fb sampler"),
             address_mode_u: wgpu::AddressMode::Repeat,
@@ -491,14 +493,15 @@ impl FeedbackPass {
         let bg_blit_a   = make_blit_bg(&accum_a);
         let bg_blit_b   = make_blit_bg(&accum_b);
 
-        let feedback_pl = Self::build_feedback_pl(device, &fb_bgl, FB_FORMAT);
-        let blit_pl     = Self::build_blit_pl(device, &blit_bgl, surface_fmt);
+        let field_hdr_pl = build_field_pl(device, field_bgl, FB_FORMAT);
+        let feedback_pl  = Self::build_feedback_pl(device, &fb_bgl, FB_FORMAT);
+        let blit_pl      = Self::build_blit_pl(device, &blit_bgl, surface_fmt);
 
         Self {
             field_rt, accum_a, accum_b,
             parity: false,
             sampler,
-            feedback_pl, blit_pl,
+            field_hdr_pl, feedback_pl, blit_pl,
             bg_f_then_a, bg_f_then_b,
             bg_blit_a, bg_blit_b,
         }
@@ -716,8 +719,9 @@ impl GpuState {
         field_pl.upload_gfield(&queue, &gpu_field.pack());
 
         // ── feedback pass ─────────────────────────────────────────────
+        let fb_field_bgl = field_bgl(&device);
         let feedback = FeedbackPass::new(&device, size.width.max(1), size.height.max(1),
-                                         surface_fmt, &field_pl.uniform_buf);
+                                         surface_fmt, &field_pl.uniform_buf, &fb_field_bgl);
 
         // ── egui ──────────────────────────────────────────────────────
         let egui = EguiRenderer::new(&device, surface_fmt, &window);
@@ -975,7 +979,7 @@ impl GpuState {
                     })],
                     depth_stencil_attachment: None, occlusion_query_set: None, timestamp_writes: None,
                 });
-                pass.set_pipeline(&self.field_pl.field_pl);
+                pass.set_pipeline(&self.feedback.field_hdr_pl);
                 pass.set_bind_group(0, &self.field_pl.uniform_bg, &[]);
                 pass.draw(0..3, 0..1);
             }
@@ -1590,7 +1594,7 @@ struct VOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> }
 
 // ── Feedback / self-similarity shaders ───────────────────────────────────
 
-const FEEDBACK_SHADER: &str = r#"
+pub const FEEDBACK_SHADER: &str = r#"
 struct FU {
     time: f32, kscale: f32, speed: f32, field_mix: f32,
     iso_level: f32, color_shift: f32, zoom: f32,
@@ -1658,7 +1662,7 @@ fn mirror_uv(uv: vec2<f32>, mode: u32) -> vec2<f32> {
 }
 "#;
 
-const BLIT_SHADER: &str = r#"
+pub const BLIT_SHADER: &str = r#"
 struct VOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> }
 @vertex fn vs_screen(@builtin(vertex_index) vi: u32) -> VOut {
     var uvs = array<vec2<f32>,3>(vec2(0.0,0.0),vec2(2.0,0.0),vec2(0.0,2.0));
