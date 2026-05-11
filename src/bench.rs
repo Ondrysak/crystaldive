@@ -73,6 +73,10 @@ struct FieldUniform {
     fb_decay:       f32,
     fb_color_shift: f32,
     fb_inject:      f32,
+    fb_fold_angle:  f32,
+    fb_saturation:  f32,
+    fb_brightness:  f32,
+    fb_blend_mode:  u32,
     _pad:           [f32; 3],
 }
 
@@ -87,6 +91,7 @@ fn default_uniform(mode: u32, time: f32, aspect: f32) -> FieldUniform {
         fb_enabled: 0, fb_mirror: 0,
         fb_zoom: 1.0, fb_offset_x: 0.0, fb_offset_y: 0.0,
         fb_rotation: 0.0, fb_decay: 0.0, fb_color_shift: 0.0, fb_inject: 1.0,
+        fb_fold_angle: 0.0, fb_saturation: 1.0, fb_brightness: 1.0, fb_blend_mode: 0,
         _pad: [0.0; 3],
     }
 }

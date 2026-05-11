@@ -30,7 +30,10 @@ struct FU {
     fb_decay:       f32,
     fb_color_shift: f32,
     fb_inject:      f32,
-    _pad:           f32,
+    fb_fold_angle:  f32,
+    fb_saturation:  f32,
+    fb_brightness:  f32,
+    fb_blend_mode:  u32,
 }
 @group(0) @binding(0) var<uniform> u: FU;
 @group(0) @binding(1) var g_tex: texture_2d<f32>;

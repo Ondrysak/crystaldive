@@ -74,8 +74,12 @@ pub struct FieldUniform {
     pub fb_decay:       f32,   // 104
     pub fb_color_shift: f32,   // 108
     pub fb_inject:      f32,   // 112
-    pub _pad:           [f32; 3],  // 116..128 — pad to 128 bytes (WGSL vec4 align)
-}                              // total 128 bytes
+    pub fb_fold_angle:  f32,   // 116
+    pub fb_saturation:  f32,   // 120
+    pub fb_brightness:  f32,   // 124
+    pub fb_blend_mode:  u32,   // 128
+    pub _pad:           [f32; 3],  // 132..144 — align to 144 (WGSL 16-byte struct align)
+}                              // total 144 bytes
 
 pub struct FieldPipeline {
     pub uniform_buf: wgpu::Buffer,
@@ -1595,6 +1599,8 @@ struct VOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> }
 // ── Feedback / self-similarity shaders ───────────────────────────────────
 
 pub const FEEDBACK_SHADER: &str = r#"
+const TAU: f32 = 6.28318530718;
+
 struct FU {
     time: f32, kscale: f32, speed: f32, field_mix: f32,
     iso_level: f32, color_shift: f32, zoom: f32,
@@ -1605,7 +1611,7 @@ struct FU {
     fb_enabled: u32, fb_mirror: u32,
     fb_zoom: f32, fb_offset_x: f32, fb_offset_y: f32,
     fb_rotation: f32, fb_decay: f32, fb_color_shift: f32, fb_inject: f32,
-    _pad: f32,
+    fb_fold_angle: f32, fb_saturation: f32, fb_brightness: f32, fb_blend_mode: u32,
 }
 @group(0) @binding(0) var<uniform> u: FU;
 @group(0) @binding(1) var prev_accum: texture_2d<f32>;
@@ -1628,6 +1634,31 @@ fn rotate_hue(c: vec3<f32>, h: f32) -> vec3<f32> {
     return c * cs + cross(k, c) * sn + k * dot(k, c) * (1.0 - cs);
 }
 
+fn rgb_to_hsv(c: vec3<f32>) -> vec3<f32> {
+    let k = vec4<f32>(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+    let p = mix(vec4<f32>(c.bg, k.wz), vec4<f32>(c.gb, k.xy), step(c.b, c.g));
+    let q = mix(vec4<f32>(p.xyw, c.r), vec4<f32>(c.r, p.yzx), step(p.x, c.r));
+    let d = q.x - min(q.w, q.y);
+    let e = 1.0e-10;
+    return vec3<f32>(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
+}
+
+fn hsv_to_rgb(c: vec3<f32>) -> vec3<f32> {
+    let k = vec4<f32>(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+    let p = abs(fract(c.xxx + k.xyz) * 6.0 - k.www);
+    return c.z * mix(k.xxx, clamp(p - k.xxx, vec3<f32>(0.0), vec3<f32>(1.0)), c.y);
+}
+
+fn polar_fold(uv: vec2<f32>, n: f32, angle_offset: f32) -> vec2<f32> {
+    let center = vec2<f32>(0.5, 0.5);
+    let p = uv - center;
+    let r = length(p);
+    let theta = atan2(p.y, p.x) + angle_offset;
+    let sector = TAU / n;
+    let folded = abs(fract(theta / sector + 0.5) - 0.5) * sector;
+    return vec2<f32>(cos(folded), sin(folded)) * r + center;
+}
+
 fn mirror_uv(uv: vec2<f32>, mode: u32) -> vec2<f32> {
     var v = fract(uv);
     switch mode {
@@ -1641,6 +1672,15 @@ fn mirror_uv(uv: vec2<f32>, mode: u32) -> vec2<f32> {
             v.x = abs(fract(v.x * 0.5) * 2.0 - 1.0);
             v.y = abs(fract(v.y * 0.5) * 2.0 - 1.0);
         }
+        case 5u: { v = polar_fold(v, 3.0, u.fb_fold_angle); }
+        case 6u: { v = polar_fold(v, 6.0, u.fb_fold_angle); }
+        case 7u: { v = polar_fold(v, 8.0, u.fb_fold_angle); }
+        case 8u: {
+            v = polar_fold(v, 3.0, u.fb_fold_angle);
+            v.x = abs(fract(v.x * 0.5) * 2.0 - 1.0);
+            v.y = abs(fract(v.y * 0.5) * 2.0 - 1.0);
+        }
+        case 9u: { v = polar_fold(v, 6.0, u.fb_fold_angle + u.time * 0.3); }
         default: {}
     }
     return v;
@@ -1653,11 +1693,31 @@ fn mirror_uv(uv: vec2<f32>, mode: u32) -> vec2<f32> {
     let rotated = vec2<f32>(cr * p.x - sr * p.y, sr * p.x + cr * p.y) / u.fb_zoom;
     let prev_uv = mirror_uv(rotated + c + vec2<f32>(u.fb_offset_x, u.fb_offset_y), u.fb_mirror);
 
-    let prev = textureSample(prev_accum, smp, prev_uv).rgb;
+    var prev = textureSample(prev_accum, smp, prev_uv).rgb;
     let cur  = textureSample(field_rt,   smp, f.uv).rgb;
 
-    let prev_shifted = rotate_hue(prev, u.fb_color_shift);
-    let mixed = prev_shifted * u.fb_decay + cur * u.fb_inject;
+    var hsv = rgb_to_hsv(prev);
+    hsv.y = clamp(hsv.y * u.fb_saturation, 0.0, 1.0);
+    hsv.z = clamp(hsv.z * u.fb_brightness, 0.0, 1.0);
+    prev = hsv_to_rgb(hsv);
+
+    let a = rotate_hue(prev, u.fb_color_shift) * u.fb_decay;
+    let b = cur * u.fb_inject;
+
+    var mixed: vec3<f32>;
+    switch u.fb_blend_mode {
+        case 1u: { mixed = a + b; }
+        case 2u: { mixed = a + b - a * b; }
+        case 3u: { mixed = a * b; }
+        case 4u: {
+            mixed = select(2.0 * a * b,
+                           1.0 - 2.0 * (1.0 - a) * (1.0 - b),
+                           a > vec3<f32>(0.5));
+        }
+        case 5u: { mixed = abs(a - b); }
+        case 6u: { mixed = max(a, b); }
+        default: { mixed = a + b; }
+    }
     return vec4<f32>(mixed, 1.0);
 }
 "#;

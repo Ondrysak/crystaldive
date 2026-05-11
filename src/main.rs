@@ -46,6 +46,10 @@ pub struct FieldParams {
     pub fb_decay:       f32,
     pub fb_color_shift: f32,
     pub fb_inject:      f32,
+    pub fb_fold_angle:  f32,
+    pub fb_saturation:  f32,
+    pub fb_brightness:  f32,
+    pub fb_blend_mode:  u32,
 }
 
 impl Default for FieldParams {
@@ -57,6 +61,7 @@ impl Default for FieldParams {
             fb_enabled: false, fb_mirror: 0,
             fb_zoom: 1.0, fb_offset_x: 0.0, fb_offset_y: 0.0,
             fb_rotation: 0.0, fb_decay: 0.0, fb_color_shift: 0.0, fb_inject: 1.0,
+            fb_fold_angle: 0.0, fb_saturation: 1.0, fb_brightness: 1.0, fb_blend_mode: 0,
         }
     }
 }
@@ -294,6 +299,10 @@ fn lerp_fp(a: &FieldParams, b: &FieldParams, t: f32) -> FieldParams {
         fb_decay:       l(a.fb_decay,       b.fb_decay),
         fb_color_shift: l(a.fb_color_shift, b.fb_color_shift),
         fb_inject:      l(a.fb_inject,      b.fb_inject),
+        fb_fold_angle:  l(a.fb_fold_angle,  b.fb_fold_angle),
+        fb_saturation:  l(a.fb_saturation,  b.fb_saturation),
+        fb_brightness:  l(a.fb_brightness,  b.fb_brightness),
+        fb_blend_mode:  if t < 0.5 { a.fb_blend_mode } else { b.fb_blend_mode },
     }
 }
 
@@ -647,6 +656,10 @@ fn apply_modulation(
         fb_decay:       fp.fb_decay,
         fb_color_shift: fp.fb_color_shift,
         fb_inject:      fp.fb_inject,
+        fb_fold_angle:  fp.fb_fold_angle,
+        fb_saturation:  fp.fb_saturation,
+        fb_brightness:  fp.fb_brightness,
+        fb_blend_mode:  fp.fb_blend_mode,
     }
 }
 
@@ -1138,6 +1151,10 @@ impl ApplicationHandler<UserEvent> for App {
                     fb_decay:       fp_eff.fb_decay,
                     fb_color_shift: fp_eff.fb_color_shift,
                     fb_inject:      fp_eff.fb_inject,
+                    fb_fold_angle:  fp_eff.fb_fold_angle,
+                    fb_saturation:  fp_eff.fb_saturation,
+                    fb_brightness:  fp_eff.fb_brightness,
+                    fb_blend_mode:  fp_eff.fb_blend_mode,
                     _pad:           [0.0; 3],
                 };
 
@@ -1279,11 +1296,21 @@ impl ApplicationHandler<UserEvent> for App {
                                     }
                                     if ui.small_button("RESET").clicked() { req.fb_reset = true; }
                                     ui.label(egui::RichText::new("mirror").small());
-                                    let mirror_labels = ["none","H","V","HV","quad"];
-                                    if ui.small_button(mirror_labels[fp.fb_mirror.min(4) as usize]).clicked() {
-                                        fp.fb_mirror = (fp.fb_mirror + 1) % 5;
+                                    let mirror_labels = ["none","H","V","HV","quad","3fold","6fold","8fold","tri","pin"];
+                                    if ui.small_button(mirror_labels[fp.fb_mirror.min(9) as usize]).clicked() {
+                                        fp.fb_mirror = (fp.fb_mirror + 1) % 10;
+                                    }
+                                    let blend_labels = ["mix","add","screen","mul","over","diff","lite"];
+                                    if ui.small_button(blend_labels[fp.fb_blend_mode.min(6) as usize]).clicked() {
+                                        fp.fb_blend_mode = (fp.fb_blend_mode + 1) % 7;
                                     }
                                 });
+                                if fp.fb_mirror >= 5 {
+                                    ui.horizontal(|ui| {
+                                        ui.label(egui::RichText::new("fold_ang ").small());
+                                        ui.add(egui::Slider::new(&mut fp.fb_fold_angle, -3.14_f32..=3.14_f32).fixed_decimals(2));
+                                    });
+                                }
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("fb_zoom  ").small());
                                     ui.add(egui::Slider::new(&mut fp.fb_zoom, 0.90_f32..=1.10_f32).fixed_decimals(3));
@@ -1295,6 +1322,14 @@ impl ApplicationHandler<UserEvent> for App {
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("fb_inject").small());
                                     ui.add(egui::Slider::new(&mut fp.fb_inject, 0.0_f32..=2.0_f32).fixed_decimals(2));
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("fb_sat   ").small());
+                                    ui.add(egui::Slider::new(&mut fp.fb_saturation, 0.0_f32..=3.0_f32).fixed_decimals(2));
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("fb_bright").small());
+                                    ui.add(egui::Slider::new(&mut fp.fb_brightness, 0.0_f32..=3.0_f32).fixed_decimals(2));
                                 });
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("fb_rotate").small());
