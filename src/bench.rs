@@ -90,7 +90,7 @@ fn default_uniform(mode: u32, time: f32, aspect: f32) -> FieldUniform {
         mouse: [0.5, 0.5], mouse_down: 0.0, aspect,
         fb_enabled: 0, fb_mirror: 0,
         fb_zoom: 1.0, fb_offset_x: 0.0, fb_offset_y: 0.0,
-        fb_rotation: 0.0, fb_decay: 0.0, fb_color_shift: 0.0, fb_inject: 1.0,
+        fb_rotation: 0.0, fb_decay: 0.85, fb_color_shift: 0.0, fb_inject: 1.0,
         fb_fold_angle: 0.0, fb_saturation: 1.0, fb_brightness: 1.0, fb_blend_mode: 0,
         _pad: [0.0; 3],
     }

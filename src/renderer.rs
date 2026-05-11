@@ -1680,7 +1680,9 @@ fn mirror_uv(uv: vec2<f32>, mode: u32) -> vec2<f32> {
             v.x = abs(fract(v.x * 0.5) * 2.0 - 1.0);
             v.y = abs(fract(v.y * 0.5) * 2.0 - 1.0);
         }
-        case 9u: { v = polar_fold(v, 6.0, u.fb_fold_angle + u.time * 0.3); }
+        case 9u:  { v = polar_fold(v, 6.0, u.fb_fold_angle + u.time * 0.3); }
+        case 10u: { v = polar_fold(v, 4.0, u.fb_fold_angle); }
+        case 11u: { v = polar_fold(v, 12.0, u.fb_fold_angle); }
         default: {}
     }
     return v;
@@ -1696,27 +1698,54 @@ fn mirror_uv(uv: vec2<f32>, mode: u32) -> vec2<f32> {
     var prev = textureSample(prev_accum, smp, prev_uv).rgb;
     let cur  = textureSample(field_rt,   smp, f.uv).rgb;
 
+    // HSV modulate the accumulated frame
     var hsv = rgb_to_hsv(prev);
     hsv.y = clamp(hsv.y * u.fb_saturation, 0.0, 1.0);
     hsv.z = clamp(hsv.z * u.fb_brightness, 0.0, 1.0);
-    prev = hsv_to_rgb(hsv);
+    let prev_col = rotate_hue(hsv_to_rgb(hsv), u.fb_color_shift);
+    let cur_col  = cur * u.fb_inject;
 
-    let a = rotate_hue(prev, u.fb_color_shift) * u.fb_decay;
-    let b = cur * u.fb_inject;
+    // Additive terms for blend modes that need pre-multiplied prev
+    let pa = prev_col * u.fb_decay;
+    let eps = vec3<f32>(1e-5);
 
     var mixed: vec3<f32>;
     switch u.fb_blend_mode {
-        case 1u: { mixed = a + b; }
-        case 2u: { mixed = a + b - a * b; }
-        case 3u: { mixed = a * b; }
-        case 4u: {
-            mixed = select(2.0 * a * b,
-                           1.0 - 2.0 * (1.0 - a) * (1.0 - b),
-                           a > vec3<f32>(0.5));
+        // 0: lerp — Fraksl-style normalized mix, energy-preserving
+        case 0u:  { mixed = mix(cur_col, prev_col, u.fb_decay); }
+        // 1: add — HDR additive accumulation (original behaviour)
+        case 1u:  { mixed = pa + cur_col; }
+        // 2: screen
+        case 2u:  { mixed = pa + cur_col - pa * cur_col; }
+        // 3: multiply
+        case 3u:  { mixed = pa * cur_col; }
+        // 4: overlay
+        case 4u:  {
+            mixed = select(2.0 * pa * cur_col,
+                           1.0 - 2.0 * (1.0 - pa) * (1.0 - cur_col),
+                           pa > vec3<f32>(0.5));
         }
-        case 5u: { mixed = abs(a - b); }
-        case 6u: { mixed = max(a, b); }
-        default: { mixed = a + b; }
+        // 5: difference
+        case 5u:  { mixed = abs(pa - cur_col); }
+        // 6: lighten (max)
+        case 6u:  { mixed = max(pa, cur_col); }
+        // 7: color burn
+        case 7u:  { mixed = 1.0 - clamp((1.0 - cur_col) / (pa + eps), vec3<f32>(0.0), vec3<f32>(1.0)); }
+        // 8: color dodge
+        case 8u:  { mixed = clamp(cur_col / (1.0 - pa + eps), vec3<f32>(0.0), vec3<f32>(2.0)); }
+        // 9: exclusion (a+b−2ab)
+        case 9u:  { mixed = pa + cur_col - 2.0 * pa * cur_col; }
+        // 10: hard light (overlay with layers swapped)
+        case 10u: {
+            mixed = select(2.0 * cur_col * pa,
+                           1.0 - 2.0 * (1.0 - cur_col) * (1.0 - pa),
+                           cur_col > vec3<f32>(0.5));
+        }
+        // 11: soft light (Pegtop formula)
+        case 11u: {
+            mixed = (1.0 - 2.0*cur_col)*pa*pa + 2.0*cur_col*pa;
+        }
+        default: { mixed = mix(cur_col, prev_col, u.fb_decay); }
     }
     return vec4<f32>(mixed, 1.0);
 }

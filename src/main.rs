@@ -59,8 +59,8 @@ impl Default for FieldParams {
             iso_level: 0.5, color_shift: 0.0, zoom: 1.0,
             w_lattice: 1.0, w_motif: 0.6, w_band: 0.4,
             fb_enabled: false, fb_mirror: 0,
-            fb_zoom: 1.0, fb_offset_x: 0.0, fb_offset_y: 0.0,
-            fb_rotation: 0.0, fb_decay: 0.0, fb_color_shift: 0.0, fb_inject: 1.0,
+            fb_zoom: 0.98, fb_offset_x: 0.0, fb_offset_y: 0.0,
+            fb_rotation: 0.0, fb_decay: 0.85, fb_color_shift: 0.0, fb_inject: 1.0,
             fb_fold_angle: 0.0, fb_saturation: 1.0, fb_brightness: 1.0, fb_blend_mode: 0,
         }
     }
@@ -1296,13 +1296,13 @@ impl ApplicationHandler<UserEvent> for App {
                                     }
                                     if ui.small_button("RESET").clicked() { req.fb_reset = true; }
                                     ui.label(egui::RichText::new("mirror").small());
-                                    let mirror_labels = ["none","H","V","HV","quad","3fold","6fold","8fold","tri","pin"];
-                                    if ui.small_button(mirror_labels[fp.fb_mirror.min(9) as usize]).clicked() {
-                                        fp.fb_mirror = (fp.fb_mirror + 1) % 10;
+                                    let mirror_labels = ["none","H","V","HV","quad","3fold","6fold","8fold","tri","pin","4fold","12fold"];
+                                    if ui.small_button(mirror_labels[fp.fb_mirror.min(11) as usize]).clicked() {
+                                        fp.fb_mirror = (fp.fb_mirror + 1) % 12;
                                     }
-                                    let blend_labels = ["mix","add","screen","mul","over","diff","lite"];
-                                    if ui.small_button(blend_labels[fp.fb_blend_mode.min(6) as usize]).clicked() {
-                                        fp.fb_blend_mode = (fp.fb_blend_mode + 1) % 7;
+                                    let blend_labels = ["lerp","add","scrn","mul","over","diff","lite","burn","dodge","excl","hrd","sft"];
+                                    if ui.small_button(blend_labels[fp.fb_blend_mode.min(11) as usize]).clicked() {
+                                        fp.fb_blend_mode = (fp.fb_blend_mode + 1) % 12;
                                     }
                                 });
                                 if fp.fb_mirror >= 5 {
@@ -1317,19 +1317,19 @@ impl ApplicationHandler<UserEvent> for App {
                                 });
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("fb_decay ").small());
-                                    ui.add(egui::Slider::new(&mut fp.fb_decay, 0.0_f32..=0.99_f32).fixed_decimals(2));
+                                    ui.add(egui::Slider::new(&mut fp.fb_decay, 0.3_f32..=0.99_f32).fixed_decimals(2));
                                 });
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("fb_inject").small());
-                                    ui.add(egui::Slider::new(&mut fp.fb_inject, 0.0_f32..=2.0_f32).fixed_decimals(2));
+                                    ui.add(egui::Slider::new(&mut fp.fb_inject, 0.0_f32..=1.0_f32).fixed_decimals(2));
                                 });
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("fb_sat   ").small());
-                                    ui.add(egui::Slider::new(&mut fp.fb_saturation, 0.0_f32..=3.0_f32).fixed_decimals(2));
+                                    ui.add(egui::Slider::new(&mut fp.fb_saturation, 0.0_f32..=2.0_f32).fixed_decimals(2));
                                 });
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("fb_bright").small());
-                                    ui.add(egui::Slider::new(&mut fp.fb_brightness, 0.0_f32..=3.0_f32).fixed_decimals(2));
+                                    ui.add(egui::Slider::new(&mut fp.fb_brightness, 0.0_f32..=2.0_f32).fixed_decimals(2));
                                 });
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("fb_rotate").small());
