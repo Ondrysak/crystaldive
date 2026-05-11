@@ -1648,7 +1648,11 @@ impl ApplicationHandler<UserEvent> for App {
                     }
                 }
                 if let Some(i) = req.seq_preset {
-                    if i < SEQ_PRESETS.len() { self.sequencer.load_preset(SEQ_PRESETS[i].1); }
+                    if i < SEQ_PRESETS.len() {
+                        self.sequencer.load_preset(SEQ_PRESETS[i].1);
+                        self.sequencer.active = true;
+                        self.render_mode = RenderMode::Field;
+                    }
                 }
                 if let Some(c) = req.seq_curve { self.sequencer.curve = c; }
                 if let Some(d) = req.seq_dur { self.sequencer.step_dur = d; }
