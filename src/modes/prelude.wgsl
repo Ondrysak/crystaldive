@@ -67,13 +67,19 @@ fn sdf(p: vec3<f32>) -> f32 {
     return abs(mix(crystal_field(p), cf2(p), u.field_mix)) - u.iso_level*0.3;
 }
 
+// Tetrahedron normal (Inigo Quilez) — 4 sdf samples instead of 6.
 fn calc_normal(p: vec3<f32>) -> vec3<f32> {
-    let e = 0.004;
-    return normalize(vec3<f32>(
-        sdf(p+vec3(e,0,0))-sdf(p-vec3(e,0,0)),
-        sdf(p+vec3(0,e,0))-sdf(p-vec3(0,e,0)),
-        sdf(p+vec3(0,0,e))-sdf(p-vec3(0,0,e)),
-    ));
+    let e  = 0.004;
+    let k0 = vec3<f32>( 1.0, -1.0, -1.0);
+    let k1 = vec3<f32>(-1.0, -1.0,  1.0);
+    let k2 = vec3<f32>(-1.0,  1.0, -1.0);
+    let k3 = vec3<f32>( 1.0,  1.0,  1.0);
+    return normalize(
+        k0 * sdf(p + k0 * e) +
+        k1 * sdf(p + k1 * e) +
+        k2 * sdf(p + k2 * e) +
+        k3 * sdf(p + k3 * e)
+    );
 }
 
 fn cfield_col(f: f32, f2: f32, n: vec3<f32>) -> vec3<f32> {

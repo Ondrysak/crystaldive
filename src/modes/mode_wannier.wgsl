@@ -32,13 +32,38 @@ fn wannier_sdf(r: vec3<f32>) -> f32 {
     return u.iso_level * 0.5 - sqrt(rho + 1e-6);
 }
 
+// Analytical normal: differentiates rho = (re²+im²)·exp(-1.2·|r_local|²) analytically,
+// avoiding 6 redundant wannier_psi passes used by finite differences.
 fn wannier_normal(r: vec3<f32>) -> vec3<f32> {
-    let e = 0.0035;
-    return normalize(vec3<f32>(
-        wannier_sdf(r + vec3<f32>(e, 0.0, 0.0)) - wannier_sdf(r - vec3<f32>(e, 0.0, 0.0)),
-        wannier_sdf(r + vec3<f32>(0.0, e, 0.0)) - wannier_sdf(r - vec3<f32>(0.0, e, 0.0)),
-        wannier_sdf(r + vec3<f32>(0.0, 0.0, e)) - wannier_sdf(r - vec3<f32>(0.0, 0.0, e)),
-    ));
+    let ctr    = wannier_center();
+    let rl     = r - ctr;
+    let env    = exp(-dot(rl, rl) * 0.6);
+    let env_sq = env * env;
+
+    var re  = 0.0;  var im  = 0.0;
+    var gre = vec3<f32>(0.0);
+    var gim = vec3<f32>(0.0);
+    for (var i = 0i; i < 64i; i++) {
+        if (i >= i32(u.num_g)) { break; }
+        let ga  = textureLoad(g_tex, vec2<i32>(i, 0), 0);
+        let ph  = textureLoad(g_tex, vec2<i32>(i, 1), 0).r;
+        let G   = ga.xyz * u.kscale;
+        let amp = ga.w;
+        let arg = dot(G, rl) + ph;
+        let c   = cos(arg);
+        let s   = sin(arg);
+        re  += amp * c;
+        im  += amp * s;
+        gre -= amp * s * G;   // ∂re/∂r_local
+        gim += amp * c * G;   // ∂im/∂r_local
+    }
+
+    let psi_sq      = re * re + im * im;
+    let grad_psi_sq = 2.0 * (re * gre + im * gim);
+    // ∇rho = env²·∇(psi_sq) + psi_sq·∇(env²),  ∇(env²) = -2.4·r_local·env²
+    let grad_rho    = env_sq * (grad_psi_sq - 2.4 * psi_sq * rl);
+
+    return normalize(-grad_rho + vec3<f32>(1e-12));
 }
 
 fn render_wannier(uv: vec2<f32>) -> vec3<f32> {

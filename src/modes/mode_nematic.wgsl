@@ -6,13 +6,49 @@ fn nematic_director(p: vec3<f32>) -> vec2<f32> {
     return vec2<f32>(h1, h2);
 }
 
+// Returns vec3(value, dvalue/dx, dvalue/dy) via a single G-vector pass.
+// Replaces 4 finite-difference crystal_field calls for each Jacobian row.
+fn crystal_field_val_grad_xy(x: vec3<f32>) -> vec3<f32> {
+    var v = 0.0; var ns = 0.0;
+    var gx_acc = 0.0; var gy_acc = 0.0;
+    let t = u.time * u.speed;
+    for (var i = 0i; i < 64i; i++) {
+        if (i >= i32(u.num_g)) { break; }
+        let ga  = textureLoad(g_tex, vec2<i32>(i, 0), 0);
+        let ph  = textureLoad(g_tex, vec2<i32>(i, 1), 0).r;
+        let G   = ga.xyz * u.kscale;
+        let amp = ga.w;
+        let gx  = dot(G, x);
+        let lat_arg   = gx + ph + t * (1.0 + f32(i) * 0.01);
+        let motif_arg = gx * 1.13 + ph * 1.7 + t * 0.7;
+        let band_arg  = gx + dot(G, G) * 0.12 + t * 0.4;
+        v  += amp * (u.w_lattice * cos(lat_arg) + u.w_motif * cos(motif_arg) + u.w_band * cos(band_arg));
+        ns += amp;
+        // dv/dx = -amp*(w_lat*G.x*sin(lat) + w_mot*G.x*1.13*sin(mot) + w_band*G.x*sin(band))
+        let ds = u.w_lattice * sin(lat_arg) + u.w_motif * sin(motif_arg) * 1.13 + u.w_band * sin(band_arg);
+        gx_acc -= amp * G.x * ds;
+        gy_acc -= amp * G.y * ds;
+    }
+    let inv_ns = 1.0 / max(ns, 0.001);
+    return vec3<f32>(v * inv_ns, gx_acc * inv_ns, gy_acc * inv_ns);
+}
+
 fn render_nematic(uv: vec2<f32>) -> vec3<f32> {
     let r = uv * 2.0 / u.zoom;
     let t = u.time * u.speed;
 
     // Two scalar fields whose phase encodes 2θ (so θ is unique mod π → nematic).
-    let h1 = crystal_field(vec3<f32>(r, t * 0.05));
-    let h2 = cf2(vec3<f32>(r, t * 0.07));
+    // Analytical gradient replaces 8 finite-difference crystal_field calls for Jacobian.
+    let p1  = vec3<f32>(r, t * 0.05);
+    let vg1 = crystal_field_val_grad_xy(p1);
+    let h1  = vg1.x;
+    // cf2 transforms the input: cf2(x) = crystal_field(x*1.37 + offset)
+    // Chain rule: ∇cf2 w.r.t. r = 1.37 * ∇crystal_field at transformed point
+    let p2_inner = vec3<f32>(r, t * 0.07) * 1.37 + vec3<f32>(1.618, 2.718, 3.141);
+    let vg2 = crystal_field_val_grad_xy(p2_inner);
+    let h2  = vg2.x;
+    let h1x = vg1.y; let h1y = vg1.z;
+    let h2x = vg2.y * 1.37; let h2y = vg2.z * 1.37;
 
     // Director angle: working with 2θ keeps n̂ ≡ −n̂ symmetry intact.
     let two_theta = atan2(h2, h1);          // ∈ (-π, π]
@@ -33,17 +69,7 @@ fn render_nematic(uv: vec2<f32>) -> vec3<f32> {
     let streak = 0.5 + 0.5 * sin(s * freq);
     let dash   = smoothstep(0.45, 0.65, streak);
 
-    // Determine ±1/2 defect sign via finite-difference Jacobian:
-    // sign of ∂h1/∂x · ∂h2/∂y − ∂h1/∂y · ∂h2/∂x near a zero of (h1, h2).
-    let e   = 0.04;
-    let h1x = crystal_field(vec3<f32>(r + vec2<f32>(e, 0.0), t * 0.05))
-            - crystal_field(vec3<f32>(r - vec2<f32>(e, 0.0), t * 0.05));
-    let h1y = crystal_field(vec3<f32>(r + vec2<f32>(0.0, e), t * 0.05))
-            - crystal_field(vec3<f32>(r - vec2<f32>(0.0, e), t * 0.05));
-    let h2x = cf2(vec3<f32>(r + vec2<f32>(e, 0.0), t * 0.07))
-            - cf2(vec3<f32>(r - vec2<f32>(e, 0.0), t * 0.07));
-    let h2y = cf2(vec3<f32>(r + vec2<f32>(0.0, e), t * 0.07))
-            - cf2(vec3<f32>(r - vec2<f32>(0.0, e), t * 0.07));
+    // Defect sign from analytical Jacobian (was: 8 finite-difference crystal_field calls).
     let defect_sign = h1x * h2y - h1y * h2x;
 
     // Background — cool, glowing toward defect cores where m → 0.

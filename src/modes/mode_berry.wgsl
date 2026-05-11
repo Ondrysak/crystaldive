@@ -25,16 +25,15 @@ fn berry_d_hat(k: vec2<f32>) -> vec3<f32> {
     return h / l;
 }
 
-// Berry curvature Ω(k) = ½ d̂ · (∂_x d̂ × ∂_y d̂) via central differences.
-fn berry_omega(k: vec2<f32>) -> f32 {
+// Berry curvature Ω(k) = ½ d̂ · (∂_x d̂ × ∂_y d̂) via forward differences.
+// Reuses the caller-supplied d0 = berry_d_hat(k), cutting 3 of 5 berry_d_hat calls
+// compared to the original central-difference version (12/18 fewer crystal_field calls).
+fn berry_omega(k: vec2<f32>, d0: vec3<f32>) -> f32 {
     let e   = 0.04;
     let dxp = berry_d_hat(k + vec2<f32>(e, 0.0));
-    let dxm = berry_d_hat(k - vec2<f32>(e, 0.0));
     let dyp = berry_d_hat(k + vec2<f32>(0.0, e));
-    let dym = berry_d_hat(k - vec2<f32>(0.0, e));
-    let dx  = (dxp - dxm) / (2.0 * e);
-    let dy  = (dyp - dym) / (2.0 * e);
-    let d0  = berry_d_hat(k);
+    let dx  = (dxp - d0) * (1.0 / e);
+    let dy  = (dyp - d0) * (1.0 / e);
     return 0.5 * dot(d0, cross(dx, dy));
 }
 
@@ -44,10 +43,11 @@ fn render_berry(uv: vec2<f32>) -> vec3<f32> {
     // Map screen → 2D Brillouin-zone coordinate.
     let k = uv * 2.0 / max(u.zoom, 0.05);
 
-    // Sample the Hamiltonian and its curvature.
+    // Sample the Hamiltonian and its curvature; reuse d0 inside berry_omega.
     let h_vec = berry_h(k);
     let h_mag = length(h_vec);
-    let omega = berry_omega(k);
+    let d0    = h_vec / max(h_mag, 1e-3);
+    let omega = berry_omega(k, d0);
 
     // Divergent palette around 0: blue for negative Ω, orange for positive.
     let neg_col = vec3<f32>(0.05, 0.55, 0.95);

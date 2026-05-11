@@ -182,13 +182,19 @@ fn links_scene(p: vec3<f32>) -> f32 {
     return smin_links(sphere, link, 0.18);
 }
 
+// Tetrahedron normal (Inigo Quilez) — 4 samples instead of 6, same quality.
 fn links_normal(p: vec3<f32>) -> vec3<f32> {
     let e = 0.003;
-    return normalize(vec3<f32>(
-        links_scene(p + vec3<f32>(e, 0.0, 0.0)) - links_scene(p - vec3<f32>(e, 0.0, 0.0)),
-        links_scene(p + vec3<f32>(0.0, e, 0.0)) - links_scene(p - vec3<f32>(0.0, e, 0.0)),
-        links_scene(p + vec3<f32>(0.0, 0.0, e)) - links_scene(p - vec3<f32>(0.0, 0.0, e)),
-    ));
+    let k0 = vec3<f32>( 1.0, -1.0, -1.0);
+    let k1 = vec3<f32>(-1.0, -1.0,  1.0);
+    let k2 = vec3<f32>(-1.0,  1.0, -1.0);
+    let k3 = vec3<f32>( 1.0,  1.0,  1.0);
+    return normalize(
+        k0 * links_scene(p + k0 * e) +
+        k1 * links_scene(p + k1 * e) +
+        k2 * links_scene(p + k2 * e) +
+        k3 * links_scene(p + k3 * e)
+    );
 }
 
 fn render_links(uv: vec2<f32>) -> vec3<f32> {
