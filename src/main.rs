@@ -1470,6 +1470,7 @@ impl ApplicationHandler<UserEvent> for App {
                     // Step editor window
                     if let Some((edit_idx, ref mut ep)) = seq_selected_edit {
                         egui::Window::new(format!("STEP {}  —  {}", edit_idx + 1, MODE_NAMES[ep.mode as usize]))
+                            .id(egui::Id::new("step_editor"))
                             .collapsible(false)
                             .resizable(false)
                             .default_width(220.0)
