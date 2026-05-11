@@ -211,6 +211,209 @@ impl Default for MicParams {
 
 const TOUR_MODES: [u32; 14] = [22, 32, 28, 20, 30, 15, 24, 34, 4, 29, 21, 25, 18, 35];
 
+// ── Sequencer ────────────────────────────────────────────────────────────
+
+#[derive(Clone, Copy, PartialEq)]
+enum TranCurve { Linear, EaseInOut, Snap, Bounce }
+
+impl TranCurve {
+    fn apply(self, t: f32) -> f32 {
+        match self {
+            Self::Linear    => t,
+            Self::EaseInOut => t * t * (3.0 - 2.0 * t),
+            Self::Snap      => if t >= 1.0 { 1.0 } else { 0.0 },
+            Self::Bounce    => {
+                // quartic ease-in-out: quick rush then slow settle
+                if t < 0.5 { 8.0 * t * t * t * t }
+                else { let u = t - 1.0; 1.0 - 8.0 * u * u * u * u }
+            }
+        }
+    }
+    fn label(self) -> &'static str {
+        match self {
+            Self::Linear    => "LINEAR",
+            Self::EaseInOut => "EASE",
+            Self::Snap      => "SNAP",
+            Self::Bounce    => "BOUNCE",
+        }
+    }
+    fn next(self) -> Self {
+        match self {
+            Self::Linear    => Self::EaseInOut,
+            Self::EaseInOut => Self::Snap,
+            Self::Snap      => Self::Bounce,
+            Self::Bounce    => Self::Linear,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct SeqStep {
+    params: FieldParams,
+    muted:  bool,
+}
+
+impl SeqStep {
+    fn new(p: FieldParams) -> Self { Self { params: p, muted: false } }
+}
+
+fn lerp_fp(a: &FieldParams, b: &FieldParams, t: f32) -> FieldParams {
+    let l = |x: f32, y: f32| x + (y - x) * t;
+    let d = b.color_shift - a.color_shift;
+    let cs_delta = if d > 0.5 { d - 1.0 } else if d < -0.5 { d + 1.0 } else { d };
+    FieldParams {
+        mode:        if t < 0.5 { a.mode } else { b.mode },
+        kscale:      l(a.kscale,    b.kscale),
+        speed:       l(a.speed,     b.speed),
+        field_mix:   l(a.field_mix, b.field_mix),
+        iso_level:   l(a.iso_level, b.iso_level),
+        color_shift: (a.color_shift + cs_delta * t).rem_euclid(1.0),
+        zoom:        l(a.zoom,      b.zoom),
+        w_lattice:   l(a.w_lattice, b.w_lattice),
+        w_motif:     l(a.w_motif,   b.w_motif),
+        w_band:      l(a.w_band,    b.w_band),
+    }
+}
+
+// Compact builder used by presets
+fn sp(mode: u32, ks: f32, sp: f32, fm: f32, il: f32, cs: f32, zm: f32, wl: f32, wm: f32, wb: f32) -> SeqStep {
+    SeqStep::new(FieldParams {
+        mode, kscale: ks, speed: sp, field_mix: fm, iso_level: il,
+        color_shift: cs, zoom: zm, w_lattice: wl, w_motif: wm, w_band: wb,
+    })
+}
+
+fn seq_preset_phase_space() -> Vec<SeqStep> { vec![
+    sp( 1, 1.5, 0.35, 0.30, 0.55, 0.00, 1.0, 1.5, 0.3, 0.5), // BZ SLICE
+    sp( 2, 2.0, 0.45, 0.50, 0.60, 0.12, 1.1, 0.8, 1.2, 0.8), // FERMI
+    sp( 4, 1.8, 0.30, 0.65, 0.40, 0.25, 0.9, 1.2, 1.8, 0.6), // NODAL
+    sp( 6, 2.5, 0.55, 0.40, 0.50, 0.37, 1.3, 0.5, 0.8, 1.8), // STRIPES
+    sp( 5, 1.2, 0.80, 0.55, 0.45, 0.50, 1.0, 1.2, 0.6, 0.8), // PHASE
+    sp(10, 2.0, 0.40, 0.70, 0.50, 0.62, 0.9, 0.6, 1.0, 1.5), // RECIP
+    sp(13, 1.0, 0.25, 0.45, 0.60, 0.75, 0.8, 1.0, 1.2, 0.9), // MOIRE
+    sp(23, 1.8, 0.50, 0.35, 0.70, 0.87, 1.2, 0.7, 0.5, 2.0), // CDW
+]}
+
+fn seq_preset_quantum() -> Vec<SeqStep> { vec![
+    sp(15, 1.2, 0.20, 0.50, 0.55, 0.00, 1.2, 1.0, 0.6, 0.4), // WANNIER
+    sp( 3, 1.5, 0.30, 0.55, 0.50, 0.12, 1.0, 1.8, 0.4, 0.3), // DENSITY
+    sp(28, 2.0, 0.40, 0.50, 0.55, 0.25, 0.9, 0.8, 1.0, 1.2), // BERRY
+    sp(35, 1.5, 0.30, 0.45, 0.60, 0.37, 1.0, 1.0, 0.5, 0.8), // NEMATIC
+    sp(21, 1.8, 0.35, 0.30, 0.50, 0.50, 1.1, 1.2, 0.8, 0.5), // SPIN TEXTURE
+    sp(20, 2.2, 0.45, 0.60, 0.45, 0.62, 1.3, 1.5, 0.6, 0.7), // BAND SURFACE
+    sp(30, 1.0, 0.35, 0.60, 0.55, 0.75, 1.5, 0.5, 1.2, 0.6), // STM
+    sp(29, 1.5, 0.25, 0.50, 0.50, 0.87, 1.0, 0.8, 0.9, 1.0), // HOFSTADTER
+]}
+
+fn seq_preset_geometric() -> Vec<SeqStep> { vec![
+    sp( 0, 1.5, 0.30, 0.50, 0.40, 0.00, 1.2, 1.0, 0.6, 0.8), // 3D ISO
+    sp( 8, 1.2, 0.35, 0.30, 0.50, 0.12, 1.0, 0.8, 1.0, 1.2), // LINKS
+    sp( 7, 2.0, 0.80, 0.55, 0.45, 0.25, 0.9, 0.6, 0.8, 1.8), // WARP
+    sp(32, 1.8, 0.45, 0.40, 0.55, 0.37, 1.3, 1.2, 0.5, 1.0), // VORTEX KNOT
+    sp(12, 1.5, 0.55, 0.60, 0.65, 0.50, 1.1, 0.7, 1.2, 0.8), // PHONON
+    sp(14, 1.2, 0.35, 0.45, 0.55, 0.62, 1.1, 1.5, 0.6, 0.5), // EWALD
+    sp(26, 1.8, 0.40, 0.55, 0.50, 0.75, 1.0, 0.8, 1.0, 1.8), // DOMAIN WALL
+    sp(27, 2.0, 0.50, 0.35, 0.60, 0.87, 1.4, 0.5, 1.5, 1.0), // FRACTURE
+]}
+
+fn seq_preset_chromatic() -> Vec<SeqStep> {
+    let modes: [u32; 16] = [22, 32, 28, 35, 15, 3, 0, 8, 13, 24, 34, 18, 5, 21, 29, 11];
+    modes.iter().enumerate().map(|(i, &mode)| {
+        let phi = i as f32 / 16.0;
+        SeqStep::new(FieldParams {
+            mode,
+            kscale:      1.0 + 1.2 * (phi * TAU).sin().abs(),
+            speed:       0.2 + 0.6 * (phi * TAU * 0.7).cos().abs(),
+            field_mix:   0.3 + 0.5 * (phi * TAU * 1.3).sin().abs(),
+            iso_level:   0.3 + 0.4 * (phi * TAU * 0.5).cos().abs(),
+            color_shift: phi,
+            zoom:        0.8 + 0.6 * (phi * TAU * 1.1).sin().abs(),
+            w_lattice:   0.5 + 1.2 * (phi * TAU).cos().abs(),
+            w_motif:     0.3 + 1.0 * (phi * TAU * 1.7).sin().abs(),
+            w_band:      0.4 + 1.2 * (phi * TAU * 0.9).cos().abs(),
+        })
+    }).collect()
+}
+
+const SEQ_PRESETS: [(&str, fn() -> Vec<SeqStep>); 4] = [
+    ("PHASE",    seq_preset_phase_space),
+    ("QUANTUM",  seq_preset_quantum),
+    ("GEO",      seq_preset_geometric),
+    ("CHROMA",   seq_preset_chromatic),
+];
+
+struct Sequencer {
+    pub active:     bool,
+    pub steps:      Vec<SeqStep>,
+    pub cur:        usize,
+    pub step_dur:   f32,
+    pub step_timer: f32,
+    pub curve:      TranCurve,
+    from_params:    FieldParams,
+}
+
+impl Sequencer {
+    fn new() -> Self {
+        let steps = seq_preset_phase_space();
+        let from_params = steps[0].params.clone();
+        Self {
+            active: false, steps, cur: 0,
+            step_dur: 3.0, step_timer: 0.0,
+            curve: TranCurve::EaseInOut, from_params,
+        }
+    }
+
+    fn current_params(&self) -> FieldParams {
+        let t = self.curve.apply((self.step_timer / self.step_dur).clamp(0.0, 1.0));
+        lerp_fp(&self.from_params, &self.steps[self.cur].params, t)
+    }
+
+    fn tick(&mut self, dt: f32) {
+        if !self.active { return; }
+        self.step_timer += dt;
+        if self.step_timer >= self.step_dur {
+            self.step_timer -= self.step_dur;
+            self.from_params = self.steps[self.cur].params.clone();
+            let n = self.steps.len();
+            let mut next = (self.cur + 1) % n;
+            for _ in 0..n {
+                if !self.steps[next].muted { break; }
+                next = (next + 1) % n;
+            }
+            self.cur = next;
+        }
+    }
+
+    fn load_preset(&mut self, make: fn() -> Vec<SeqStep>) {
+        self.steps = make();
+        self.cur = 0;
+        self.step_timer = 0.0;
+        if !self.steps.is_empty() { self.from_params = self.steps[0].params.clone(); }
+    }
+}
+
+fn mode_color(mode: u32) -> egui::Color32 {
+    let h = mode as f32 / 36.0;
+    let (r, g, b) = hue_to_rgb(h);
+    egui::Color32::from_rgb(r, g, b)
+}
+
+fn hue_to_rgb(h: f32) -> (u8, u8, u8) {
+    let h6 = h * 6.0;
+    let hi = h6 as u32 % 6;
+    let f  = h6 - h6.floor();
+    let q  = 1.0 - f;
+    let (r, g, b) = match hi {
+        0 => (1.0, f,   0.0),
+        1 => (q,   1.0, 0.0),
+        2 => (0.0, 1.0, f  ),
+        3 => (0.0, q,   1.0),
+        4 => (f,   0.0, 1.0),
+        _ => (1.0, 0.0, q  ),
+    };
+    ((r * 200.0) as u8, (g * 200.0) as u8, (b * 200.0) as u8)
+}
+
 #[derive(Clone, Copy, PartialEq, Default)]
 enum TourStyle {
     #[default]
@@ -422,6 +625,11 @@ struct UiReq {
     kpath_toggle: bool,
     panel_toggle: bool,
     render_mode:  Option<RenderMode>,
+    seq_toggle:   bool,
+    seq_step_mute: Option<usize>,
+    seq_preset:   Option<usize>,
+    seq_curve:    Option<TranCurve>,
+    seq_dur:      Option<f32>,
 }
 
 struct App {
@@ -446,6 +654,7 @@ struct App {
 
     tour:         Tour,
     tour_style:   TourStyle,
+    sequencer:    Sequencer,
     all_crystals: Vec<&'static CrystalDef>,
 
     panel_open:   bool,
@@ -475,6 +684,7 @@ impl App {
             kpath_active: false, kpt_idx: 0,
             tour: Tour::new(),
             tour_style: TourStyle::default(),
+            sequencer: Sequencer::new(),
             all_crystals: all,
             panel_open: true,
             search_str: String::new(),
@@ -680,6 +890,9 @@ impl ApplicationHandler<UserEvent> for App {
                 let dt = (t - self.prev_t).clamp(0.0, 0.1);
                 self.prev_t = t;
 
+                // ── Sequencer tick ────────────────────────────────────
+                self.sequencer.tick(dt);
+
                 // ── Tour tick ─────────────────────────────────────────
                 if self.tour.active && render_mode == RenderMode::Field {
                     let should_advance = self.tour.tick(dt);
@@ -747,15 +960,28 @@ impl ApplicationHandler<UserEvent> for App {
                 } else {
                     None
                 };
-                let cur_mode_idx      = tour_fp.as_ref().map(|fp| fp.mode).unwrap_or(self.field_params.mode) as usize;
+                let seq_fp = if self.sequencer.active { Some(self.sequencer.current_params()) } else { None };
+                // Sequencer overrides tour which overrides manual field_params
+                let cur_mode_idx      = seq_fp.as_ref()
+                    .or(tour_fp.as_ref())
+                    .map(|fp| fp.mode)
+                    .unwrap_or(self.field_params.mode) as usize;
                 let cur_mode_name     = MODE_NAMES[cur_mode_idx];
                 let cur_crystal_name  = self.all_crystals[cur_crystal_idx].name;
                 let cur_sys_name      = self.all_crystals[cur_crystal_idx].system.name();
                 let cur_kpt_label: String = gpu.kpath.as_ref()
                     .map(|kp| kp.label_at(self.kpt_idx % kp.n_points()).to_owned())
                     .unwrap_or_default();
+                // Snapshot sequencer state for UI
+                let cur_seq_active    = self.sequencer.active;
+                let cur_seq_steps: Vec<(bool, bool, u32)> = self.sequencer.steps.iter().enumerate()
+                    .map(|(i, s)| (i == self.sequencer.cur, s.muted, s.params.mode))
+                    .collect();
+                let cur_seq_dur       = self.sequencer.step_dur;
+                let cur_seq_curve     = self.sequencer.curve;
+                let cur_seq_progress  = (self.sequencer.step_timer / self.sequencer.step_dur).clamp(0.0, 1.0);
                 // Snapshot field_params, lfo, mic, and current audio bands.
-                let mut fp  = tour_fp.unwrap_or_else(|| self.field_params.clone());
+                let mut fp  = seq_fp.or(tour_fp).unwrap_or_else(|| self.field_params.clone());
                 let mut lfo = self.lfo.clone();
                 let mut mic = self.mic_params.clone();
                 let cur_bands = self.audio.as_ref()
@@ -1004,6 +1230,34 @@ impl ApplicationHandler<UserEvent> for App {
                                     if ui.button("NEXT ▶").clicked() { req.next = true; }
                                 });
 
+                                ui.separator();
+
+                                // Sequencer controls (panel section)
+                                ui.label(egui::RichText::new("SEQUENCER")
+                                    .small().color(egui::Color32::from_rgb(180, 140, 255)));
+                                ui.horizontal(|ui| {
+                                    let seq_lbl = if cur_seq_active { "■ STOP" } else { "▶ SEQ" };
+                                    if ui.button(seq_lbl).clicked() { req.seq_toggle = true; }
+                                    if ui.button(cur_seq_curve.label()).clicked() {
+                                        req.seq_curve = Some(cur_seq_curve.next());
+                                    }
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("step").small());
+                                    let mut dur = cur_seq_dur;
+                                    if ui.add(egui::Slider::new(&mut dur, 0.5_f32..=8.0_f32)
+                                        .show_value(true).suffix("s")).changed() {
+                                        req.seq_dur = Some(dur);
+                                    }
+                                });
+                                ui.horizontal(|ui| {
+                                    for (i, (name, _)) in SEQ_PRESETS.iter().enumerate() {
+                                        if ui.small_button(*name).clicked() {
+                                            req.seq_preset = Some(i);
+                                        }
+                                    }
+                                });
+
                                 if ui.button("📷 Screenshot").clicked() {
                                     req.screenshot = true;
                                 }
@@ -1019,9 +1273,109 @@ impl ApplicationHandler<UserEvent> for App {
                             }
                         });
 
+                    // Sequencer grid (bottom bar)
+                    if cur_seq_active || !cur_seq_steps.is_empty() {
+                        egui::Area::new("seq_grid".into())
+                            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -8.0))
+                            .show(ctx, |ui| {
+                                ui.visuals_mut().widgets.inactive.bg_fill =
+                                    egui::Color32::from_rgba_unmultiplied(10, 8, 20, 220);
+                                egui::Frame::none()
+                                    .fill(egui::Color32::from_rgba_unmultiplied(12, 10, 24, 220))
+                                    .rounding(6.0)
+                                    .inner_margin(egui::vec2(8.0, 6.0))
+                                    .show(ui, |ui| {
+                                        let n = cur_seq_steps.len();
+                                        let cell_w = (440.0_f32 / n as f32).min(38.0).max(18.0);
+                                        let cell_h = 40.0_f32;
+
+                                        // Pass 1: allocate rects and collect click responses
+                                        let cells = ui.horizontal(|ui| {
+                                            let mut cells: Vec<(usize, egui::Rect, bool, bool, u32)> = Vec::new();
+                                            for (i, &(is_cur, muted, mode)) in cur_seq_steps.iter().enumerate() {
+                                                let (rect, resp) = ui.allocate_exact_size(
+                                                    egui::vec2(cell_w, cell_h),
+                                                    egui::Sense::click(),
+                                                );
+                                                if resp.clicked() { req.seq_step_mute = Some(i); }
+                                                cells.push((i, rect, is_cur, muted, mode));
+                                                ui.add_space(3.0);
+                                            }
+                                            cells
+                                        }).inner;
+
+                                        // Pass 2: paint all cells (painter obtained after horizontal closure)
+                                        let painter = ui.painter();
+                                        for (_i, rect, is_cur, muted, mode) in &cells {
+                                            let (is_cur, muted) = (*is_cur, *muted);
+                                            let base_col = mode_color(*mode);
+                                            let fill = if muted {
+                                                egui::Color32::from_rgba_unmultiplied(
+                                                    base_col.r() / 4, base_col.g() / 4, base_col.b() / 4, 200)
+                                            } else {
+                                                egui::Color32::from_rgba_unmultiplied(
+                                                    base_col.r(), base_col.g(), base_col.b(), 200)
+                                            };
+                                            painter.rect_filled(*rect, 4.0, fill);
+
+                                            if is_cur && cur_seq_active {
+                                                let prog_rect = egui::Rect::from_min_size(
+                                                    rect.min,
+                                                    egui::vec2(rect.width() * cur_seq_progress, rect.height()),
+                                                );
+                                                painter.rect_filled(prog_rect, 4.0,
+                                                    egui::Color32::from_white_alpha(60));
+                                                painter.rect_stroke(*rect, 4.0,
+                                                    egui::Stroke::new(2.0, egui::Color32::WHITE));
+                                            }
+
+                                            if muted {
+                                                let s = egui::Stroke::new(1.5, egui::Color32::from_gray(90));
+                                                painter.line_segment([rect.min, rect.max], s);
+                                                painter.line_segment(
+                                                    [egui::pos2(rect.max.x, rect.min.y),
+                                                     egui::pos2(rect.min.x, rect.max.y)], s);
+                                            }
+
+                                            let label = MODE_NAMES[*mode as usize].chars().take(3).collect::<String>();
+                                            let txt_col = if muted {
+                                                egui::Color32::from_gray(80)
+                                            } else if is_cur && cur_seq_active {
+                                                egui::Color32::WHITE
+                                            } else {
+                                                egui::Color32::from_gray(220)
+                                            };
+                                            painter.text(
+                                                rect.center(),
+                                                egui::Align2::CENTER_CENTER,
+                                                label,
+                                                egui::FontId::monospace(9.0),
+                                                txt_col,
+                                            );
+                                        }
+
+                                        // Status row
+                                        ui.horizontal(|ui| {
+                                            let status_col = if cur_seq_active {
+                                                egui::Color32::from_rgb(140, 255, 140)
+                                            } else {
+                                                egui::Color32::from_gray(120)
+                                            };
+                                            ui.label(egui::RichText::new(
+                                                if cur_seq_active { "▶ SEQ" } else { "■ SEQ" }
+                                            ).monospace().size(10.0).color(status_col));
+                                            ui.label(egui::RichText::new(
+                                                format!("  {}  {:.1}s", cur_seq_curve.label(), cur_seq_dur)
+                                            ).monospace().size(10.0).color(egui::Color32::from_gray(160)));
+                                        });
+                                    });
+                            });
+                    }
+
                     // OSD
+                    let osd_offset = if cur_seq_active { -78.0 } else { -12.0 };
                     egui::Area::new("osd".into())
-                        .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -12.0))
+                        .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, osd_offset))
                         .show(ctx, |ui| {
                             ui.visuals_mut().override_text_color =
                                 Some(egui::Color32::from_rgba_unmultiplied(210, 210, 255, 210));
@@ -1101,6 +1455,22 @@ impl ApplicationHandler<UserEvent> for App {
                         TourStyle::Random => 0.28,
                     };
                 }
+                if req.seq_toggle {
+                    self.sequencer.active = !cur_seq_active;
+                    if self.sequencer.active { self.render_mode = RenderMode::Field; }
+                }
+                if let Some(i) = req.seq_step_mute {
+                    if i < self.sequencer.steps.len() {
+                        self.sequencer.steps[i].muted = !self.sequencer.steps[i].muted;
+                    }
+                }
+                if let Some(i) = req.seq_preset {
+                    if i < SEQ_PRESETS.len() {
+                        self.sequencer.load_preset(SEQ_PRESETS[i].1);
+                    }
+                }
+                if let Some(c) = req.seq_curve { self.sequencer.curve = c; }
+                if let Some(d) = req.seq_dur { self.sequencer.step_dur = d; }
                 if req.prev {
                     self.tour.active = false;
                     let total = self.all_crystals.len();
