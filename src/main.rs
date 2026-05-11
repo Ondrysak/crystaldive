@@ -421,7 +421,12 @@ impl Sequencer {
     fn remove_step(&mut self, idx: usize) {
         if self.steps.len() <= 1 || idx >= self.steps.len() { return; }
         self.steps.remove(idx);
-        self.cur = self.cur.min(self.steps.len() - 1);
+        // shift cur down if removed step was before it; clamp only if cur was the removed step
+        if self.cur > idx {
+            self.cur -= 1;
+        } else {
+            self.cur = self.cur.min(self.steps.len() - 1);
+        }
         self.selected = match self.selected {
             Some(s) if s == idx => None,
             Some(s) if s > idx  => Some(s - 1),
@@ -1598,7 +1603,14 @@ impl ApplicationHandler<UserEvent> for App {
                     self.sequencer.active = !cur_seq_active;
                     if self.sequencer.active { self.render_mode = RenderMode::Field; }
                 }
-                if req.seq_manual_toggle { self.sequencer.manual = !cur_seq_manual; }
+                if req.seq_manual_toggle {
+                    self.sequencer.manual = !cur_seq_manual;
+                    // Enabling manual mode must activate the sequencer so seq_fp is Some(...)
+                    if self.sequencer.manual {
+                        self.sequencer.active = true;
+                        self.render_mode = RenderMode::Field;
+                    }
+                }
                 if let Some(dir) = req.seq_manual_step { self.sequencer.manual_step(dir); }
                 if let Some(i) = req.seq_select_step {
                     self.sequencer.selected = if self.sequencer.selected == Some(i) { None } else { Some(i) };
@@ -1735,3 +1747,213 @@ pub fn start() {
 
 #[cfg(target_arch = "wasm32")]
 fn main() {}
+
+// ── Sequencer unit tests ──────────────────────────────────────────────────
+#[cfg(test)]
+mod seq_tests {
+    use super::*;
+
+    fn make_seq(n: usize) -> Sequencer {
+        let steps = (0..n).map(|i| SeqStep::new(FieldParams {
+            mode: i as u32 % MODE_NAMES.len() as u32,
+            kscale: 1.0 + i as f32 * 0.1,
+            speed: 0.5,
+            field_mix: i as f32 / n as f32,
+            iso_level: 0.5,
+            color_shift: i as f32 / n as f32,
+            zoom: 1.0,
+            w_lattice: 1.0, w_motif: 0.5, w_band: 0.5,
+        })).collect::<Vec<_>>();
+        let from_params = steps[0].params.clone();
+        Sequencer {
+            active: true, manual: true,
+            cur: 0, step_dur: 2.0, step_timer: 2.0, // fully arrived at step 0
+            curve: TranCurve::Linear,
+            selected: None,
+            steps,
+            from_params,
+        }
+    }
+
+    // manual_step(+1) advances cur and resets timer
+    #[test]
+    fn manual_step_forward_advances_cur() {
+        let mut seq = make_seq(4);
+        assert_eq!(seq.cur, 0);
+        seq.manual_step(1);
+        assert_eq!(seq.cur, 1);
+        assert_eq!(seq.step_timer, 0.0);
+    }
+
+    // manual_step(-1) from cur=0 wraps to last step
+    #[test]
+    fn manual_step_prev_wraps_around() {
+        let mut seq = make_seq(4);
+        seq.manual_step(-1);
+        assert_eq!(seq.cur, 3, "prev from 0 should wrap to last");
+        assert_eq!(seq.step_timer, 0.0);
+    }
+
+    // manual_step(+1) wraps from last to first
+    #[test]
+    fn manual_step_forward_wraps_around() {
+        let mut seq = make_seq(4);
+        seq.cur = 3;
+        seq.manual_step(1);
+        assert_eq!(seq.cur, 0, "next from last should wrap to first");
+    }
+
+    // manual_step skips muted steps going forward
+    #[test]
+    fn manual_step_skips_muted_forward() {
+        let mut seq = make_seq(4);
+        seq.steps[1].muted = true; // step 1 is muted
+        seq.manual_step(1);
+        assert_eq!(seq.cur, 2, "should skip muted step 1, land on 2");
+    }
+
+    // manual_step skips muted steps going backward
+    #[test]
+    fn manual_step_skips_muted_backward() {
+        let mut seq = make_seq(4);
+        seq.cur = 2;
+        seq.steps[1].muted = true;
+        seq.manual_step(-1);
+        assert_eq!(seq.cur, 0, "going back from 2, step 1 muted, should land on 0");
+    }
+
+    // tick in manual mode clamps timer, never auto-advances cur
+    #[test]
+    fn tick_manual_clamps_timer_no_advance() {
+        let mut seq = make_seq(4);
+        seq.step_timer = 0.0;
+        seq.tick(1.0); // half of step_dur=2.0
+        assert_eq!(seq.cur, 0, "manual mode should not auto-advance");
+        assert!((seq.step_timer - 1.0).abs() < 1e-6);
+        seq.tick(5.0); // big dt — should clamp, not overflow
+        assert_eq!(seq.cur, 0);
+        assert!((seq.step_timer - 2.0).abs() < 1e-6, "should clamp at step_dur");
+    }
+
+    // tick in auto mode advances cur when timer expires
+    #[test]
+    fn tick_auto_advances_cur_on_expiry() {
+        let mut seq = make_seq(4);
+        seq.manual = false;
+        seq.step_timer = 0.0;
+        seq.tick(1.9); // just under step_dur
+        assert_eq!(seq.cur, 0, "not yet expired");
+        seq.tick(0.2); // now 2.1, over step_dur=2.0
+        assert_eq!(seq.cur, 1, "should auto-advance to step 1");
+    }
+
+    // tick when not active is a no-op
+    #[test]
+    fn tick_inactive_is_noop() {
+        let mut seq = make_seq(4);
+        seq.active = false;
+        seq.step_timer = 0.0;
+        seq.tick(10.0);
+        assert_eq!(seq.cur, 0);
+        assert_eq!(seq.step_timer, 0.0);
+    }
+
+    // current_params at step_timer=0 returns from_params (t=0)
+    #[test]
+    fn current_params_at_t0_is_from() {
+        let mut seq = make_seq(4);
+        seq.step_timer = 0.0;
+        // from_params is steps[0]; cur is also 0 initially
+        // After manual_step: from=steps[0], cur=1, timer=0 → lerp at t=0 = from
+        seq.manual_step(1);
+        let p = seq.current_params();
+        assert!((p.kscale - seq.from_params.kscale).abs() < 1e-5,
+            "at t=0 current_params should equal from_params");
+    }
+
+    // current_params at step_timer=step_dur returns the destination (t=1)
+    #[test]
+    fn current_params_at_t1_is_destination() {
+        let mut seq = make_seq(4);
+        seq.manual_step(1); // cur=1, from=steps[0], timer=0
+        seq.step_timer = seq.step_dur; // t=1
+        let p = seq.current_params();
+        let target = &seq.steps[seq.cur].params;
+        assert!((p.kscale - target.kscale).abs() < 1e-5,
+            "at t=1 current_params should equal target step params");
+    }
+
+    // add_step_after inserts at correct position and adjusts cur
+    #[test]
+    fn add_step_after_inserts_correctly() {
+        let mut seq = make_seq(3); // steps 0,1,2
+        seq.cur = 2;
+        seq.add_step_after(0, 42.0); // insert copy of step 0 after index 0
+        assert_eq!(seq.steps.len(), 4);
+        // cur was 2, insert at pos 1 → cur should shift to 3
+        assert_eq!(seq.cur, 3, "cur should shift when insert is before it");
+        // new step at index 1 should be a copy of old step 0
+        assert_eq!(seq.steps[1].params.mode, seq.steps[0].params.mode);
+    }
+
+    // remove_step shrinks len, adjusts cur and selected
+    #[test]
+    fn remove_step_adjusts_cur() {
+        let mut seq = make_seq(4); // steps 0,1,2,3
+        seq.cur = 2;
+        seq.selected = Some(3);
+        seq.remove_step(0); // remove step 0
+        assert_eq!(seq.steps.len(), 3);
+        assert_eq!(seq.cur, 1, "cur should shift down by 1");
+        assert_eq!(seq.selected, Some(2), "selected should shift down by 1");
+    }
+
+    #[test]
+    fn remove_selected_step_clears_selection() {
+        let mut seq = make_seq(4);
+        seq.selected = Some(1);
+        seq.remove_step(1);
+        assert_eq!(seq.selected, None, "removing selected step clears selection");
+    }
+
+    // All-muted: advance_next should not infinite-loop
+    #[test]
+    fn advance_next_all_muted_no_infinite_loop() {
+        let mut seq = make_seq(3);
+        for s in seq.steps.iter_mut() { s.muted = true; }
+        seq.advance_next(); // should terminate
+        // cur ends up at (0+1)%3=1 (muted, but no hang)
+        assert!(seq.cur < seq.steps.len());
+    }
+
+    // Cannot remove when only 1 step
+    #[test]
+    fn remove_step_guards_min_one() {
+        let mut seq = make_seq(1);
+        seq.remove_step(0);
+        assert_eq!(seq.steps.len(), 1, "cannot remove last step");
+    }
+
+    // Cannot add beyond 32 steps
+    #[test]
+    fn add_step_guards_max_32() {
+        let mut seq = make_seq(32);
+        seq.add_step_after(0, 1.0);
+        assert_eq!(seq.steps.len(), 32, "cannot exceed 32 steps");
+    }
+
+    // BUG: manual stepping requires active=true for seq_fp to be Some(...)
+    // This test documents the requirement: manual=true alone is not enough
+    #[test]
+    fn manual_step_requires_active_for_rendering() {
+        let mut seq = make_seq(4);
+        seq.active = false; // NOT active
+        seq.manual = true;
+        seq.manual_step(1);
+        // cur advances internally...
+        assert_eq!(seq.cur, 1, "cur changes regardless of active");
+        // ...but the Sequencer's own logic is correct.
+        // The regression: App only uses seq_fp when active=true.
+        // Enabling MANUAL must also set active=true (fixed in App mutations).
+    }
+}
