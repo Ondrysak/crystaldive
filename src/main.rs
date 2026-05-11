@@ -344,11 +344,13 @@ const SEQ_PRESETS: [(&str, fn() -> Vec<SeqStep>); 4] = [
 
 struct Sequencer {
     pub active:     bool,
+    pub manual:     bool,
     pub steps:      Vec<SeqStep>,
     pub cur:        usize,
     pub step_dur:   f32,
     pub step_timer: f32,
     pub curve:      TranCurve,
+    pub selected:   Option<usize>,
     from_params:    FieldParams,
 }
 
@@ -357,9 +359,9 @@ impl Sequencer {
         let steps = seq_preset_phase_space();
         let from_params = steps[0].params.clone();
         Self {
-            active: false, steps, cur: 0,
+            active: false, manual: false, steps, cur: 0,
             step_dur: 3.0, step_timer: 0.0,
-            curve: TranCurve::EaseInOut, from_params,
+            curve: TranCurve::EaseInOut, selected: None, from_params,
         }
     }
 
@@ -371,23 +373,67 @@ impl Sequencer {
     fn tick(&mut self, dt: f32) {
         if !self.active { return; }
         self.step_timer += dt;
+        if self.manual {
+            self.step_timer = self.step_timer.min(self.step_dur); // arrive but don't advance
+            return;
+        }
         if self.step_timer >= self.step_dur {
             self.step_timer -= self.step_dur;
             self.from_params = self.steps[self.cur].params.clone();
-            let n = self.steps.len();
-            let mut next = (self.cur + 1) % n;
-            for _ in 0..n {
-                if !self.steps[next].muted { break; }
-                next = (next + 1) % n;
-            }
-            self.cur = next;
+            self.advance_next();
         }
+    }
+
+    fn advance_next(&mut self) {
+        let n = self.steps.len();
+        let mut next = (self.cur + 1) % n;
+        for _ in 0..n { if !self.steps[next].muted { break; } next = (next + 1) % n; }
+        self.cur = next;
+    }
+
+    fn manual_step(&mut self, dir: i32) {
+        if self.steps.is_empty() { return; }
+        self.from_params = self.current_params();
+        self.step_timer = 0.0;
+        let n = self.steps.len();
+        if dir > 0 {
+            self.advance_next();
+        } else {
+            let mut prev = self.cur.checked_sub(1).unwrap_or(n - 1);
+            for _ in 0..n {
+                if !self.steps[prev].muted { break; }
+                prev = prev.checked_sub(1).unwrap_or(n - 1);
+            }
+            self.cur = prev;
+        }
+    }
+
+    fn add_step_after(&mut self, after: usize, seed: f32) {
+        if self.steps.len() >= 32 { return; }
+        let new_step = self.steps.get(after).cloned()
+            .unwrap_or_else(|| SeqStep::new(randomize_fp(seed)));
+        let pos = (after + 1).min(self.steps.len());
+        self.steps.insert(pos, new_step);
+        if self.cur >= pos { self.cur += 1; }
+        if let Some(sel) = self.selected { if sel >= pos { self.selected = Some(sel + 1); } }
+    }
+
+    fn remove_step(&mut self, idx: usize) {
+        if self.steps.len() <= 1 || idx >= self.steps.len() { return; }
+        self.steps.remove(idx);
+        self.cur = self.cur.min(self.steps.len() - 1);
+        self.selected = match self.selected {
+            Some(s) if s == idx => None,
+            Some(s) if s > idx  => Some(s - 1),
+            s => s,
+        };
     }
 
     fn load_preset(&mut self, make: fn() -> Vec<SeqStep>) {
         self.steps = make();
         self.cur = 0;
         self.step_timer = 0.0;
+        self.selected = None;
         if !self.steps.is_empty() { self.from_params = self.steps[0].params.clone(); }
     }
 }
@@ -412,6 +458,22 @@ fn hue_to_rgb(h: f32) -> (u8, u8, u8) {
         _ => (1.0, 0.0, q  ),
     };
     ((r * 200.0) as u8, (g * 200.0) as u8, (b * 200.0) as u8)
+}
+
+fn randomize_fp(seed: f32) -> FieldParams {
+    let r = |s: f32| tour_rand(seed + s * 13.17);
+    FieldParams {
+        mode:        ((r(1.0) * MODE_NAMES.len() as f32) as u32).min(MODE_NAMES.len() as u32 - 1),
+        kscale:      0.3 + r(2.0) * 3.5,
+        speed:       r(3.0) * 1.6,
+        field_mix:   r(4.0),
+        iso_level:   0.05 + r(5.0) * 0.9,
+        color_shift: r(6.0),
+        zoom:        0.4 + r(7.0) * 1.9,
+        w_lattice:   r(8.0) * 2.0,
+        w_motif:     r(9.0) * 2.0,
+        w_band:      r(10.0) * 2.0,
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Default)]
@@ -625,11 +687,17 @@ struct UiReq {
     kpath_toggle: bool,
     panel_toggle: bool,
     render_mode:  Option<RenderMode>,
-    seq_toggle:   bool,
-    seq_step_mute: Option<usize>,
-    seq_preset:   Option<usize>,
-    seq_curve:    Option<TranCurve>,
-    seq_dur:      Option<f32>,
+    seq_toggle:        bool,
+    seq_manual_toggle: bool,
+    seq_manual_step:   Option<i32>,   // +1 / -1
+    seq_select_step:   Option<usize>, // select for editor (toggle)
+    seq_mute_step:     Option<usize>, // toggle mute
+    seq_randomize:     Option<usize>,
+    seq_add_step:      bool,
+    seq_remove_step:   bool,
+    seq_preset:        Option<usize>,
+    seq_curve:         Option<TranCurve>,
+    seq_dur:           Option<f32>,
 }
 
 struct App {
@@ -974,12 +1042,17 @@ impl ApplicationHandler<UserEvent> for App {
                     .unwrap_or_default();
                 // Snapshot sequencer state for UI
                 let cur_seq_active    = self.sequencer.active;
-                let cur_seq_steps: Vec<(bool, bool, u32)> = self.sequencer.steps.iter().enumerate()
-                    .map(|(i, s)| (i == self.sequencer.cur, s.muted, s.params.mode))
+                let cur_seq_manual    = self.sequencer.manual;
+                let cur_seq_selected  = self.sequencer.selected;
+                let cur_seq_steps: Vec<(bool, bool, bool, u32)> = self.sequencer.steps.iter().enumerate()
+                    .map(|(i, s)| (i == self.sequencer.cur, s.muted, Some(i) == self.sequencer.selected, s.params.mode))
                     .collect();
                 let cur_seq_dur       = self.sequencer.step_dur;
                 let cur_seq_curve     = self.sequencer.curve;
                 let cur_seq_progress  = (self.sequencer.step_timer / self.sequencer.step_dur).clamp(0.0, 1.0);
+                // Editor: mutable local that closure can modify; written back in mutations
+                let mut seq_selected_edit: Option<(usize, FieldParams)> = self.sequencer.selected
+                    .and_then(|i| self.sequencer.steps.get(i).map(|s| (i, s.params.clone())));
                 // Snapshot field_params, lfo, mic, and current audio bands.
                 let mut fp  = seq_fp.or(tour_fp).unwrap_or_else(|| self.field_params.clone());
                 let mut lfo = self.lfo.clone();
@@ -1238,11 +1311,21 @@ impl ApplicationHandler<UserEvent> for App {
                                 ui.horizontal(|ui| {
                                     let seq_lbl = if cur_seq_active { "■ STOP" } else { "▶ SEQ" };
                                     if ui.button(seq_lbl).clicked() { req.seq_toggle = true; }
-                                    if ui.button(cur_seq_curve.label()).clicked() {
-                                        req.seq_curve = Some(cur_seq_curve.next());
+                                    let man_col = if cur_seq_manual {
+                                        egui::Color32::from_rgb(255, 200, 60)
+                                    } else { egui::Color32::from_gray(150) };
+                                    if ui.add(egui::Button::new(
+                                        egui::RichText::new("MANUAL").color(man_col)
+                                    )).clicked() { req.seq_manual_toggle = true; }
+                                    if cur_seq_manual {
+                                        if ui.button("◀").clicked() { req.seq_manual_step = Some(-1); }
+                                        if ui.button("▶").clicked() { req.seq_manual_step = Some(1); }
                                     }
                                 });
                                 ui.horizontal(|ui| {
+                                    if ui.button(cur_seq_curve.label()).clicked() {
+                                        req.seq_curve = Some(cur_seq_curve.next());
+                                    }
                                     ui.label(egui::RichText::new("step").small());
                                     let mut dur = cur_seq_dur;
                                     if ui.add(egui::Slider::new(&mut dur, 0.5_f32..=8.0_f32)
@@ -1252,9 +1335,20 @@ impl ApplicationHandler<UserEvent> for App {
                                 });
                                 ui.horizontal(|ui| {
                                     for (i, (name, _)) in SEQ_PRESETS.iter().enumerate() {
-                                        if ui.small_button(*name).clicked() {
-                                            req.seq_preset = Some(i);
-                                        }
+                                        if ui.small_button(*name).clicked() { req.seq_preset = Some(i); }
+                                    }
+                                });
+                                ui.horizontal(|ui| {
+                                    let n = cur_seq_steps.len();
+                                    ui.label(egui::RichText::new(format!("{n}/32 steps")).small()
+                                        .color(egui::Color32::from_gray(160)));
+                                    let can_add = n < 32;
+                                    let can_del = n > 1 && cur_seq_selected.is_some();
+                                    if ui.add_enabled(can_add, egui::Button::new("+")).clicked() {
+                                        req.seq_add_step = true;
+                                    }
+                                    if ui.add_enabled(can_del, egui::Button::new("−")).clicked() {
+                                        req.seq_remove_step = true;
                                     }
                                 });
 
@@ -1289,34 +1383,33 @@ impl ApplicationHandler<UserEvent> for App {
                                         let cell_w = (440.0_f32 / n as f32).min(38.0).max(18.0);
                                         let cell_h = 40.0_f32;
 
-                                        // Pass 1: allocate rects and collect click responses
+                                        // Pass 1: allocate rects, collect interaction
                                         let cells = ui.horizontal(|ui| {
-                                            let mut cells: Vec<(usize, egui::Rect, bool, bool, u32)> = Vec::new();
-                                            for (i, &(is_cur, muted, mode)) in cur_seq_steps.iter().enumerate() {
+                                            let mut cells: Vec<(usize, egui::Rect, bool, bool, bool, u32)> = Vec::new();
+                                            for (i, &(is_cur, muted, is_sel, mode)) in cur_seq_steps.iter().enumerate() {
                                                 let (rect, resp) = ui.allocate_exact_size(
                                                     egui::vec2(cell_w, cell_h),
                                                     egui::Sense::click(),
                                                 );
-                                                if resp.clicked() { req.seq_step_mute = Some(i); }
-                                                cells.push((i, rect, is_cur, muted, mode));
+                                                if resp.double_clicked() {
+                                                    req.seq_randomize = Some(i);
+                                                } else if resp.clicked() {
+                                                    req.seq_select_step = Some(i);
+                                                }
+                                                cells.push((i, rect, is_cur, muted, is_sel, mode));
                                                 ui.add_space(3.0);
                                             }
                                             cells
                                         }).inner;
 
-                                        // Pass 2: paint all cells (painter obtained after horizontal closure)
+                                        // Pass 2: paint
                                         let painter = ui.painter();
-                                        for (_i, rect, is_cur, muted, mode) in &cells {
-                                            let (is_cur, muted) = (*is_cur, *muted);
-                                            let base_col = mode_color(*mode);
-                                            let fill = if muted {
-                                                egui::Color32::from_rgba_unmultiplied(
-                                                    base_col.r() / 4, base_col.g() / 4, base_col.b() / 4, 200)
-                                            } else {
-                                                egui::Color32::from_rgba_unmultiplied(
-                                                    base_col.r(), base_col.g(), base_col.b(), 200)
-                                            };
-                                            painter.rect_filled(*rect, 4.0, fill);
+                                        for &(_i, rect, is_cur, muted, is_sel, mode) in &cells {
+                                            let base_col = mode_color(mode);
+                                            let dim = if muted { 4 } else { 1 };
+                                            let fill = egui::Color32::from_rgba_unmultiplied(
+                                                base_col.r() / dim, base_col.g() / dim, base_col.b() / dim, 210);
+                                            painter.rect_filled(rect, 4.0, fill);
 
                                             if is_cur && cur_seq_active {
                                                 let prog_rect = egui::Rect::from_min_size(
@@ -1324,34 +1417,31 @@ impl ApplicationHandler<UserEvent> for App {
                                                     egui::vec2(rect.width() * cur_seq_progress, rect.height()),
                                                 );
                                                 painter.rect_filled(prog_rect, 4.0,
-                                                    egui::Color32::from_white_alpha(60));
-                                                painter.rect_stroke(*rect, 4.0,
+                                                    egui::Color32::from_white_alpha(50));
+                                                painter.rect_stroke(rect, 4.0,
                                                     egui::Stroke::new(2.0, egui::Color32::WHITE));
                                             }
 
+                                            if is_sel {
+                                                painter.rect_stroke(rect, 4.0,
+                                                    egui::Stroke::new(1.5,
+                                                        egui::Color32::from_rgb(255, 210, 60)));
+                                            }
+
                                             if muted {
-                                                let s = egui::Stroke::new(1.5, egui::Color32::from_gray(90));
+                                                let s = egui::Stroke::new(1.5, egui::Color32::from_gray(80));
                                                 painter.line_segment([rect.min, rect.max], s);
                                                 painter.line_segment(
                                                     [egui::pos2(rect.max.x, rect.min.y),
                                                      egui::pos2(rect.min.x, rect.max.y)], s);
                                             }
 
-                                            let label = MODE_NAMES[*mode as usize].chars().take(3).collect::<String>();
-                                            let txt_col = if muted {
-                                                egui::Color32::from_gray(80)
-                                            } else if is_cur && cur_seq_active {
-                                                egui::Color32::WHITE
-                                            } else {
-                                                egui::Color32::from_gray(220)
-                                            };
-                                            painter.text(
-                                                rect.center(),
-                                                egui::Align2::CENTER_CENTER,
-                                                label,
-                                                egui::FontId::monospace(9.0),
-                                                txt_col,
-                                            );
+                                            let label = MODE_NAMES[mode as usize].chars().take(3).collect::<String>();
+                                            let txt_col = if muted { egui::Color32::from_gray(70) }
+                                                else if is_cur && cur_seq_active { egui::Color32::WHITE }
+                                                else { egui::Color32::from_gray(220) };
+                                            painter.text(rect.center(), egui::Align2::CENTER_CENTER,
+                                                label, egui::FontId::monospace(9.0), txt_col);
                                         }
 
                                         // Status row
@@ -1369,6 +1459,55 @@ impl ApplicationHandler<UserEvent> for App {
                                             ).monospace().size(10.0).color(egui::Color32::from_gray(160)));
                                         });
                                     });
+                            });
+                    }
+
+                    // Step editor window
+                    if let Some((edit_idx, ref mut ep)) = seq_selected_edit {
+                        egui::Window::new(format!("STEP {}  —  {}", edit_idx + 1, MODE_NAMES[ep.mode as usize]))
+                            .collapsible(false)
+                            .resizable(false)
+                            .default_width(220.0)
+                            .show(ctx, |ui| {
+                                // Mode selector
+                                egui::ComboBox::from_label("mode")
+                                    .selected_text(MODE_NAMES[ep.mode as usize])
+                                    .show_ui(ui, |ui| {
+                                        for (i, name) in MODE_NAMES.iter().enumerate() {
+                                            ui.selectable_value(&mut ep.mode, i as u32, *name);
+                                        }
+                                    });
+                                ui.separator();
+                                // Param sliders
+                                macro_rules! esl {
+                                    ($ui:expr, $label:expr, $val:expr, $min:expr, $max:expr) => {
+                                        $ui.horizontal(|ui| {
+                                            ui.label(egui::RichText::new($label).small().monospace());
+                                            ui.add(egui::Slider::new($val, $min..=$max).show_value(true));
+                                        });
+                                    }
+                                }
+                                esl!(ui, "kscale   ", &mut ep.kscale,      0.1_f32, 5.0_f32);
+                                esl!(ui, "speed    ", &mut ep.speed,       0.0_f32, 2.0_f32);
+                                esl!(ui, "field_mix", &mut ep.field_mix,   0.0_f32, 1.0_f32);
+                                esl!(ui, "iso_level", &mut ep.iso_level,   0.0_f32, 1.0_f32);
+                                esl!(ui, "color_sft", &mut ep.color_shift, 0.0_f32, 1.0_f32);
+                                esl!(ui, "zoom     ", &mut ep.zoom,        0.2_f32, 5.0_f32);
+                                esl!(ui, "w_lattice", &mut ep.w_lattice,   0.0_f32, 2.0_f32);
+                                esl!(ui, "w_motif  ", &mut ep.w_motif,     0.0_f32, 2.0_f32);
+                                esl!(ui, "w_band   ", &mut ep.w_band,      0.0_f32, 2.0_f32);
+                                ui.separator();
+                                ui.horizontal(|ui| {
+                                    let is_muted = cur_seq_steps.get(edit_idx)
+                                        .map(|&(_, m, _, _)| m).unwrap_or(false);
+                                    let mute_col = if is_muted {
+                                        egui::Color32::from_rgb(255, 80, 80)
+                                    } else { egui::Color32::from_gray(160) };
+                                    if ui.add(egui::Button::new(
+                                        egui::RichText::new(if is_muted { "MUTED" } else { "MUTE" }).color(mute_col)
+                                    )).clicked() { req.seq_mute_step = Some(edit_idx); }
+                                    if ui.button("RAND").clicked() { req.seq_randomize = Some(edit_idx); }
+                                });
                             });
                     }
 
@@ -1459,15 +1598,44 @@ impl ApplicationHandler<UserEvent> for App {
                     self.sequencer.active = !cur_seq_active;
                     if self.sequencer.active { self.render_mode = RenderMode::Field; }
                 }
-                if let Some(i) = req.seq_step_mute {
+                if req.seq_manual_toggle { self.sequencer.manual = !cur_seq_manual; }
+                if let Some(dir) = req.seq_manual_step { self.sequencer.manual_step(dir); }
+                if let Some(i) = req.seq_select_step {
+                    self.sequencer.selected = if self.sequencer.selected == Some(i) { None } else { Some(i) };
+                }
+                if let Some(i) = req.seq_mute_step {
                     if i < self.sequencer.steps.len() {
                         self.sequencer.steps[i].muted = !self.sequencer.steps[i].muted;
                     }
                 }
-                if let Some(i) = req.seq_preset {
-                    if i < SEQ_PRESETS.len() {
-                        self.sequencer.load_preset(SEQ_PRESETS[i].1);
+                // Randomize: update step AND editor local so write-back doesn't overwrite it
+                if let Some(i) = req.seq_randomize {
+                    let rp = randomize_fp(t + i as f32 * 17.7);
+                    if i < self.sequencer.steps.len() {
+                        self.sequencer.steps[i].params = rp.clone();
                     }
+                    if seq_selected_edit.as_ref().map_or(false, |&(ei, _)| ei == i) {
+                        seq_selected_edit = Some((i, rp));
+                    }
+                }
+                // Write editor params back (randomize already updated if applicable)
+                if let Some((i, ref params)) = seq_selected_edit {
+                    if i < self.sequencer.steps.len() {
+                        self.sequencer.steps[i].params = params.clone();
+                    }
+                }
+                if req.seq_add_step {
+                    let after = self.sequencer.selected.unwrap_or(self.sequencer.cur);
+                    self.sequencer.add_step_after(after, t);
+                    self.sequencer.selected = Some((after + 1).min(self.sequencer.steps.len() - 1));
+                }
+                if req.seq_remove_step {
+                    if let Some(sel) = self.sequencer.selected {
+                        self.sequencer.remove_step(sel);
+                    }
+                }
+                if let Some(i) = req.seq_preset {
+                    if i < SEQ_PRESETS.len() { self.sequencer.load_preset(SEQ_PRESETS[i].1); }
                 }
                 if let Some(c) = req.seq_curve { self.sequencer.curve = c; }
                 if let Some(d) = req.seq_dur { self.sequencer.step_dur = d; }
