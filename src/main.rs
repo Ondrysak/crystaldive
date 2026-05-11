@@ -61,6 +61,62 @@ const MODE_NAMES: [&str; 36] = [
 
 // ── LFO ───────────────────────────────────────────────────────────────────
 
+#[derive(Clone, Copy, PartialEq, Default)]
+pub enum LfoWave {
+    #[default]
+    Sine,
+    Triangle,
+    Saw,
+    Square,
+    Pulse,
+    Steps,
+}
+
+impl LfoWave {
+    fn next(self) -> Self {
+        match self {
+            Self::Sine => Self::Triangle,
+            Self::Triangle => Self::Saw,
+            Self::Saw => Self::Square,
+            Self::Square => Self::Pulse,
+            Self::Pulse => Self::Steps,
+            Self::Steps => Self::Sine,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Sine => "sine",
+            Self::Triangle => "triangle",
+            Self::Saw => "saw",
+            Self::Square => "square",
+            Self::Pulse => "pulse",
+            Self::Steps => "steps",
+        }
+    }
+
+    fn sample(self, phase: f32) -> f32 {
+        let x = phase.fract();
+        match self {
+            Self::Sine => (TAU * x).sin(),
+            Self::Triangle => 1.0 - 4.0 * (x - 0.5).abs(),
+            Self::Saw => x * 2.0 - 1.0,
+            Self::Square => if x < 0.5 { 1.0 } else { -1.0 },
+            Self::Pulse => if x < 0.18 { 1.0 } else { -0.35 },
+            Self::Steps => {
+                let n = (x * 8.0).floor();
+                bz_hash(n + phase.floor() * 17.0) * 2.0 - 1.0
+            }
+        }
+    }
+}
+
+fn bz_hash(n: f32) -> f32 {
+    (n * 127.1 + 19.19).sin().fract().abs()
+}
+
+const TAU: f32 = std::f32::consts::PI * 2.0;
+
 #[derive(Clone)]
 pub struct LfoParams {
     pub kscale:      bool,
@@ -74,6 +130,7 @@ pub struct LfoParams {
     pub w_band:      bool,
     pub rate:        f32,
     pub depth:       f32,
+    pub wave:        LfoWave,
 }
 
 impl Default for LfoParams {
@@ -81,7 +138,7 @@ impl Default for LfoParams {
         Self {
             kscale: false, speed: false, field_mix: false, iso_level: false,
             color_shift: false, zoom: false, w_lattice: false, w_motif: false,
-            w_band: false, rate: 0.2, depth: 0.3,
+            w_band: false, rate: 0.2, depth: 0.3, wave: LfoWave::Sine,
         }
     }
 }
@@ -152,6 +209,108 @@ impl Default for MicParams {
 
 // ── Combined LFO + Mic modulation ─────────────────────────────────────────
 
+const TOUR_MODES: [u32; 14] = [22, 32, 28, 20, 30, 15, 24, 34, 4, 29, 21, 25, 18, 35];
+
+#[derive(Clone, Copy, PartialEq, Default)]
+enum TourStyle {
+    #[default]
+    Curated,
+    Random,
+}
+
+impl TourStyle {
+    fn next(self) -> Self {
+        match self {
+            Self::Curated => Self::Random,
+            Self::Random => Self::Curated,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Curated => "CURATED",
+            Self::Random => "RANDOM",
+        }
+    }
+}
+
+fn tour_lfo_preset() -> LfoParams {
+    LfoParams {
+        kscale: true,
+        speed: true,
+        field_mix: true,
+        iso_level: true,
+        color_shift: true,
+        zoom: true,
+        w_lattice: true,
+        w_motif: true,
+        w_band: true,
+        rate: 0.18,
+        depth: 0.18,
+        wave: LfoWave::Triangle,
+    }
+}
+
+fn tour_rand(seed: f32) -> f32 {
+    bz_hash(seed * 71.17 + 4.91)
+}
+
+fn tour_random_field_params(t: f32, crystal_idx: usize) -> FieldParams {
+    let scene_f = (t / 4.6).floor();
+    let local = (t / 4.6).fract();
+    let seed = scene_f + crystal_idx as f32 * 37.0;
+    let ease = local * local * (3.0 - 2.0 * local);
+    let burst = if local < 0.22 { (1.0 - local / 0.22).powf(2.0) } else { 0.0 };
+
+    let mode_a = (tour_rand(seed + 1.0) * MODE_NAMES.len() as f32).floor() as u32;
+    let mode_b = (tour_rand(seed + 2.0) * MODE_NAMES.len() as f32).floor() as u32;
+    let mode = if local < 0.72 { mode_a } else { mode_b };
+
+    let morph = |slot: f32, min: f32, max: f32| -> f32 {
+        let a = tour_rand(seed + slot);
+        let b = tour_rand(seed + slot + 19.0);
+        min + (max - min) * (a + (b - a) * ease)
+    };
+
+    FieldParams {
+        mode: mode.min((MODE_NAMES.len() - 1) as u32),
+        kscale: (morph(3.0, 0.25, 3.8) + burst * 0.55).clamp(0.1, 5.0),
+        speed: (morph(4.0, 0.05, 1.75) + burst * 0.25).clamp(0.0, 2.0),
+        field_mix: morph(5.0, 0.0, 1.0).clamp(0.0, 1.0),
+        iso_level: morph(6.0, 0.05, 0.96).clamp(0.0, 1.0),
+        color_shift: (morph(7.0, 0.0, 1.0) + t * 0.025).rem_euclid(1.0),
+        zoom: (morph(8.0, 0.35, 2.15) + burst * 0.25).clamp(0.2, 5.0),
+        w_lattice: morph(9.0, 0.0, 2.0).clamp(0.0, 2.0),
+        w_motif: morph(10.0, 0.0, 2.0).clamp(0.0, 2.0),
+        w_band: morph(11.0, 0.0, 2.0).clamp(0.0, 2.0),
+    }
+}
+
+fn tour_field_params(t: f32, crystal_idx: usize, style: TourStyle) -> FieldParams {
+    if style == TourStyle::Random {
+        return tour_random_field_params(t, crystal_idx);
+    }
+
+    let scene = (t / 5.8).floor() as usize;
+    let local = (t / 5.8).fract();
+    let drift = t * 0.17 + crystal_idx as f32 * 0.31;
+    let punch = (TAU * local).sin().max(0.0).powf(1.8);
+    let snap = if local < 0.16 { (1.0 - local / 0.16).powf(2.0) } else { 0.0 };
+
+    FieldParams {
+        mode: TOUR_MODES[(scene + crystal_idx) % TOUR_MODES.len()],
+        kscale: (1.05 + 0.72 * (TAU * drift).sin().abs() + 0.45 * snap).clamp(0.1, 5.0),
+        speed: (0.22 + 0.82 * punch + 0.18 * (TAU * (drift * 0.37)).sin().abs()).clamp(0.0, 2.0),
+        field_mix: (0.50 + 0.38 * (TAU * (local + drift * 0.11)).sin()).clamp(0.0, 1.0),
+        iso_level: (0.42 + 0.36 * (TAU * (local * 0.5 + drift * 0.19)).cos()).clamp(0.0, 1.0),
+        color_shift: (drift * 0.22 + 0.08 * (TAU * local).sin()).rem_euclid(1.0),
+        zoom: (0.78 + 0.36 * (TAU * (local * 0.75)).sin().abs() + 0.22 * snap).clamp(0.2, 5.0),
+        w_lattice: (0.75 + 0.65 * (TAU * (local + 0.10)).sin().abs()).clamp(0.0, 2.0),
+        w_motif: (0.38 + 0.92 * (TAU * (local * 0.7 + 0.35)).sin().abs()).clamp(0.0, 2.0),
+        w_band: (0.48 + 1.05 * (TAU * (local * 1.2 + drift * 0.07)).cos().abs()).clamp(0.0, 2.0),
+    }
+}
+
 /// Returns a FieldParams with LFO and mic deltas applied additively from the base.
 fn apply_modulation(
     fp:    &FieldParams,
@@ -160,7 +319,7 @@ fn apply_modulation(
     bands: &audio::AudioBands,
     t:     f32,
 ) -> FieldParams {
-    let lfo_s = (2.0 * std::f32::consts::PI * lfo.rate * t).sin();
+    let lfo_s = lfo.wave.sample(lfo.rate * t);
     macro_rules! modulate {
         ($val:expr, $lfo_en:expr, $mic_src:expr, $min:expr, $max:expr) => {{
             let range   = ($max as f32) - ($min as f32);
@@ -259,6 +418,7 @@ struct UiReq {
     next:         bool,
     screenshot:   bool,
     tour_toggle:  bool,
+    tour_style_toggle: bool,
     kpath_toggle: bool,
     panel_toggle: bool,
     render_mode:  Option<RenderMode>,
@@ -285,6 +445,7 @@ struct App {
     kpt_idx:      usize,
 
     tour:         Tour,
+    tour_style:   TourStyle,
     all_crystals: Vec<&'static CrystalDef>,
 
     panel_open:   bool,
@@ -313,6 +474,7 @@ impl App {
             mouse_norm: [0.5, 0.5], mouse_btn_down: false,
             kpath_active: false, kpt_idx: 0,
             tour: Tour::new(),
+            tour_style: TourStyle::default(),
             all_crystals: all,
             panel_open: true,
             search_str: String::new(),
@@ -462,6 +624,7 @@ impl ApplicationHandler<UserEvent> for App {
                         if self.tour.active {
                             self.render_mode = RenderMode::Field;
                             self.kpath_active = true;
+                            self.lfo = tour_lfo_preset();
                             if let Some(kp) = &mut gpu.kpath { kp.reset(); }
                         }
                     }
@@ -575,17 +738,24 @@ impl ApplicationHandler<UserEvent> for App {
                 // (We copy/clone so the closure doesn't hold borrows into self.)
                 let cur_render_mode   = self.render_mode;
                 let cur_tour_active   = self.tour.active;
+                let cur_tour_style    = self.tour_style;
                 let cur_kpath_active  = self.kpath_active;
                 let cur_panel_open    = self.panel_open;
                 let cur_crystal_idx   = self.tour.crystal_idx;
-                let cur_mode_name     = MODE_NAMES[self.field_params.mode as usize];
+                let tour_fp = if self.tour.active {
+                    Some(tour_field_params(t, self.tour.crystal_idx, self.tour_style))
+                } else {
+                    None
+                };
+                let cur_mode_idx      = tour_fp.as_ref().map(|fp| fp.mode).unwrap_or(self.field_params.mode) as usize;
+                let cur_mode_name     = MODE_NAMES[cur_mode_idx];
                 let cur_crystal_name  = self.all_crystals[cur_crystal_idx].name;
                 let cur_sys_name      = self.all_crystals[cur_crystal_idx].system.name();
                 let cur_kpt_label: String = gpu.kpath.as_ref()
                     .map(|kp| kp.label_at(self.kpt_idx % kp.n_points()).to_owned())
                     .unwrap_or_default();
                 // Snapshot field_params, lfo, mic, and current audio bands.
-                let mut fp  = self.field_params.clone();
+                let mut fp  = tour_fp.unwrap_or_else(|| self.field_params.clone());
                 let mut lfo = self.lfo.clone();
                 let mut mic = self.mic_params.clone();
                 let cur_bands = self.audio.as_ref()
@@ -746,8 +916,14 @@ impl ApplicationHandler<UserEvent> for App {
                                 ui.separator();
 
                                 // LFO section
-                                ui.label(egui::RichText::new("LFO  (sin)")
+                                ui.label(egui::RichText::new(format!("LFO  ({})", lfo.wave.label()))
                                     .small().color(egui::Color32::from_rgb(80, 220, 120)));
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("wave ").small());
+                                    if ui.button(lfo.wave.label()).clicked() {
+                                        lfo.wave = lfo.wave.next();
+                                    }
+                                });
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("rate ").small());
                                     ui.add(egui::Slider::new(&mut lfo.rate, 0.01..=4.0)
@@ -824,6 +1000,7 @@ impl ApplicationHandler<UserEvent> for App {
                                     if ui.button("◀ PREV").clicked() { req.prev = true; }
                                     let tour_lbl = if cur_tour_active { "■ STOP" } else { "▶ TOUR" };
                                     if ui.button(tour_lbl).clicked() { req.tour_toggle = true; }
+                                    if ui.button(cur_tour_style.label()).clicked() { req.tour_style_toggle = true; }
                                     if ui.button("NEXT ▶").clicked() { req.next = true; }
                                 });
 
@@ -907,10 +1084,22 @@ impl ApplicationHandler<UserEvent> for App {
                     if self.tour.active {
                         self.render_mode = RenderMode::Field;
                         self.kpath_active = true;
+                        self.lfo = tour_lfo_preset();
                         if let Some(gpu2) = &mut self.gpu {
                             if let Some(kp) = &mut gpu2.kpath { kp.reset(); }
                         }
                     }
+                }
+                if req.tour_style_toggle {
+                    self.tour_style = self.tour_style.next();
+                    self.lfo.wave = match self.tour_style {
+                        TourStyle::Curated => LfoWave::Triangle,
+                        TourStyle::Random => LfoWave::Steps,
+                    };
+                    self.lfo.depth = match self.tour_style {
+                        TourStyle::Curated => 0.18,
+                        TourStyle::Random => 0.28,
+                    };
                 }
                 if req.prev {
                     self.tour.active = false;
