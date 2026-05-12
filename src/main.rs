@@ -81,7 +81,7 @@ const MODE_NAMES: [&str; 36] = [
 
 // ── LFO ───────────────────────────────────────────────────────────────────
 
-#[derive(Clone, Copy, PartialEq, Default)]
+#[derive(Clone, Copy, PartialEq, Default, Debug)]
 pub enum LfoWave {
     #[default]
     Sine,
@@ -306,12 +306,49 @@ impl TranCurve {
 
 #[derive(Clone)]
 struct SeqStep {
-    params: FieldParams,
-    muted:  bool,
+    params:         FieldParams,
+    muted:          bool,
+    /// Per-step duration multiplier in [0.25, 4.0]. 1.0 = global step_dur.
+    dur_mul:        f32,
+    /// Per-step transition curve override (None = use Sequencer.curve).
+    curve_override: Option<TranCurve>,
+    /// Probability the step plays when advance lands on it (0..1, 1.0 = always).
+    prob:           f32,
 }
 
 impl SeqStep {
-    fn new(p: FieldParams) -> Self { Self { params: p, muted: false } }
+    fn new(p: FieldParams) -> Self {
+        Self { params: p, muted: false, dur_mul: 1.0, curve_override: None, prob: 1.0 }
+    }
+}
+
+/// Step traversal order for the sequencer.
+#[derive(Clone, Copy, PartialEq, Default)]
+enum SeqPlayMode {
+    #[default]
+    Forward,
+    Reverse,
+    PingPong,
+    Random,
+}
+
+impl SeqPlayMode {
+    fn next(self) -> Self {
+        match self {
+            Self::Forward  => Self::Reverse,
+            Self::Reverse  => Self::PingPong,
+            Self::PingPong => Self::Random,
+            Self::Random   => Self::Forward,
+        }
+    }
+    fn label(self) -> &'static str {
+        match self {
+            Self::Forward  => "FWD",
+            Self::Reverse  => "REV",
+            Self::PingPong => "PP",
+            Self::Random   => "RND",
+        }
+    }
 }
 
 fn lerp_fp(a: &FieldParams, b: &FieldParams, t: f32) -> FieldParams {
@@ -424,6 +461,9 @@ struct Sequencer {
     pub step_timer: f32,
     pub curve:      TranCurve,
     pub selected:   Option<usize>,
+    pub play_mode:  SeqPlayMode,
+    pub pp_dir:     i8,       // direction for PingPong: +1 or -1 (0 = not started)
+    pub rng_seed:   u32,      // LCG state for Random mode and prob gates
     from_params:    FieldParams,
 }
 
@@ -434,34 +474,97 @@ impl Sequencer {
         Self {
             active: false, manual: false, steps, cur: 0,
             step_dur: 3.0, step_timer: 0.0,
-            curve: TranCurve::EaseInOut, selected: None, from_params,
+            curve: TranCurve::EaseInOut, selected: None,
+            play_mode: SeqPlayMode::Forward,
+            pp_dir: 1, rng_seed: 0x9E3779B9,
+            from_params,
         }
     }
 
+    /// Duration for the *current* step (respects per-step dur_mul).
+    fn effective_step_dur(&self) -> f32 {
+        let mul = self.steps.get(self.cur).map(|s| s.dur_mul).unwrap_or(1.0);
+        (self.step_dur * mul).max(0.05)
+    }
+
+    /// Transition curve for the current step (per-step override else global).
+    fn effective_curve(&self) -> TranCurve {
+        self.steps.get(self.cur)
+            .and_then(|s| s.curve_override)
+            .unwrap_or(self.curve)
+    }
+
     fn current_params(&self) -> FieldParams {
-        let t = self.curve.apply((self.step_timer / self.step_dur).clamp(0.0, 1.0));
+        let dur = self.effective_step_dur();
+        let t = self.effective_curve().apply((self.step_timer / dur).clamp(0.0, 1.0));
         lerp_fp(&self.from_params, &self.steps[self.cur].params, t)
     }
 
     fn tick(&mut self, dt: f32) {
         if !self.active { return; }
         self.step_timer += dt;
+        let dur = self.effective_step_dur();
         if self.manual {
-            self.step_timer = self.step_timer.min(self.step_dur); // arrive but don't advance
+            self.step_timer = self.step_timer.min(dur); // arrive but don't advance
             return;
         }
-        if self.step_timer >= self.step_dur {
-            self.step_timer -= self.step_dur;
+        if self.step_timer >= dur {
+            self.step_timer -= dur;
             self.from_params = self.steps[self.cur].params.clone();
             self.advance_next();
         }
     }
 
+    /// Knuth LCG; deterministic. Used for Random play mode and probability gates.
+    fn rng_next(&mut self) -> u32 {
+        self.rng_seed = self.rng_seed.wrapping_mul(1664525).wrapping_add(1013904223);
+        self.rng_seed
+    }
+    fn rng_unit(&mut self) -> f32 {
+        let v = self.rng_next();
+        ((v >> 8) & 0x00FF_FFFF) as f32 / 16_777_216.0  // 24-bit fraction
+    }
+
+    /// Compute the next raw index using the play mode (no muted/prob filtering).
+    fn raw_next_index(&mut self) -> usize {
+        let n = self.steps.len();
+        if n <= 1 { return 0; }
+        match self.play_mode {
+            SeqPlayMode::Forward => (self.cur + 1) % n,
+            SeqPlayMode::Reverse => self.cur.checked_sub(1).unwrap_or(n - 1),
+            SeqPlayMode::PingPong => {
+                if self.pp_dir == 0 { self.pp_dir = 1; }
+                let cur = self.cur as i32;
+                let mut nx = cur + self.pp_dir as i32;
+                if nx < 0 || nx >= n as i32 {
+                    self.pp_dir = -self.pp_dir;
+                    nx = cur + self.pp_dir as i32;
+                    if nx < 0 || nx >= n as i32 { nx = cur; }
+                }
+                nx as usize
+            }
+            SeqPlayMode::Random => {
+                let mut nx = (self.rng_next() as usize) % n;
+                if nx == self.cur { nx = (nx + 1) % n; }
+                nx
+            }
+        }
+    }
+
     fn advance_next(&mut self) {
         let n = self.steps.len();
-        let mut next = (self.cur + 1) % n;
-        for _ in 0..n { if !self.steps[next].muted { break; } next = (next + 1) % n; }
-        self.cur = next;
+        if n == 0 { return; }
+        // Try up to 2n candidates: skip muted and probability-failed steps.
+        for _ in 0..(2 * n) {
+            let cand = self.raw_next_index();
+            self.cur = cand;
+            if self.steps[cand].muted { continue; }
+            if self.steps[cand].prob < 0.999 {
+                if self.rng_unit() > self.steps[cand].prob { continue; }
+            }
+            return;
+        }
+        // All blocked (every step muted or prob=0): leave self.cur where it last landed.
     }
 
     fn manual_step(&mut self, dir: i32) {
@@ -513,6 +616,14 @@ impl Sequencer {
         self.step_timer = 0.0;
         self.selected = None;
         if !self.steps.is_empty() { self.from_params = self.steps[0].params.clone(); }
+    }
+
+    /// Append a captured FieldParams as a fresh step at the end. Returns the new
+    /// step's index, or None if the 32-step cap was hit.
+    fn capture(&mut self, params: FieldParams) -> Option<usize> {
+        if self.steps.len() >= 32 { return None; }
+        self.steps.push(SeqStep::new(params));
+        Some(self.steps.len() - 1)
     }
 }
 
@@ -919,6 +1030,11 @@ struct UiReq {
     seq_dur:           Option<f32>,
     fb_reset:          bool,
     fb_auto_toggle:    bool,
+    seq_play_mode_toggle: bool,
+    seq_capture:          bool,
+    seq_step_dur_mul:     Option<(usize, f32)>,
+    seq_step_curve_cycle: Option<usize>,
+    seq_step_prob:        Option<(usize, f32)>,
 }
 
 struct App {
@@ -1280,10 +1396,16 @@ impl ApplicationHandler<UserEvent> for App {
                     .collect();
                 let cur_seq_dur       = self.sequencer.step_dur;
                 let cur_seq_curve     = self.sequencer.curve;
-                let cur_seq_progress  = (self.sequencer.step_timer / self.sequencer.step_dur).clamp(0.0, 1.0);
+                let cur_seq_play_mode = self.sequencer.play_mode;
+                let cur_seq_eff_dur   = self.sequencer.effective_step_dur();
+                let cur_seq_progress  = (self.sequencer.step_timer / cur_seq_eff_dur).clamp(0.0, 1.0);
                 // Editor: mutable local that closure can modify; written back in mutations
                 let mut seq_selected_edit: Option<(usize, FieldParams)> = self.sequencer.selected
                     .and_then(|i| self.sequencer.steps.get(i).map(|s| (i, s.params.clone())));
+                // Per-step extras for the selected step editor: (dur_mul, curve_override, prob)
+                let seq_selected_extras: Option<(f32, Option<TranCurve>, f32)> = self.sequencer.selected
+                    .and_then(|i| self.sequencer.steps.get(i))
+                    .map(|s| (s.dur_mul, s.curve_override, s.prob));
                 // Snapshot field_params, lfo, mic, and current audio bands.
                 let mut fp  = seq_fp.or(tour_fp).unwrap_or_else(|| self.field_params.clone());
                 // FB AUTO: override every fb_* field with an evolving auto-pilot pattern.
@@ -1619,6 +1741,10 @@ impl ApplicationHandler<UserEvent> for App {
                                     if ui.button(cur_seq_curve.label()).clicked() {
                                         req.seq_curve = Some(cur_seq_curve.next());
                                     }
+                                    let pm_col = egui::Color32::from_rgb(180, 200, 255);
+                                    if ui.add(egui::Button::new(
+                                        egui::RichText::new(cur_seq_play_mode.label()).color(pm_col)
+                                    )).clicked() { req.seq_play_mode_toggle = true; }
                                     ui.label(egui::RichText::new("step").small());
                                     let mut dur = cur_seq_dur;
                                     if ui.add(egui::Slider::new(&mut dur, 0.5_f32..=8.0_f32)
@@ -1643,6 +1769,10 @@ impl ApplicationHandler<UserEvent> for App {
                                     if ui.add_enabled(can_del, egui::Button::new("−")).clicked() {
                                         req.seq_remove_step = true;
                                     }
+                                    if ui.add_enabled(can_add, egui::Button::new(
+                                        egui::RichText::new("📸 CAPTURE")
+                                            .color(egui::Color32::from_rgb(255, 200, 120))
+                                    )).clicked() { req.seq_capture = true; }
                                 });
 
                                 if ui.button("📷 Screenshot").clicked() {
@@ -1802,6 +1932,37 @@ impl ApplicationHandler<UserEvent> for App {
                                     )).clicked() { req.seq_mute_step = Some(edit_idx); }
                                     if ui.button("RAND").clicked() { req.seq_randomize = Some(edit_idx); }
                                 });
+
+                                // Per-step timing/curve/prob overrides
+                                if let Some((mut dm, curve_ov, mut pr)) = seq_selected_extras {
+                                    ui.separator();
+                                    ui.label(egui::RichText::new("step timing")
+                                        .small().color(egui::Color32::from_rgb(180, 200, 255)));
+                                    ui.horizontal(|ui| {
+                                        ui.label(egui::RichText::new("dur×").small().monospace());
+                                        if ui.add(egui::Slider::new(&mut dm, 0.25_f32..=4.0_f32)
+                                            .show_value(true)).changed() {
+                                            req.seq_step_dur_mul = Some((edit_idx, dm));
+                                        }
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label(egui::RichText::new("curve").small().monospace());
+                                        let lbl = match curve_ov {
+                                            Some(c) => c.label(),
+                                            None    => "(global)",
+                                        };
+                                        if ui.small_button(lbl).clicked() {
+                                            req.seq_step_curve_cycle = Some(edit_idx);
+                                        }
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label(egui::RichText::new("prob ").small().monospace());
+                                        if ui.add(egui::Slider::new(&mut pr, 0.0_f32..=1.0_f32)
+                                            .show_value(true)).changed() {
+                                            req.seq_step_prob = Some((edit_idx, pr));
+                                        }
+                                    });
+                                }
                             });
                     }
 
@@ -1948,6 +2109,37 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 if let Some(c) = req.seq_curve { self.sequencer.curve = c; }
                 if let Some(d) = req.seq_dur { self.sequencer.step_dur = d; }
+                if req.seq_play_mode_toggle {
+                    self.sequencer.play_mode = self.sequencer.play_mode.next();
+                    self.sequencer.pp_dir = 1; // reset PingPong direction on mode change
+                }
+                if req.seq_capture {
+                    // Snapshot the *effective* state (post-LFO/mic, post-fb_auto) as a new step.
+                    if let Some(new_idx) = self.sequencer.capture(fp_eff.clone()) {
+                        self.sequencer.selected = Some(new_idx);
+                    }
+                }
+                if let Some((i, v)) = req.seq_step_dur_mul {
+                    if let Some(s) = self.sequencer.steps.get_mut(i) {
+                        s.dur_mul = v.clamp(0.25, 4.0);
+                    }
+                }
+                if let Some(i) = req.seq_step_curve_cycle {
+                    if let Some(s) = self.sequencer.steps.get_mut(i) {
+                        s.curve_override = match s.curve_override {
+                            None                          => Some(TranCurve::Linear),
+                            Some(TranCurve::Linear)       => Some(TranCurve::EaseInOut),
+                            Some(TranCurve::EaseInOut)    => Some(TranCurve::Snap),
+                            Some(TranCurve::Snap)         => Some(TranCurve::Bounce),
+                            Some(TranCurve::Bounce)       => None,
+                        };
+                    }
+                }
+                if let Some((i, v)) = req.seq_step_prob {
+                    if let Some(s) = self.sequencer.steps.get_mut(i) {
+                        s.prob = v.clamp(0.0, 1.0);
+                    }
+                }
                 if req.fb_reset {
                     if let Some(gpu) = &mut self.gpu { gpu.fb_clear = true; }
                 }
@@ -2071,6 +2263,8 @@ mod seq_tests {
             cur: 0, step_dur: 2.0, step_timer: 2.0, // fully arrived at step 0
             curve: TranCurve::Linear,
             selected: None,
+            play_mode: SeqPlayMode::Forward,
+            pp_dir: 1, rng_seed: 0x9E3779B9,
             steps,
             from_params,
         }
@@ -2256,5 +2450,435 @@ mod seq_tests {
         // ...but the Sequencer's own logic is correct.
         // The regression: App only uses seq_fp when active=true.
         // Enabling MANUAL must also set active=true (fixed in App mutations).
+    }
+
+    // ── Per-step duration multiplier ──────────────────────────────────────
+    #[test]
+    fn per_step_dur_mul_extends_step() {
+        let mut seq = make_seq(2);
+        seq.manual = false;
+        seq.step_dur = 1.0;
+        seq.steps[0].dur_mul = 2.0; // step 0 lasts 2.0s effectively
+        seq.step_timer = 0.0;
+        seq.tick(1.5);
+        assert_eq!(seq.cur, 0, "should not advance before effective dur");
+        seq.tick(0.6); // total 2.1 > 2.0
+        assert_eq!(seq.cur, 1, "should advance when effective dur exceeded");
+    }
+
+    #[test]
+    fn per_step_dur_mul_shortens_step() {
+        let mut seq = make_seq(2);
+        seq.manual = false;
+        seq.step_dur = 1.0;
+        seq.steps[0].dur_mul = 0.5; // step 0 lasts 0.5s
+        seq.step_timer = 0.0;
+        seq.tick(0.4);
+        assert_eq!(seq.cur, 0);
+        seq.tick(0.2); // total 0.6 > 0.5
+        assert_eq!(seq.cur, 1);
+    }
+
+    // ── Per-step curve override ───────────────────────────────────────────
+    #[test]
+    fn per_step_curve_override_applied() {
+        let mut seq = make_seq(2);
+        seq.curve = TranCurve::Linear;
+        seq.steps[1].curve_override = Some(TranCurve::Snap);
+        seq.manual_step(1); // cur=1, from=steps[0], timer=0
+        seq.step_timer = seq.step_dur * 0.5;
+        let p = seq.current_params();
+        // SNAP returns from until t >= 1.0
+        assert!((p.kscale - seq.from_params.kscale).abs() < 1e-5,
+            "snap override at t=0.5 should output from_params");
+    }
+
+    #[test]
+    fn no_curve_override_uses_global() {
+        let mut seq = make_seq(2);
+        seq.curve = TranCurve::Linear;
+        seq.manual_step(1);
+        seq.step_timer = seq.step_dur * 0.5;
+        let p = seq.current_params();
+        let expected = (seq.from_params.kscale + seq.steps[seq.cur].params.kscale) * 0.5;
+        assert!((p.kscale - expected).abs() < 1e-5,
+            "linear at t=0.5 should be exact midpoint");
+    }
+
+    // ── Play modes ────────────────────────────────────────────────────────
+    #[test]
+    fn play_mode_reverse_steps_backward() {
+        let mut seq = make_seq(4);
+        seq.play_mode = SeqPlayMode::Reverse;
+        seq.cur = 2;
+        seq.advance_next();
+        assert_eq!(seq.cur, 1);
+        seq.advance_next();
+        assert_eq!(seq.cur, 0);
+        seq.advance_next();
+        assert_eq!(seq.cur, 3, "Reverse wraps from 0 to last");
+    }
+
+    #[test]
+    fn play_mode_pingpong_reverses_at_ends() {
+        let mut seq = make_seq(3);
+        seq.play_mode = SeqPlayMode::PingPong;
+        seq.pp_dir = 1;
+        seq.cur = 0;
+        seq.advance_next(); assert_eq!(seq.cur, 1);
+        seq.advance_next(); assert_eq!(seq.cur, 2);
+        seq.advance_next(); assert_eq!(seq.cur, 1, "should reverse off the end");
+        seq.advance_next(); assert_eq!(seq.cur, 0);
+        seq.advance_next(); assert_eq!(seq.cur, 1, "should reverse off the start");
+    }
+
+    #[test]
+    fn play_mode_pingpong_with_one_step_stays_put() {
+        let mut seq = make_seq(1);
+        seq.play_mode = SeqPlayMode::PingPong;
+        seq.advance_next();
+        assert_eq!(seq.cur, 0);
+    }
+
+    #[test]
+    fn play_mode_random_avoids_immediate_repeat() {
+        let mut seq = make_seq(4);
+        seq.play_mode = SeqPlayMode::Random;
+        seq.rng_seed = 12345;
+        for _ in 0..50 {
+            let prev = seq.cur;
+            seq.advance_next();
+            assert_ne!(seq.cur, prev, "Random must not repeat current step");
+        }
+    }
+
+    #[test]
+    fn play_mode_random_visits_multiple_steps() {
+        let mut seq = make_seq(8);
+        seq.play_mode = SeqPlayMode::Random;
+        seq.rng_seed = 7;
+        let mut visited = [false; 8];
+        for _ in 0..200 {
+            seq.advance_next();
+            visited[seq.cur] = true;
+        }
+        let count = visited.iter().filter(|&&v| v).count();
+        assert!(count >= 6, "Random should hit at least 6/8 steps, hit {count}");
+    }
+
+    // ── Probability gating ────────────────────────────────────────────────
+    #[test]
+    fn prob_zero_step_is_always_skipped() {
+        let mut seq = make_seq(4);
+        seq.play_mode = SeqPlayMode::Forward;
+        seq.steps[1].prob = 0.0; // step 1 never plays
+        seq.cur = 0;
+        seq.advance_next();
+        assert_eq!(seq.cur, 2, "prob=0 must be skipped");
+    }
+
+    #[test]
+    fn prob_one_step_always_plays() {
+        let mut seq = make_seq(4);
+        seq.steps[1].prob = 1.0;
+        seq.cur = 0;
+        seq.advance_next();
+        assert_eq!(seq.cur, 1);
+    }
+
+    #[test]
+    fn prob_half_step_lands_roughly_half_the_time() {
+        let mut seq = make_seq(4);
+        seq.steps[1].prob = 0.5;
+        seq.rng_seed = 42;
+        let mut plays = 0;
+        for _ in 0..200 {
+            seq.cur = 0;
+            seq.play_mode = SeqPlayMode::Forward;
+            seq.advance_next();
+            if seq.cur == 1 { plays += 1; }
+        }
+        // generous bounds — just rules out 0% and 100%
+        assert!(plays > 30 && plays < 170,
+            "prob=0.5 should fire roughly half the time (got {plays}/200)");
+    }
+
+    #[test]
+    fn all_prob_zero_does_not_hang() {
+        let mut seq = make_seq(3);
+        for s in seq.steps.iter_mut() { s.prob = 0.0; }
+        seq.advance_next(); // must terminate
+        // cur may be anywhere; the contract is "no hang"
+        assert!(seq.cur < seq.steps.len());
+    }
+
+    // ── effective_step_dur / effective_curve ──────────────────────────────
+    #[test]
+    fn effective_step_dur_floor() {
+        let mut seq = make_seq(1);
+        seq.step_dur = 0.001;
+        seq.steps[0].dur_mul = 0.001;
+        assert!(seq.effective_step_dur() >= 0.05,
+            "effective_step_dur must clamp above 0.05 to avoid /0");
+    }
+
+    // ── CAPTURE ───────────────────────────────────────────────────────────
+    #[test]
+    fn capture_appends_step() {
+        let mut seq = make_seq(3);
+        let mut p = FieldParams::default();
+        p.kscale = 7.7;
+        let idx = seq.capture(p).expect("capture should fit");
+        assert_eq!(idx, 3);
+        assert_eq!(seq.steps.len(), 4);
+        assert!((seq.steps[3].params.kscale - 7.7).abs() < 1e-5);
+        // captured step defaults: not muted, dur_mul=1, prob=1
+        assert_eq!(seq.steps[3].muted, false);
+        assert!((seq.steps[3].dur_mul - 1.0).abs() < 1e-5);
+        assert!((seq.steps[3].prob - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn capture_blocked_at_32() {
+        let mut seq = make_seq(32);
+        let r = seq.capture(FieldParams::default());
+        assert!(r.is_none(), "capture must refuse beyond 32 steps");
+        assert_eq!(seq.steps.len(), 32);
+    }
+}
+
+// ── Tests for parameter routing, LFO, lerp_fp, and fb_auto ───────────────
+#[cfg(test)]
+mod routing_tests {
+    use super::*;
+
+    fn approx_eq(a: f32, b: f32, eps: f32) -> bool { (a - b).abs() < eps }
+
+    // LfoWave::sample must stay in [-1, 1] for every wave at any phase.
+    #[test]
+    fn lfo_wave_sample_in_bipolar_range() {
+        for w in [LfoWave::Sine, LfoWave::Triangle, LfoWave::Saw,
+                   LfoWave::Square, LfoWave::Pulse, LfoWave::Steps] {
+            for k in 0..1000 {
+                let p = (k as f32) * 0.013;
+                let s = w.sample(p);
+                assert!(s >= -1.0 - 1e-4 && s <= 1.0 + 1e-4,
+                    "{:?} out of range at phase {p}: {s}", w);
+            }
+        }
+    }
+
+    #[test]
+    fn lfo_sine_periodic() {
+        // Sine should repeat every 1 unit of phase (TAU is folded by .fract()).
+        let a = LfoWave::Sine.sample(0.25);
+        let b = LfoWave::Sine.sample(1.25);
+        assert!(approx_eq(a, b, 1e-4), "sine should be 1-periodic in phase");
+        // and zero at 0 and 0.5
+        assert!(approx_eq(LfoWave::Sine.sample(0.0), 0.0, 1e-4));
+        assert!(approx_eq(LfoWave::Sine.sample(0.5), 0.0, 1e-4));
+    }
+
+    #[test]
+    fn lfo_triangle_endpoints() {
+        // Triangle: 1 at 0.25, -1 at 0.75, 0 at 0/0.5
+        assert!(approx_eq(LfoWave::Triangle.sample(0.0), -1.0, 1e-4));
+        assert!(approx_eq(LfoWave::Triangle.sample(0.25), 0.0, 1e-4));
+        assert!(approx_eq(LfoWave::Triangle.sample(0.5), 1.0, 1e-4));
+        assert!(approx_eq(LfoWave::Triangle.sample(0.75), 0.0, 1e-4));
+    }
+
+    #[test]
+    fn lfo_square_two_levels() {
+        for k in 0..50 {
+            let p = (k as f32) / 100.0; // 0..0.5
+            assert!(approx_eq(LfoWave::Square.sample(p), 1.0, 1e-4));
+        }
+        for k in 50..100 {
+            let p = (k as f32) / 100.0; // 0.5..1
+            assert!(approx_eq(LfoWave::Square.sample(p), -1.0, 1e-4));
+        }
+    }
+
+    // apply_modulation clamps every output param into the documented UI range.
+    #[test]
+    fn apply_modulation_clamps_ranges() {
+        let fp = FieldParams::default();
+        let mut lfo = LfoParams::default();
+        let mic = MicParams::default();
+        let bands = audio::AudioBands::default();
+        // Crank everything: enable all LFO targets, huge depth, drive wave to +1.
+        lfo.kscale = true; lfo.speed = true; lfo.field_mix = true;
+        lfo.iso_level = true; lfo.color_shift = true; lfo.zoom = true;
+        lfo.w_lattice = true; lfo.w_motif = true; lfo.w_band = true;
+        lfo.fb_zoom = true; lfo.fb_decay = true; lfo.fb_offset_x = true; lfo.fb_offset_y = true;
+        lfo.fb_rotation = true; lfo.fb_color_shift = true; lfo.fb_saturation = true;
+        lfo.fb_brightness = true; lfo.fb_inject = true; lfo.fb_fold_angle = true;
+        lfo.fb_motion_blur = true;
+        lfo.depth = 10.0; // wildly more than any param range
+        lfo.wave = LfoWave::Square; // always ±1
+
+        // t chosen so square=+1
+        let eff_pos = apply_modulation(&fp, &lfo, &mic, &bands, 0.1);
+        // t chosen so square=-1
+        let eff_neg = apply_modulation(&fp, &lfo, &mic, &bands, 0.6 / lfo.rate.max(1e-6));
+
+        let check = |label: &str, v: f32, lo: f32, hi: f32| {
+            assert!(v >= lo - 1e-4 && v <= hi + 1e-4, "{label}={v} outside [{lo},{hi}]");
+        };
+        for eff in [&eff_pos, &eff_neg] {
+            check("kscale", eff.kscale, 0.1, 5.0);
+            check("speed", eff.speed, 0.0, 2.0);
+            check("field_mix", eff.field_mix, 0.0, 1.0);
+            check("iso_level", eff.iso_level, 0.0, 1.0);
+            check("color_shift", eff.color_shift, 0.0, 1.0);
+            check("zoom", eff.zoom, 0.2, 5.0);
+            check("w_lattice", eff.w_lattice, 0.0, 2.0);
+            check("w_motif",   eff.w_motif,   0.0, 2.0);
+            check("w_band",    eff.w_band,    0.0, 2.0);
+            check("fb_zoom",        eff.fb_zoom,        0.90, 1.10);
+            check("fb_decay",       eff.fb_decay,       0.30, 0.99);
+            check("fb_offset_x",    eff.fb_offset_x,   -0.10, 0.10);
+            check("fb_offset_y",    eff.fb_offset_y,   -0.10, 0.10);
+            check("fb_rotation",    eff.fb_rotation,   -0.30, 0.30);
+            check("fb_color_shift", eff.fb_color_shift,-1.00, 1.00);
+            check("fb_saturation",  eff.fb_saturation,  0.00, 2.00);
+            check("fb_brightness",  eff.fb_brightness,  0.00, 2.00);
+            check("fb_inject",      eff.fb_inject,      0.00, 1.00);
+            check("fb_fold_angle",  eff.fb_fold_angle, -3.14, 3.14);
+            check("fb_motion_blur", eff.fb_motion_blur, 0.00, 0.95);
+        }
+    }
+
+    // apply_modulation with all-off LFO and Off mic must pass fp through unchanged.
+    #[test]
+    fn apply_modulation_passes_through_when_off() {
+        let fp = FieldParams {
+            kscale: 1.7, speed: 0.42, field_mix: 0.6,
+            iso_level: 0.31, color_shift: 0.77,
+            ..FieldParams::default()
+        };
+        let lfo = LfoParams::default();
+        let mic = MicParams::default();
+        let bands = audio::AudioBands::default();
+        let eff = apply_modulation(&fp, &lfo, &mic, &bands, 1.23);
+        assert!(approx_eq(eff.kscale, fp.kscale, 1e-5));
+        assert!(approx_eq(eff.speed,  fp.speed,  1e-5));
+        assert!(approx_eq(eff.field_mix, fp.field_mix, 1e-5));
+        assert!(approx_eq(eff.color_shift, fp.color_shift, 1e-5));
+    }
+
+    // lerp_fp must wrap color_shift via the *short* arc (hue is circular).
+    #[test]
+    fn lerp_fp_color_shift_takes_short_arc_forward() {
+        let mut a = FieldParams::default(); a.color_shift = 0.9;
+        let mut b = FieldParams::default(); b.color_shift = 0.1;
+        // Short path: 0.9 → 1.0/0.0 → 0.1 (forward through hue wheel).
+        // At t=0.25 the unwrapped delta is (b - a) - 1.0 = -0.8, so
+        // result = 0.9 + 0.25*(-0.8 + 1.0) = 0.9 + 0.05 = 0.95... wait the implementation
+        // gives short-way delta of +0.2 (since |d|=0.8>0.5 → d-1=-0.8, but our code uses
+        // the d<-0.5 branch as d+1=+0.2 for d<-0.5). Let's verify d:
+        // d = 0.1 - 0.9 = -0.8 → matches `d < -0.5` → cs_delta = -0.8 + 1 = +0.2
+        // so result_t=0.25 = (0.9 + 0.2*0.25).rem_euclid(1) = 0.95.
+        // And at t=0.75: 0.9 + 0.2*0.75 = 1.05 → rem_euclid → 0.05.
+        let r25 = lerp_fp(&a, &b, 0.25);
+        let r75 = lerp_fp(&a, &b, 0.75);
+        assert!(approx_eq(r25.color_shift, 0.95, 1e-4),
+            "forward wrap @t=0.25 should be ~0.95, got {}", r25.color_shift);
+        assert!(approx_eq(r75.color_shift, 0.05, 1e-4),
+            "forward wrap @t=0.75 should be ~0.05, got {}", r75.color_shift);
+    }
+
+    #[test]
+    fn lerp_fp_color_shift_no_wrap_for_short_delta() {
+        let mut a = FieldParams::default(); a.color_shift = 0.2;
+        let mut b = FieldParams::default(); b.color_shift = 0.4;
+        let r = lerp_fp(&a, &b, 0.5);
+        // Plain linear mid: 0.3
+        assert!(approx_eq(r.color_shift, 0.3, 1e-5));
+    }
+
+    #[test]
+    fn lerp_fp_endpoints() {
+        let mut a = FieldParams::default(); a.kscale = 1.0; a.zoom = 0.5;
+        let mut b = FieldParams::default(); b.kscale = 5.0; b.zoom = 2.0;
+        let r0 = lerp_fp(&a, &b, 0.0);
+        let r1 = lerp_fp(&a, &b, 1.0);
+        assert!(approx_eq(r0.kscale, 1.0, 1e-5));
+        assert!(approx_eq(r0.zoom,   0.5, 1e-5));
+        assert!(approx_eq(r1.kscale, 5.0, 1e-5));
+        assert!(approx_eq(r1.zoom,   2.0, 1e-5));
+    }
+
+    #[test]
+    fn lerp_fp_discrete_switches_at_half() {
+        let mut a = FieldParams::default(); a.mode = 1; a.fb_blend_mode = 0;
+        let mut b = FieldParams::default(); b.mode = 7; b.fb_blend_mode = 3;
+        assert_eq!(lerp_fp(&a, &b, 0.0).mode, 1);
+        assert_eq!(lerp_fp(&a, &b, 0.49).mode, 1);
+        assert_eq!(lerp_fp(&a, &b, 0.5).mode, 7,  "discrete field switches at t=0.5");
+        assert_eq!(lerp_fp(&a, &b, 1.0).mode, 7);
+        assert_eq!(lerp_fp(&a, &b, 0.49).fb_blend_mode, 0);
+        assert_eq!(lerp_fp(&a, &b, 0.5).fb_blend_mode,  3);
+    }
+
+    // fb_auto_params must override every fb_* field of base, and only those.
+    #[test]
+    fn fb_auto_overrides_only_fb_fields() {
+        let base = FieldParams {
+            mode: 5, kscale: 2.5, speed: 0.7, field_mix: 0.6,
+            iso_level: 0.4, color_shift: 0.3, zoom: 1.5,
+            w_lattice: 1.7, w_motif: 0.9, w_band: 0.6,
+            fb_enabled: false, fb_mirror: 0, fb_blend_mode: 0,
+            ..FieldParams::default()
+        };
+        let auto = fb_auto_params(3.7, &base);
+        // Non-feedback fields preserved exactly:
+        assert_eq!(auto.mode, base.mode);
+        assert!(approx_eq(auto.kscale,    base.kscale,    1e-5));
+        assert!(approx_eq(auto.speed,     base.speed,     1e-5));
+        assert!(approx_eq(auto.field_mix, base.field_mix, 1e-5));
+        assert!(approx_eq(auto.iso_level, base.iso_level, 1e-5));
+        assert!(approx_eq(auto.color_shift, base.color_shift, 1e-5));
+        assert!(approx_eq(auto.zoom,      base.zoom,      1e-5));
+        assert!(approx_eq(auto.w_lattice, base.w_lattice, 1e-5));
+        assert!(approx_eq(auto.w_motif,   base.w_motif,   1e-5));
+        assert!(approx_eq(auto.w_band,    base.w_band,    1e-5));
+        // Feedback always enabled in auto mode:
+        assert!(auto.fb_enabled, "fb_auto must force fb_enabled");
+        // fb_* must stay in valid UI ranges (smoke-check a few)
+        assert!(auto.fb_zoom >= 0.90 && auto.fb_zoom <= 1.10);
+        assert!(auto.fb_decay >= 0.30 && auto.fb_decay <= 0.99);
+        assert!(auto.fb_motion_blur >= 0.0 && auto.fb_motion_blur <= 0.95);
+        assert!(auto.fb_inject >= 0.0 && auto.fb_inject <= 1.0);
+        assert!((auto.fb_mirror as usize) < 12);
+        assert!((auto.fb_blend_mode as usize) < 12);
+    }
+
+    #[test]
+    fn fb_auto_evolves_over_time() {
+        let base = FieldParams::default();
+        let a = fb_auto_params(0.5, &base);
+        let b = fb_auto_params(9.0, &base);
+        // Different scenes — at least one of (mirror, zoom, decay) should differ.
+        let differs = a.fb_mirror != b.fb_mirror
+            || !approx_eq(a.fb_zoom, b.fb_zoom, 1e-3)
+            || !approx_eq(a.fb_decay, b.fb_decay, 1e-3);
+        assert!(differs, "fb_auto must evolve across scenes (a={:?}, b={:?})",
+            (a.fb_mirror, a.fb_zoom, a.fb_decay), (b.fb_mirror, b.fb_zoom, b.fb_decay));
+    }
+
+    #[test]
+    fn fb_auto_is_finite() {
+        let base = FieldParams::default();
+        for k in 0..500 {
+            let t = (k as f32) * 0.13;
+            let a = fb_auto_params(t, &base);
+            for v in [a.fb_zoom, a.fb_decay, a.fb_offset_x, a.fb_offset_y,
+                      a.fb_rotation, a.fb_color_shift, a.fb_saturation,
+                      a.fb_brightness, a.fb_inject, a.fb_fold_angle, a.fb_motion_blur] {
+                assert!(v.is_finite(), "fb_auto produced non-finite value at t={t}");
+            }
+        }
     }
 }
