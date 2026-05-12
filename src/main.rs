@@ -137,47 +137,88 @@ fn bz_hash(n: f32) -> f32 {
 
 const TAU: f32 = std::f32::consts::PI * 2.0;
 
+/// Which LFO bank drives a target parameter.
+#[derive(Clone, Copy, PartialEq, Default, Debug)]
+pub enum LfoSrc {
+    #[default]
+    Off,
+    A,
+    B,
+}
+
+impl LfoSrc {
+    fn next(self) -> Self {
+        match self { Self::Off => Self::A, Self::A => Self::B, Self::B => Self::Off }
+    }
+    fn label(self) -> &'static str {
+        match self { Self::Off => "~", Self::A => "A", Self::B => "B" }
+    }
+    fn color(self) -> egui::Color32 {
+        match self {
+            Self::Off => egui::Color32::from_gray(90),
+            Self::A   => egui::Color32::from_rgb(80, 220, 120),
+            Self::B   => egui::Color32::from_rgb(120, 180, 255),
+        }
+    }
+}
+
+/// One LFO bank: a waveform, rate, depth, and phase offset.
+/// Two independent banks (A and B) live inside `LfoParams`.
+#[derive(Clone)]
+pub struct LfoEngine {
+    pub rate:  f32,    // cycles per second
+    pub depth: f32,    // 0..1 — scaled by each param's range
+    pub wave:  LfoWave,
+    pub phase: f32,    // phase offset in cycles (0..1), lets B de-sync from A
+}
+
+impl LfoEngine {
+    fn sample(&self, t: f32) -> f32 {
+        self.wave.sample(self.rate * t + self.phase)
+    }
+}
+
 #[derive(Clone)]
 pub struct LfoParams {
-    // field params
-    pub kscale:         bool,
-    pub speed:          bool,
-    pub field_mix:      bool,
-    pub iso_level:      bool,
-    pub color_shift:    bool,
-    pub zoom:           bool,
-    pub w_lattice:      bool,
-    pub w_motif:        bool,
-    pub w_band:         bool,
+    pub a: LfoEngine,
+    pub b: LfoEngine,
+    // field params — each target picks LfoSrc::{Off, A, B}
+    pub kscale:         LfoSrc,
+    pub speed:          LfoSrc,
+    pub field_mix:      LfoSrc,
+    pub iso_level:      LfoSrc,
+    pub color_shift:    LfoSrc,
+    pub zoom:           LfoSrc,
+    pub w_lattice:      LfoSrc,
+    pub w_motif:        LfoSrc,
+    pub w_band:         LfoSrc,
     // feedback params
-    pub fb_zoom:        bool,
-    pub fb_decay:       bool,
-    pub fb_offset_x:    bool,
-    pub fb_offset_y:    bool,
-    pub fb_rotation:    bool,
-    pub fb_color_shift: bool,
-    pub fb_saturation:  bool,
-    pub fb_brightness:  bool,
-    pub fb_inject:      bool,
-    pub fb_fold_angle:  bool,
-    pub fb_motion_blur: bool,
-    // global
-    pub rate:           f32,
-    pub depth:          f32,
-    pub wave:           LfoWave,
+    pub fb_zoom:        LfoSrc,
+    pub fb_decay:       LfoSrc,
+    pub fb_offset_x:    LfoSrc,
+    pub fb_offset_y:    LfoSrc,
+    pub fb_rotation:    LfoSrc,
+    pub fb_color_shift: LfoSrc,
+    pub fb_saturation:  LfoSrc,
+    pub fb_brightness:  LfoSrc,
+    pub fb_inject:      LfoSrc,
+    pub fb_fold_angle:  LfoSrc,
+    pub fb_motion_blur: LfoSrc,
 }
 
 impl Default for LfoParams {
     fn default() -> Self {
         Self {
-            kscale: false, speed: false, field_mix: false, iso_level: false,
-            color_shift: false, zoom: false, w_lattice: false, w_motif: false,
-            w_band: false,
-            fb_zoom: false, fb_decay: false, fb_offset_x: false, fb_offset_y: false,
-            fb_rotation: false, fb_color_shift: false, fb_saturation: false,
-            fb_brightness: false, fb_inject: false, fb_fold_angle: false,
-            fb_motion_blur: false,
-            rate: 0.2, depth: 0.3, wave: LfoWave::Sine,
+            a: LfoEngine { rate: 0.20, depth: 0.30, wave: LfoWave::Sine,     phase: 0.0  },
+            b: LfoEngine { rate: 0.07, depth: 0.20, wave: LfoWave::Triangle, phase: 0.25 },
+            kscale: LfoSrc::Off, speed: LfoSrc::Off, field_mix: LfoSrc::Off,
+            iso_level: LfoSrc::Off, color_shift: LfoSrc::Off, zoom: LfoSrc::Off,
+            w_lattice: LfoSrc::Off, w_motif: LfoSrc::Off, w_band: LfoSrc::Off,
+            fb_zoom: LfoSrc::Off, fb_decay: LfoSrc::Off, fb_offset_x: LfoSrc::Off,
+            fb_offset_y: LfoSrc::Off, fb_rotation: LfoSrc::Off,
+            fb_color_shift: LfoSrc::Off, fb_saturation: LfoSrc::Off,
+            fb_brightness: LfoSrc::Off, fb_inject: LfoSrc::Off,
+            fb_fold_angle: LfoSrc::Off, fb_motion_blur: LfoSrc::Off,
         }
     }
 }
@@ -715,27 +756,31 @@ impl TourStyle {
 
 fn tour_lfo_preset() -> LfoParams {
     LfoParams {
-        kscale: true, speed: true, field_mix: true, iso_level: true,
-        color_shift: true, zoom: true, w_lattice: true, w_motif: true, w_band: true,
-        fb_zoom: true, fb_decay: false, fb_color_shift: true,
-        fb_saturation: true, fb_brightness: false,
-        fb_rotation: true, fb_offset_x: false, fb_offset_y: false,
-        fb_inject: false, fb_fold_angle: true,
-        fb_motion_blur: false,
-        rate: 0.18, depth: 0.18, wave: LfoWave::Triangle,
+        a: LfoEngine { rate: 0.18, depth: 0.18, wave: LfoWave::Triangle, phase: 0.0  },
+        b: LfoEngine { rate: 0.07, depth: 0.12, wave: LfoWave::Sine,     phase: 0.33 },
+        kscale: LfoSrc::A, speed: LfoSrc::A, field_mix: LfoSrc::A, iso_level: LfoSrc::A,
+        color_shift: LfoSrc::A, zoom: LfoSrc::A,
+        w_lattice: LfoSrc::A, w_motif: LfoSrc::A, w_band: LfoSrc::A,
+        fb_zoom: LfoSrc::B, fb_decay: LfoSrc::Off, fb_color_shift: LfoSrc::B,
+        fb_saturation: LfoSrc::A, fb_brightness: LfoSrc::Off,
+        fb_rotation: LfoSrc::B, fb_offset_x: LfoSrc::Off, fb_offset_y: LfoSrc::Off,
+        fb_inject: LfoSrc::Off, fb_fold_angle: LfoSrc::B,
+        fb_motion_blur: LfoSrc::Off,
     }
 }
 
 fn tour_lfo_preset_fb_heavy() -> LfoParams {
     LfoParams {
-        kscale: false, speed: true, field_mix: false, iso_level: false,
-        color_shift: true, zoom: false, w_lattice: false, w_motif: false, w_band: false,
-        fb_zoom: true, fb_decay: true, fb_color_shift: true,
-        fb_saturation: true, fb_brightness: true,
-        fb_rotation: true, fb_offset_x: true, fb_offset_y: true,
-        fb_inject: false, fb_fold_angle: true,
-        fb_motion_blur: true,
-        rate: 0.07, depth: 0.25, wave: LfoWave::Sine,
+        a: LfoEngine { rate: 0.07, depth: 0.25, wave: LfoWave::Sine,     phase: 0.0  },
+        b: LfoEngine { rate: 0.21, depth: 0.18, wave: LfoWave::Triangle, phase: 0.5  },
+        kscale: LfoSrc::Off, speed: LfoSrc::A, field_mix: LfoSrc::Off, iso_level: LfoSrc::Off,
+        color_shift: LfoSrc::A, zoom: LfoSrc::Off,
+        w_lattice: LfoSrc::Off, w_motif: LfoSrc::Off, w_band: LfoSrc::Off,
+        fb_zoom: LfoSrc::A, fb_decay: LfoSrc::B, fb_color_shift: LfoSrc::A,
+        fb_saturation: LfoSrc::A, fb_brightness: LfoSrc::B,
+        fb_rotation: LfoSrc::A, fb_offset_x: LfoSrc::B, fb_offset_y: LfoSrc::B,
+        fb_inject: LfoSrc::Off, fb_fold_angle: LfoSrc::A,
+        fb_motion_blur: LfoSrc::B,
     }
 }
 
@@ -899,11 +944,16 @@ fn apply_modulation(
     bands: &audio::AudioBands,
     t:     f32,
 ) -> FieldParams {
-    let lfo_s = lfo.wave.sample(lfo.rate * t);
+    let lfo_a_s = lfo.a.sample(t);
+    let lfo_b_s = lfo.b.sample(t);
     macro_rules! modulate {
-        ($val:expr, $lfo_en:expr, $mic_src:expr, $min:expr, $max:expr) => {{
+        ($val:expr, $lfo_src:expr, $mic_src:expr, $min:expr, $max:expr) => {{
             let range   = ($max as f32) - ($min as f32);
-            let lfo_d   = if $lfo_en { lfo.depth * range * lfo_s } else { 0.0 };
+            let lfo_d   = match $lfo_src {
+                LfoSrc::Off => 0.0,
+                LfoSrc::A   => lfo.a.depth * range * lfo_a_s,
+                LfoSrc::B   => lfo.b.depth * range * lfo_b_s,
+            };
             let mic_d   = $mic_src.value(bands) * mic.depth * range;
             ($val + lfo_d + mic_d).clamp($min as f32, $max as f32)
         }};
@@ -1530,18 +1580,15 @@ impl ApplicationHandler<UserEvent> for App {
                                     .small().color(egui::Color32::from_rgb(120, 120, 160)));
                                 macro_rules! sld {
                                     ($ui:expr, $label:literal, $val:expr, $eff:expr,
-                                     $lfo_en:expr, $mic_src:expr, $min:expr, $max:expr) => {
+                                     $lfo_src:expr, $mic_src:expr, $min:expr, $max:expr) => {
                                         $ui.horizontal(|ui| {
-                                            // [~] LFO toggle — normal sized button, coloured text
-                                            let lc = if *$lfo_en {
-                                                egui::Color32::from_rgb(80, 220, 120)
-                                            } else {
-                                                egui::Color32::from_gray(90)
-                                            };
+                                            // [~/A/B] LFO source — cycles Off→A→B→Off
+                                            let lc = (*$lfo_src).color();
+                                            let ll = (*$lfo_src).label();
                                             if ui.add(egui::Button::new(
-                                                egui::RichText::new("~").color(lc)
+                                                egui::RichText::new(ll).color(lc)
                                             ).min_size(egui::vec2(18.0, 18.0))).clicked() {
-                                                *$lfo_en = !*$lfo_en;
+                                                *$lfo_src = (*$lfo_src).next();
                                             }
 
                                             // [·/A/B/M/T] mic source — cycles on click
@@ -1629,24 +1676,40 @@ impl ApplicationHandler<UserEvent> for App {
 
                                 ui.separator();
 
-                                // LFO section
-                                ui.label(egui::RichText::new(format!("LFO  ({})", lfo.wave.label()))
+                                // LFO A section
+                                ui.label(egui::RichText::new(format!("LFO A  ({})", lfo.a.wave.label()))
                                     .small().color(egui::Color32::from_rgb(80, 220, 120)));
                                 ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("wave ").small());
-                                    if ui.button(lfo.wave.label()).clicked() {
-                                        lfo.wave = lfo.wave.next();
+                                    if ui.small_button(lfo.a.wave.label()).clicked() {
+                                        lfo.a.wave = lfo.a.wave.next();
                                     }
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("rate ").small());
-                                    ui.add(egui::Slider::new(&mut lfo.rate, 0.01..=4.0)
+                                    ui.label(egui::RichText::new("rate").small());
+                                    ui.add(egui::Slider::new(&mut lfo.a.rate, 0.01..=4.0)
                                         .show_value(true).suffix(" Hz"));
                                 });
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("depth").small());
-                                    ui.add(egui::Slider::new(&mut lfo.depth, 0.0..=1.0)
-                                        .show_value(true));
+                                    ui.add(egui::Slider::new(&mut lfo.a.depth, 0.0..=1.0).show_value(true));
+                                    ui.label(egui::RichText::new("phase").small());
+                                    ui.add(egui::Slider::new(&mut lfo.a.phase, 0.0..=1.0).show_value(true));
+                                });
+
+                                // LFO B section
+                                ui.label(egui::RichText::new(format!("LFO B  ({})", lfo.b.wave.label()))
+                                    .small().color(egui::Color32::from_rgb(120, 180, 255)));
+                                ui.horizontal(|ui| {
+                                    if ui.small_button(lfo.b.wave.label()).clicked() {
+                                        lfo.b.wave = lfo.b.wave.next();
+                                    }
+                                    ui.label(egui::RichText::new("rate").small());
+                                    ui.add(egui::Slider::new(&mut lfo.b.rate, 0.01..=4.0)
+                                        .show_value(true).suffix(" Hz"));
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("depth").small());
+                                    ui.add(egui::Slider::new(&mut lfo.b.depth, 0.0..=1.0).show_value(true));
+                                    ui.label(egui::RichText::new("phase").small());
+                                    ui.add(egui::Slider::new(&mut lfo.b.phase, 0.0..=1.0).show_value(true));
                                 });
 
                                 ui.separator();
@@ -2707,21 +2770,24 @@ mod routing_tests {
         let mut lfo = LfoParams::default();
         let mic = MicParams::default();
         let bands = audio::AudioBands::default();
-        // Crank everything: enable all LFO targets, huge depth, drive wave to +1.
-        lfo.kscale = true; lfo.speed = true; lfo.field_mix = true;
-        lfo.iso_level = true; lfo.color_shift = true; lfo.zoom = true;
-        lfo.w_lattice = true; lfo.w_motif = true; lfo.w_band = true;
-        lfo.fb_zoom = true; lfo.fb_decay = true; lfo.fb_offset_x = true; lfo.fb_offset_y = true;
-        lfo.fb_rotation = true; lfo.fb_color_shift = true; lfo.fb_saturation = true;
-        lfo.fb_brightness = true; lfo.fb_inject = true; lfo.fb_fold_angle = true;
-        lfo.fb_motion_blur = true;
-        lfo.depth = 10.0; // wildly more than any param range
-        lfo.wave = LfoWave::Square; // always ±1
+        // Crank everything: route all targets to LFO A, huge depth, square wave (±1).
+        for src in [
+            &mut lfo.kscale, &mut lfo.speed, &mut lfo.field_mix, &mut lfo.iso_level,
+            &mut lfo.color_shift, &mut lfo.zoom, &mut lfo.w_lattice, &mut lfo.w_motif,
+            &mut lfo.w_band, &mut lfo.fb_zoom, &mut lfo.fb_decay, &mut lfo.fb_offset_x,
+            &mut lfo.fb_offset_y, &mut lfo.fb_rotation, &mut lfo.fb_color_shift,
+            &mut lfo.fb_saturation, &mut lfo.fb_brightness, &mut lfo.fb_inject,
+            &mut lfo.fb_fold_angle, &mut lfo.fb_motion_blur,
+        ] { *src = LfoSrc::A; }
+        lfo.a.depth = 10.0;             // wildly more than any param range
+        lfo.a.wave = LfoWave::Square;   // always ±1
+        lfo.a.phase = 0.0;
 
-        // t chosen so square=+1
-        let eff_pos = apply_modulation(&fp, &lfo, &mic, &bands, 0.1);
-        // t chosen so square=-1
-        let eff_neg = apply_modulation(&fp, &lfo, &mic, &bands, 0.6 / lfo.rate.max(1e-6));
+        // phase=0 → square at t=0 is +1
+        let eff_pos = apply_modulation(&fp, &lfo, &mic, &bands, 0.0);
+        // pick a t where square is -1 (phase >= 0.5 in cycle)
+        let t_neg = 0.6 / lfo.a.rate.max(1e-6);
+        let eff_neg = apply_modulation(&fp, &lfo, &mic, &bands, t_neg);
 
         let check = |label: &str, v: f32, lo: f32, hi: f32| {
             assert!(v >= lo - 1e-4 && v <= hi + 1e-4, "{label}={v} outside [{lo},{hi}]");
@@ -2880,5 +2946,82 @@ mod routing_tests {
                 assert!(v.is_finite(), "fb_auto produced non-finite value at t={t}");
             }
         }
+    }
+
+    // ── LfoSrc enum behaviour ─────────────────────────────────────────────
+    #[test]
+    fn lfo_src_cycles_off_a_b() {
+        let mut s = LfoSrc::Off;
+        s = s.next(); assert_eq!(s, LfoSrc::A);
+        s = s.next(); assert_eq!(s, LfoSrc::B);
+        s = s.next(); assert_eq!(s, LfoSrc::Off);
+    }
+
+    // ── LfoEngine sampling ────────────────────────────────────────────────
+    #[test]
+    fn lfo_engine_phase_offset_shifts_sample() {
+        let e0 = LfoEngine { rate: 1.0, depth: 1.0, wave: LfoWave::Sine, phase: 0.0 };
+        let e1 = LfoEngine { rate: 1.0, depth: 1.0, wave: LfoWave::Sine, phase: 0.25 };
+        // sin(2π·0) = 0; sin(2π·0.25) = 1.
+        assert!(approx_eq(e0.sample(0.0),  0.0, 1e-4));
+        assert!(approx_eq(e1.sample(0.0),  1.0, 1e-4));
+    }
+
+    // ── Two independent LFOs combine in apply_modulation ──────────────────
+    #[test]
+    fn apply_modulation_uses_two_lfos_independently() {
+        let fp = FieldParams::default();
+        let mic = MicParams::default();
+        let bands = audio::AudioBands::default();
+        let mut lfo = LfoParams::default();
+        // LFO A: square at +1 → bumps kscale upward; LFO B: square at -1 → pulls speed down.
+        lfo.a = LfoEngine { rate: 0.5, depth: 1.0, wave: LfoWave::Square, phase: 0.0 };
+        lfo.b = LfoEngine { rate: 0.5, depth: 1.0, wave: LfoWave::Square, phase: 0.5 };
+        lfo.kscale = LfoSrc::A;
+        lfo.speed  = LfoSrc::B;
+        let eff = apply_modulation(&fp, &lfo, &mic, &bands, 0.0);
+        // A at t=0 → +1. B at t=0 with phase 0.5 → -1.
+        // kscale base 1.4 + 1.0*range(4.9) clamped to 5.0
+        assert!(eff.kscale > 4.5, "LFO A (square +1) should pull kscale to max; got {}", eff.kscale);
+        // speed base 0.3 − range(2.0) → clamped to 0.0
+        assert!(eff.speed < 0.05, "LFO B (square -1) should pull speed to min; got {}", eff.speed);
+    }
+
+    #[test]
+    fn apply_modulation_off_src_does_not_modulate() {
+        let fp = FieldParams { kscale: 2.0, ..FieldParams::default() };
+        let mic = MicParams::default();
+        let bands = audio::AudioBands::default();
+        let mut lfo = LfoParams::default();
+        lfo.a.depth = 1.0; lfo.a.wave = LfoWave::Square; lfo.a.phase = 0.0;
+        lfo.kscale = LfoSrc::Off; // explicitly off
+        let eff = apply_modulation(&fp, &lfo, &mic, &bands, 0.0);
+        assert!((eff.kscale - 2.0).abs() < 1e-5,
+            "LfoSrc::Off must not change the param");
+    }
+
+    // ── tour_lfo_preset wiring ────────────────────────────────────────────
+    #[test]
+    fn tour_lfo_preset_has_both_engines_configured() {
+        let p = tour_lfo_preset();
+        assert!(p.a.depth > 0.0 && p.a.rate > 0.0);
+        assert!(p.b.depth > 0.0 && p.b.rate > 0.0);
+        // At least one target routed to A and one to B
+        let any_a = [p.kscale, p.fb_saturation, p.color_shift].into_iter().any(|s| s == LfoSrc::A);
+        let any_b = [p.fb_zoom, p.fb_color_shift, p.fb_fold_angle].into_iter().any(|s| s == LfoSrc::B);
+        assert!(any_a && any_b,
+            "tour_lfo_preset should route some targets to A and some to B");
+    }
+
+    #[test]
+    fn tour_lfo_preset_fb_heavy_drives_feedback() {
+        let p = tour_lfo_preset_fb_heavy();
+        let fb_targets = [
+            p.fb_zoom, p.fb_decay, p.fb_color_shift, p.fb_saturation, p.fb_brightness,
+            p.fb_rotation, p.fb_offset_x, p.fb_offset_y, p.fb_fold_angle, p.fb_motion_blur,
+        ];
+        let active = fb_targets.iter().filter(|&&s| s != LfoSrc::Off).count();
+        assert!(active >= 6,
+            "fb_heavy preset should route at least 6 feedback params to an LFO, got {active}");
     }
 }
