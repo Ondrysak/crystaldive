@@ -1761,6 +1761,26 @@ fn mirror_uv(uv: vec2<f32>, mode: u32) -> vec2<f32> {
 }
 "#;
 
+// ── Blit color-pipeline math (CPU mirror of `fs_blit`) ────────────────────
+// The feedback accumulation is Rgba16Float (linear) and is blitted to an
+// sRGB swapchain view, which automatically applies the sRGB OETF on write.
+// The blit shader therefore MUST NOT pre-apply gamma — doing so produces a
+// "double gamma" that washes the picture to white. This Rust helper stays
+// in sync with `fs_blit` so tests can detect regressions.
+pub fn blit_pixel(linear: f32) -> f32 {
+    // Clamp HDR into LDR range; identity for [0,1]. sRGB encoding happens
+    // in the swapchain — do NOT raise to 1/2.2 here.
+    linear.clamp(0.0, 1.0)
+}
+
+/// IEC 61966-2-1 sRGB OETF (linear → encoded). Mirrors what an sRGB-format
+/// render target performs on write.
+pub fn srgb_encode(c: f32) -> f32 {
+    let c = c.clamp(0.0, 1.0);
+    if c <= 0.0031308 { 12.92 * c }
+    else { 1.055 * c.powf(1.0 / 2.4) - 0.055 }
+}
+
 pub const BLIT_SHADER: &str = r#"
 struct VOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> }
 @vertex fn vs_screen(@builtin(vertex_index) vi: u32) -> VOut {
@@ -1774,8 +1794,96 @@ struct VOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> }
 @group(0) @binding(0) var accum: texture_2d<f32>;
 @group(0) @binding(1) var smp: sampler;
 @fragment fn fs_blit(f: VOut) -> @location(0) vec4<f32> {
+    // accum is Rgba16Float (linear). Swapchain view is sRGB → it applies the
+    // sRGB OETF on write. Just clamp HDR overflow into LDR and pass through;
+    // any manual gamma here would double-encode and tint the picture white.
     let c = textureSample(accum, smp, f.uv).rgb;
-    let mapped = c / (c + vec3<f32>(1.0));
-    return vec4<f32>(pow(mapped, vec3<f32>(1.0/2.2)), 1.0);
+    return vec4<f32>(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
 }
 "#;
+
+// ── Tests for the color/blit pipeline ────────────────────────────────────
+#[cfg(test)]
+mod blit_tests {
+    use super::{blit_pixel, srgb_encode, BLIT_SHADER};
+
+    /// What a pixel looks like ON-SCREEN: linear value → fs_blit → sRGB OETF.
+    fn on_screen(linear: f32) -> f32 {
+        srgb_encode(blit_pixel(linear))
+    }
+
+    /// The non-feedback ("direct") path renders the field straight to the sRGB
+    /// swapchain — so the on-screen value is just sRGB(linear). The feedback
+    /// path must agree for LDR values; otherwise it looks tinted.
+    #[test]
+    fn feedback_blit_matches_direct_path_for_ldr_midgray() {
+        let direct = srgb_encode(0.5);
+        let fb     = on_screen(0.5);
+        assert!(
+            (fb - direct).abs() < 1e-4,
+            "BUG: feedback path mid-gray ({fb:.4}) does not match direct ({direct:.4}). \
+             If fb > direct + ~0.05, fs_blit is double-gamma-encoding."
+        );
+    }
+
+    #[test]
+    fn feedback_blit_matches_direct_path_for_dark_and_bright() {
+        for &x in &[0.05_f32, 0.18, 0.25, 0.5, 0.75, 0.95] {
+            let direct = srgb_encode(x);
+            let fb     = on_screen(x);
+            assert!(
+                (fb - direct).abs() < 1e-4,
+                "LDR linear {x:.2}: feedback={fb:.4}, direct={direct:.4}"
+            );
+        }
+    }
+
+    /// Regression guard: BLIT_SHADER must not contain `1.0/2.2` (the manual
+    /// gamma exponent that caused the whitish tint when the target is sRGB).
+    #[test]
+    fn blit_shader_does_not_apply_manual_gamma() {
+        assert!(
+            !BLIT_SHADER.contains("1.0/2.2") && !BLIT_SHADER.contains("1.0 / 2.2"),
+            "fs_blit must not pre-apply gamma — the sRGB swapchain encodes for us"
+        );
+    }
+
+    /// Regression guard: don't accidentally re-introduce Reinhard, which by
+    /// itself (without manual gamma) would darken LDR mid-grays.
+    #[test]
+    fn blit_shader_does_not_reinhard_tone_map() {
+        assert!(
+            !BLIT_SHADER.contains("c / (c + vec3"),
+            "fs_blit must not apply Reinhard for the LDR feedback pipeline"
+        );
+    }
+
+    /// HDR values >1 from additive blend modes must not blow up or appear
+    /// negative on screen — just clamp to white.
+    #[test]
+    fn feedback_blit_clamps_hdr_overflow() {
+        for &x in &[1.0_f32, 1.5, 5.0, 100.0] {
+            let v = on_screen(x);
+            assert!(
+                v >= 0.999 && v <= 1.0001,
+                "HDR linear {x} should clamp at sRGB 1.0, got {v:.4}"
+            );
+        }
+    }
+
+    /// Negative values from numerical edge cases must clamp to black, not wrap.
+    #[test]
+    fn feedback_blit_clamps_negative_to_black() {
+        let v = on_screen(-0.5);
+        assert!(v.abs() < 1e-6, "negative input must clamp to 0; got {v}");
+    }
+
+    /// Sanity-check on the sRGB OETF itself.
+    #[test]
+    fn srgb_encode_endpoints() {
+        assert!(srgb_encode(0.0).abs() < 1e-6);
+        assert!((srgb_encode(1.0) - 1.0).abs() < 1e-4);
+        // Mid-gray reference: linear 0.5 → ~0.7354 sRGB (well-known value).
+        assert!((srgb_encode(0.5) - 0.7354).abs() < 1e-3);
+    }
+}
