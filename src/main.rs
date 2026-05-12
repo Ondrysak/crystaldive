@@ -50,6 +50,7 @@ pub struct FieldParams {
     pub fb_saturation:  f32,
     pub fb_brightness:  f32,
     pub fb_blend_mode:  u32,
+    pub fb_motion_blur: f32,
 }
 
 impl Default for FieldParams {
@@ -62,6 +63,7 @@ impl Default for FieldParams {
             fb_zoom: 0.98, fb_offset_x: 0.0, fb_offset_y: 0.0,
             fb_rotation: 0.0, fb_decay: 0.85, fb_color_shift: 0.0, fb_inject: 1.0,
             fb_fold_angle: 0.0, fb_saturation: 1.0, fb_brightness: 1.0, fb_blend_mode: 0,
+            fb_motion_blur: 0.0,
         }
     }
 }
@@ -158,6 +160,7 @@ pub struct LfoParams {
     pub fb_brightness:  bool,
     pub fb_inject:      bool,
     pub fb_fold_angle:  bool,
+    pub fb_motion_blur: bool,
     // global
     pub rate:           f32,
     pub depth:          f32,
@@ -173,6 +176,7 @@ impl Default for LfoParams {
             fb_zoom: false, fb_decay: false, fb_offset_x: false, fb_offset_y: false,
             fb_rotation: false, fb_color_shift: false, fb_saturation: false,
             fb_brightness: false, fb_inject: false, fb_fold_angle: false,
+            fb_motion_blur: false,
             rate: 0.2, depth: 0.3, wave: LfoWave::Sine,
         }
     }
@@ -240,6 +244,7 @@ pub struct MicParams {
     pub fb_brightness:  MicSrc,
     pub fb_inject:      MicSrc,
     pub fb_fold_angle:  MicSrc,
+    pub fb_motion_blur: MicSrc,
     pub depth:          f32,
 }
 
@@ -253,6 +258,7 @@ impl Default for MicParams {
             fb_offset_y: MicSrc::Off, fb_rotation: MicSrc::Off, fb_color_shift: MicSrc::Off,
             fb_saturation: MicSrc::Off, fb_brightness: MicSrc::Off,
             fb_inject: MicSrc::Off, fb_fold_angle: MicSrc::Off,
+            fb_motion_blur: MicSrc::Off,
             depth: 0.5,
         }
     }
@@ -336,6 +342,7 @@ fn lerp_fp(a: &FieldParams, b: &FieldParams, t: f32) -> FieldParams {
         fb_saturation:  l(a.fb_saturation,  b.fb_saturation),
         fb_brightness:  l(a.fb_brightness,  b.fb_brightness),
         fb_blend_mode:  if t < 0.5 { a.fb_blend_mode } else { b.fb_blend_mode },
+        fb_motion_blur: l(a.fb_motion_blur,  b.fb_motion_blur),
     }
 }
 
@@ -566,6 +573,8 @@ fn randomize_fp(seed: f32) -> FieldParams {
         fb_offset_y:    (r(21.0) - 0.5) * 0.04,
         fb_fold_angle:  (r(22.0) - 0.5) * 2.0,
         fb_blend_mode:  (r(23.0) * 4.0) as u32, // modes 0-3 most useful
+        // Fraksl MotionBlur: ~40% chance of light trails, else off
+        fb_motion_blur: if r(24.0) > 0.6 { r(25.0) * 0.6 } else { 0.0 },
         ..FieldParams::default()
     }
 }
@@ -601,6 +610,7 @@ fn tour_lfo_preset() -> LfoParams {
         fb_saturation: true, fb_brightness: false,
         fb_rotation: true, fb_offset_x: false, fb_offset_y: false,
         fb_inject: false, fb_fold_angle: true,
+        fb_motion_blur: false,
         rate: 0.18, depth: 0.18, wave: LfoWave::Triangle,
     }
 }
@@ -613,6 +623,7 @@ fn tour_lfo_preset_fb_heavy() -> LfoParams {
         fb_saturation: true, fb_brightness: true,
         fb_rotation: true, fb_offset_x: true, fb_offset_y: true,
         fb_inject: false, fb_fold_angle: true,
+        fb_motion_blur: true,
         rate: 0.07, depth: 0.25, wave: LfoWave::Sine,
     }
 }
@@ -670,6 +681,7 @@ fn tour_random_field_params(t: f32, crystal_idx: usize) -> FieldParams {
         fb_offset_y:    morph(20.0, -0.02, 0.02),
         fb_fold_angle:  morph(21.0, -1.57, 1.57),
         fb_blend_mode:  (tour_rand(seed + 99.0) * 4.0) as u32,
+        fb_motion_blur: if tour_rand(seed + 101.0) > 0.55 { morph(22.0, 0.0, 0.55) } else { 0.0 },
         ..FieldParams::default()
     }
 }
@@ -712,6 +724,10 @@ fn tour_field_params(t: f32, crystal_idx: usize, style: TourStyle) -> FieldParam
         fb_offset_y:    0.012 * (TAU * (drift * 0.09 + local * 0.35)).cos(),
         fb_fold_angle:  1.2 * (TAU * (drift * 0.05 + local * 0.2)).sin(),
         fb_blend_mode:  (scene % 4) as u32,
+        // Curated tour: motion blur cycles in 1/4 of scenes (smooth tail feel)
+        fb_motion_blur: if (scene % 4) == 2 {
+            (0.20 + 0.18 * (TAU * (local * 0.4)).sin()).clamp(0.0, 0.6)
+        } else { 0.0 },
         ..FieldParams::default()
     }
 }
@@ -758,6 +774,7 @@ fn apply_modulation(
         fb_brightness:  modulate!(fp.fb_brightness,  lfo.fb_brightness,  mic.fb_brightness,  0.00, 2.00),
         fb_inject:      modulate!(fp.fb_inject,      lfo.fb_inject,      mic.fb_inject,      0.00, 1.00),
         fb_fold_angle:  modulate!(fp.fb_fold_angle,  lfo.fb_fold_angle,  mic.fb_fold_angle, -3.14, 3.14),
+        fb_motion_blur: modulate!(fp.fb_motion_blur, lfo.fb_motion_blur, mic.fb_motion_blur, 0.00, 0.95),
     }
 }
 
@@ -1253,7 +1270,8 @@ impl ApplicationHandler<UserEvent> for App {
                     fb_saturation:  fp_eff.fb_saturation,
                     fb_brightness:  fp_eff.fb_brightness,
                     fb_blend_mode:  fp_eff.fb_blend_mode,
-                    _pad:           [0.0; 3],
+                    fb_motion_blur: fp_eff.fb_motion_blur,
+                    _pad:           [0.0; 2],
                 };
 
                 // Snapshot search string
@@ -1412,6 +1430,7 @@ impl ApplicationHandler<UserEvent> for App {
                                 sld!(ui, "fb_hue   ", &mut fp.fb_color_shift, fp_eff.fb_color_shift, &mut lfo.fb_color_shift, &mut mic.fb_color_shift,-1.00_f32, 1.00_f32);
                                 sld!(ui, "fb_pan_x ", &mut fp.fb_offset_x,    fp_eff.fb_offset_x,    &mut lfo.fb_offset_x,    &mut mic.fb_offset_x,   -0.10_f32, 0.10_f32);
                                 sld!(ui, "fb_pan_y ", &mut fp.fb_offset_y,    fp_eff.fb_offset_y,    &mut lfo.fb_offset_y,    &mut mic.fb_offset_y,   -0.10_f32, 0.10_f32);
+                                sld!(ui, "fb_motion", &mut fp.fb_motion_blur, fp_eff.fb_motion_blur, &mut lfo.fb_motion_blur, &mut mic.fb_motion_blur,  0.00_f32, 0.95_f32);
                                 if fp.fb_mirror >= 5 {
                                     sld!(ui, "fold_ang ", &mut fp.fb_fold_angle, fp_eff.fb_fold_angle, &mut lfo.fb_fold_angle, &mut mic.fb_fold_angle, -3.14_f32, 3.14_f32);
                                 }

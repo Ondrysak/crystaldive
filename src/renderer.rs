@@ -78,7 +78,8 @@ pub struct FieldUniform {
     pub fb_saturation:  f32,   // 120
     pub fb_brightness:  f32,   // 124
     pub fb_blend_mode:  u32,   // 128
-    pub _pad:           [f32; 3],  // 132..144 — align to 144 (WGSL 16-byte struct align)
+    pub fb_motion_blur: f32,   // 132 — un-warped temporal smoothing (Fraksl MotionBlur)
+    pub _pad:           [f32; 2],  // 136..144 — align to 144 (WGSL 16-byte struct align)
 }                              // total 144 bytes
 
 pub struct FieldPipeline {
@@ -1612,6 +1613,7 @@ struct FU {
     fb_zoom: f32, fb_offset_x: f32, fb_offset_y: f32,
     fb_rotation: f32, fb_decay: f32, fb_color_shift: f32, fb_inject: f32,
     fb_fold_angle: f32, fb_saturation: f32, fb_brightness: f32, fb_blend_mode: u32,
+    fb_motion_blur: f32,
 }
 @group(0) @binding(0) var<uniform> u: FU;
 @group(0) @binding(1) var prev_accum: texture_2d<f32>;
@@ -1746,6 +1748,14 @@ fn mirror_uv(uv: vec2<f32>, mode: u32) -> vec2<f32> {
             mixed = (1.0 - 2.0*cur_col)*pa*pa + 2.0*cur_col*pa;
         }
         default: { mixed = mix(cur_col, prev_col, u.fb_decay); }
+    }
+    // Fraksl-style MotionBlur: un-warped temporal smoothing.
+    // Mixes the previous frame at the SAME pixel (no zoom/rot/mirror), so trails
+    // accumulate even when the feedback loop is geometrically active. fb_motion_blur
+    // in [0,1] — 0 disables, ~0.5 gives long tails, ~0.95 near-static smear.
+    if (u.fb_motion_blur > 0.001) {
+        let mb_prev = textureSample(prev_accum, smp, f.uv).rgb;
+        mixed = mix(mixed, mb_prev, u.fb_motion_blur);
     }
     return vec4<f32>(mixed, 1.0);
 }

@@ -34,6 +34,7 @@ struct FU {
     fb_saturation:  f32,
     fb_brightness:  f32,
     fb_blend_mode:  u32,
+    fb_motion_blur: f32,
 }
 @group(0) @binding(0) var<uniform> u: FU;
 @group(0) @binding(1) var g_tex: texture_2d<f32>;
