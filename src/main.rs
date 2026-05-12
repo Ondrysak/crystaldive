@@ -1080,6 +1080,7 @@ struct UiReq {
     seq_dur:           Option<f32>,
     fb_reset:          bool,
     fb_auto_toggle:    bool,
+    keymap_toggle:     bool,
     seq_play_mode_toggle: bool,
     seq_capture:          bool,
     seq_step_dur_mul:     Option<(usize, f32)>,
@@ -1118,6 +1119,7 @@ struct App {
     mic_params:   MicParams,
     audio:        Option<audio::AudioCapture>,
     fb_auto:      bool,
+    show_keymap:  bool,
 }
 
 enum UserEvent {
@@ -1148,6 +1150,7 @@ impl App {
             mic_params: MicParams::default(),
             audio: audio::AudioCapture::start(),
             fb_auto: false,
+            show_keymap: false,
         }
     }
 
@@ -1302,6 +1305,10 @@ impl ApplicationHandler<UserEvent> for App {
                             gpu.fb_clear = true;
                         }
                     }
+                    PhysicalKey::Code(KeyCode::Slash) => {
+                        // `?` (Shift+/) or plain `/` — toggle the keymap overlay
+                        self.show_keymap = !self.show_keymap;
+                    }
                     PhysicalKey::Code(KeyCode::BracketRight) => {
                         self.field_params.color_shift = (self.field_params.color_shift + 0.05) % 1.0;
                     }
@@ -1419,6 +1426,7 @@ impl ApplicationHandler<UserEvent> for App {
                 let cur_kpath_active  = self.kpath_active;
                 let cur_panel_open    = self.panel_open;
                 let cur_fb_auto       = self.fb_auto;
+                let cur_show_keymap   = self.show_keymap;
                 let cur_crystal_idx   = self.tour.crystal_idx;
                 let tour_fp = if self.tour.active {
                     Some(tour_field_params(t, self.tour.crystal_idx, self.tour_style))
@@ -1521,63 +1529,95 @@ impl ApplicationHandler<UserEvent> for App {
 
                 // The closure now captures &mut fp.* freely — no conflict with match below.
                 let ui_fn = |ctx: &egui::Context| {
+                    // ── Top toolbar — pinned transport controls ───────
+                    egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
+                        ui.add_space(2.0);
+                        ui.horizontal(|ui| {
+                            // Panel toggle (◀/▶)
+                            if ui.small_button(if req_panel_open { "◀" } else { "▶" }).clicked() {
+                                req.panel_toggle = true;
+                            }
+                            ui.separator();
+                            // Atoms / Field render mode
+                            if ui.selectable_label(cur_render_mode == RenderMode::Atoms, "ATOMS").clicked() {
+                                req.render_mode = Some(RenderMode::Atoms);
+                            }
+                            if ui.selectable_label(cur_render_mode == RenderMode::Field, "FIELD").clicked() {
+                                req.render_mode = Some(RenderMode::Field);
+                            }
+                            ui.separator();
+                            // Tour / sequencer transport
+                            let tour_lbl = if cur_tour_active { "■ TOUR" } else { "▶ TOUR" };
+                            let tour_col = if cur_tour_active {
+                                egui::Color32::from_rgb(140, 255, 140)
+                            } else { egui::Color32::from_gray(220) };
+                            if ui.add(egui::Button::new(
+                                egui::RichText::new(tour_lbl).color(tour_col)
+                            )).clicked() { req.tour_toggle = true; }
+                            if ui.small_button(cur_tour_style.label()).clicked() {
+                                req.tour_style_toggle = true;
+                            }
+                            let seq_lbl = if cur_seq_active { "■ SEQ" } else { "▶ SEQ" };
+                            let seq_col = if cur_seq_active {
+                                egui::Color32::from_rgb(180, 140, 255)
+                            } else { egui::Color32::from_gray(220) };
+                            if ui.add(egui::Button::new(
+                                egui::RichText::new(seq_lbl).color(seq_col)
+                            )).clicked() { req.seq_toggle = true; }
+                            ui.separator();
+                            // K-path walk
+                            let kp_lbl = if cur_kpath_active { "■ K" } else { "▶ K" };
+                            if ui.small_button(kp_lbl).clicked() { req.kpath_toggle = true; }
+                            ui.separator();
+                            // Feedback auto-pilot
+                            let auto_col = if cur_fb_auto {
+                                egui::Color32::from_rgb(255, 180, 80)
+                            } else { egui::Color32::from_gray(180) };
+                            if ui.add(egui::Button::new(
+                                egui::RichText::new(if cur_fb_auto { "■ FB AUTO" } else { "□ FB AUTO" })
+                                    .color(auto_col)
+                            )).clicked() { req.fb_auto_toggle = true; }
+                            ui.separator();
+                            // Right-aligned: screenshot + help
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                let help_col = if cur_show_keymap {
+                                    egui::Color32::from_rgb(160, 200, 255)
+                                } else { egui::Color32::from_gray(180) };
+                                if ui.add(egui::Button::new(
+                                    egui::RichText::new("?").color(help_col).monospace()
+                                )).on_hover_text("Keyboard shortcuts (?, /)").clicked() {
+                                    req.keymap_toggle = true;
+                                }
+                                if ui.small_button("📷").on_hover_text("Screenshot").clicked() {
+                                    req.screenshot = true;
+                                }
+                            });
+                        });
+                        ui.add_space(2.0);
+                    });
+
                     // Side panel
                     if req_panel_open {
                         egui::SidePanel::left("ctrl")
                             .min_width(260.0).max_width(300.0)
                             .resizable(false)
                             .show(ctx, |ui| {
-                                ui.heading("Crystal Field Synthesizer");
-                                ui.separator();
-
-                                // Crystal library
-                                ui.label(egui::RichText::new("CRYSTAL LIBRARY")
-                                    .small().color(egui::Color32::from_rgb(120, 120, 160)));
-                                ui.text_edit_singleline(&mut search);
-                                let q = search.to_ascii_lowercase();
-
-                                egui::ScrollArea::vertical()
-                                    .max_height(180.0)
-                                    .show(ui, |ui| {
-                                        for (label, color, defs) in &groups {
-                                            ui.colored_label(*color, *label);
-                                            for def in defs.iter() {
-                                                if !q.is_empty() && !def.name.to_ascii_lowercase().contains(&q) {
-                                                    continue;
-                                                }
-                                                let flat_idx = all_defs.iter().position(|d| std::ptr::eq(*d, def as &CrystalDef));
-                                                let is_sel = flat_idx == Some(cur_crystal_idx);
-                                                let lbl = egui::RichText::new(format!("  {}", def.name))
-                                                    .color(if is_sel {
-                                                        egui::Color32::from_rgb(200, 200, 255)
-                                                    } else {
-                                                        egui::Color32::from_rgb(150, 150, 190)
-                                                    });
-                                                if ui.selectable_label(is_sel, lbl).clicked() {
-                                                    req.switch_to = flat_idx;
-                                                }
-                                            }
-                                        }
+                                // Compact header — crystal name + system on one line
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("◇")
+                                        .heading().color(egui::Color32::from_rgb(160, 170, 220)));
+                                    ui.vertical(|ui| {
+                                        ui.label(egui::RichText::new(cur_crystal_name)
+                                            .strong().size(13.0));
+                                        ui.label(egui::RichText::new(cur_sys_name)
+                                            .small().color(egui::Color32::from_gray(150)));
                                     });
-
-                                ui.separator();
-
-                                // Render mode buttons
-                                ui.label(egui::RichText::new("RENDER MODE")
-                                    .small().color(egui::Color32::from_rgb(120, 120, 160)));
-                                ui.horizontal_wrapped(|ui| {
-                                    for (i, name) in MODE_NAMES.iter().enumerate() {
-                                        if ui.selectable_label(fp.mode == i as u32, *name).clicked() {
-                                            fp.mode = i as u32;
-                                        }
-                                    }
                                 });
-
                                 ui.separator();
 
-                                // Sliders — [~] LFO  [·/A/B/M/T] mic  label  [====slider====]  eff
-                                ui.label(egui::RichText::new("FIELD PARAMETERS")
-                                    .small().color(egui::Color32::from_rgb(120, 120, 160)));
+                                // Shared slider macro for both Field and Feedback sections.
+                                // Defined here in the side-panel scope so sibling CollapsingHeader
+                                // closures (Field, Feedback) can both reach it.
                                 macro_rules! sld {
                                     ($ui:expr, $label:literal, $val:expr, $eff:expr,
                                      $lfo_src:expr, $mic_src:expr, $min:expr, $max:expr) => {
@@ -1590,7 +1630,6 @@ impl ApplicationHandler<UserEvent> for App {
                                             ).min_size(egui::vec2(18.0, 18.0))).clicked() {
                                                 *$lfo_src = (*$lfo_src).next();
                                             }
-
                                             // [·/A/B/M/T] mic source — cycles on click
                                             let mc = (*$mic_src).color();
                                             let ml = (*$mic_src).label();
@@ -1600,12 +1639,9 @@ impl ApplicationHandler<UserEvent> for App {
                                                 let ns = (*$mic_src).next();
                                                 *$mic_src = ns;
                                             }
-
                                             ui.label(egui::RichText::new($label).small());
                                             ui.add(egui::Slider::new($val, $min..=$max)
                                                 .show_value(false));
-
-                                            // effective value: dim if same as base, orange if modulated
                                             let eff_v: f32 = $eff;
                                             let base_v: f32 = *$val;
                                             let modulated = (eff_v - base_v).abs() > 0.001;
@@ -1620,6 +1656,64 @@ impl ApplicationHandler<UserEvent> for App {
                                         });
                                     }
                                 }
+
+                                // Crystal library (collapsible)
+                                egui::CollapsingHeader::new(egui::RichText::new("🔍 Crystal library")
+                                    .color(egui::Color32::from_rgb(150, 160, 200)))
+                                    .id_source("sec_library").default_open(false)
+                                    .show(ui, |ui| {
+                                        ui.text_edit_singleline(&mut search);
+                                        let q = search.to_ascii_lowercase();
+                                        egui::ScrollArea::vertical()
+                                            .max_height(220.0)
+                                            .show(ui, |ui| {
+                                                for (label, color, defs) in &groups {
+                                                    ui.colored_label(*color, *label);
+                                                    for def in defs.iter() {
+                                                        if !q.is_empty() && !def.name.to_ascii_lowercase().contains(&q) {
+                                                            continue;
+                                                        }
+                                                        let flat_idx = all_defs.iter().position(|d| std::ptr::eq(*d, def as &CrystalDef));
+                                                        let is_sel = flat_idx == Some(cur_crystal_idx);
+                                                        let lbl = egui::RichText::new(format!("  {}", def.name))
+                                                            .color(if is_sel {
+                                                                egui::Color32::from_rgb(200, 200, 255)
+                                                            } else {
+                                                                egui::Color32::from_rgb(150, 150, 190)
+                                                            });
+                                                        if ui.selectable_label(is_sel, lbl).clicked() {
+                                                            req.switch_to = flat_idx;
+                                                        }
+                                                    }
+                                                }
+                                            });
+                                    });
+
+                                // Field params (collapsible, open by default)
+                                egui::CollapsingHeader::new(egui::RichText::new("🎨 Field")
+                                    .color(egui::Color32::from_rgb(180, 200, 200)))
+                                    .id_source("sec_field").default_open(true)
+                                    .show(ui, |ui| {
+                                        // Compact mode picker: ComboBox + arrow buttons
+                                        ui.horizontal(|ui| {
+                                            ui.label(egui::RichText::new("mode").small().monospace());
+                                            egui::ComboBox::from_id_source("mode_combo")
+                                                .selected_text(MODE_NAMES[fp.mode as usize])
+                                                .width(160.0)
+                                                .show_ui(ui, |ui| {
+                                                    for (i, name) in MODE_NAMES.iter().enumerate() {
+                                                        ui.selectable_value(&mut fp.mode, i as u32, *name);
+                                                    }
+                                                });
+                                            if ui.small_button("◀").clicked() {
+                                                let n = MODE_NAMES.len() as u32;
+                                                fp.mode = (fp.mode + n - 1) % n;
+                                            }
+                                            if ui.small_button("▶").clicked() {
+                                                fp.mode = (fp.mode + 1) % MODE_NAMES.len() as u32;
+                                            }
+                                        });
+                                        ui.add_space(2.0);
                                 sld!(ui, "kscale   ", &mut fp.kscale,      fp_eff.kscale,      &mut lfo.kscale,      &mut mic.kscale,      0.1_f32, 5.0_f32);
                                 sld!(ui, "speed    ", &mut fp.speed,       fp_eff.speed,       &mut lfo.speed,       &mut mic.speed,       0.0_f32, 2.0_f32);
                                 sld!(ui, "field_mix", &mut fp.field_mix,   fp_eff.field_mix,   &mut lfo.field_mix,   &mut mic.field_mix,   0.0_f32, 1.0_f32);
@@ -1629,12 +1723,13 @@ impl ApplicationHandler<UserEvent> for App {
                                 sld!(ui, "w_lattice", &mut fp.w_lattice,   fp_eff.w_lattice,   &mut lfo.w_lattice,   &mut mic.w_lattice,   0.0_f32, 2.0_f32);
                                 sld!(ui, "w_motif  ", &mut fp.w_motif,     fp_eff.w_motif,     &mut lfo.w_motif,     &mut mic.w_motif,     0.0_f32, 2.0_f32);
                                 sld!(ui, "w_band   ", &mut fp.w_band,      fp_eff.w_band,      &mut lfo.w_band,      &mut mic.w_band,      0.0_f32, 2.0_f32);
-
-                                ui.separator();
+                                    }); // end Field collapsible
 
                                 // ── FEEDBACK / SELF-SIMILARITY ────────────────────────────
-                                ui.label(egui::RichText::new("FEEDBACK / SELF-SIMILARITY")
-                                    .small().color(egui::Color32::from_rgb(220, 140, 80)));
+                                egui::CollapsingHeader::new(egui::RichText::new("🔁 Feedback")
+                                    .color(egui::Color32::from_rgb(220, 140, 80)))
+                                    .id_source("sec_feedback").default_open(true)
+                                    .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     let fb_label = if fp.fb_enabled { "■ ON" } else { "□ OFF" };
                                     if ui.small_button(fb_label).clicked() {
@@ -1673,375 +1768,395 @@ impl ApplicationHandler<UserEvent> for App {
                                 if fp.fb_mirror >= 5 {
                                     sld!(ui, "fold_ang ", &mut fp.fb_fold_angle, fp_eff.fb_fold_angle, &mut lfo.fb_fold_angle, &mut mic.fb_fold_angle, -3.14_f32, 3.14_f32);
                                 }
+                                    }); // end Feedback collapsible
+
+                                // ── MODULATION (LFO A/B side-by-side + mic) ───────────────
+                                egui::CollapsingHeader::new(egui::RichText::new("🌊 Modulation")
+                                    .color(egui::Color32::from_rgb(150, 200, 200)))
+                                    .id_source("sec_modulation").default_open(false)
+                                    .show(ui, |ui| {
+                                        // Compact two-column LFO row.
+                                        // Each column shows: wave button, rate / depth / phase sliders.
+                                        let lfo_col = |ui: &mut egui::Ui, name: &str, color: egui::Color32, eng: &mut LfoEngine| {
+                                            ui.vertical(|ui| {
+                                                ui.set_min_width(130.0);
+                                                ui.horizontal(|ui| {
+                                                    ui.label(egui::RichText::new(name).strong().color(color));
+                                                    if ui.small_button(eng.wave.label()).clicked() {
+                                                        eng.wave = eng.wave.next();
+                                                    }
+                                                });
+                                                ui.horizontal(|ui| {
+                                                    ui.label(egui::RichText::new("r").small().monospace());
+                                                    ui.add(egui::Slider::new(&mut eng.rate, 0.01..=4.0)
+                                                        .show_value(true).suffix(" Hz"));
+                                                });
+                                                ui.horizontal(|ui| {
+                                                    ui.label(egui::RichText::new("d").small().monospace());
+                                                    ui.add(egui::Slider::new(&mut eng.depth, 0.0..=1.0).show_value(false));
+                                                });
+                                                ui.horizontal(|ui| {
+                                                    ui.label(egui::RichText::new("φ").small().monospace());
+                                                    ui.add(egui::Slider::new(&mut eng.phase, 0.0..=1.0).show_value(false));
+                                                });
+                                            });
+                                        };
+                                        ui.horizontal(|ui| {
+                                            lfo_col(ui, "LFO A", egui::Color32::from_rgb(80, 220, 120), &mut lfo.a);
+                                            ui.separator();
+                                            lfo_col(ui, "LFO B", egui::Color32::from_rgb(120, 180, 255), &mut lfo.b);
+                                        });
+
+                                        ui.add_space(4.0);
+
+                                        // Mic: one-row band meters + depth slider when live
+                                        let mic_col = if mic_active {
+                                            egui::Color32::from_rgb(255, 140, 80)
+                                        } else { egui::Color32::from_gray(100) };
+                                        ui.horizontal(|ui| {
+                                            ui.label(egui::RichText::new(if mic_active { "🎤 MIC" } else { "🎤 — no device" })
+                                                .small().color(mic_col));
+                                            if mic_active {
+                                                ui.add(egui::Slider::new(&mut mic.depth, 0.0..=2.0)
+                                                    .show_value(true).text("depth"));
+                                            }
+                                        });
+                                        if mic_active {
+                                            ui.horizontal(|ui| {
+                                                let mut band = |ui: &mut egui::Ui, lbl: &str, c: egui::Color32, v: f32| {
+                                                    ui.label(egui::RichText::new(lbl).small().color(c).monospace());
+                                                    ui.add(egui::ProgressBar::new(v).desired_width(28.0));
+                                                };
+                                                band(ui, "A", egui::Color32::from_rgb(220,220,220), cur_bands.amplitude);
+                                                band(ui, "B", egui::Color32::from_rgb(255,80,80),   cur_bands.bass);
+                                                band(ui, "M", egui::Color32::from_rgb(80,220,120),  cur_bands.mid);
+                                                band(ui, "T", egui::Color32::from_rgb(80,160,255),  cur_bands.treble);
+                                            });
+                                            ui.label(egui::RichText::new("Tip: click · on a slider to route a band.")
+                                                .small().color(egui::Color32::from_gray(130)));
+                                        }
+                                    }); // end Modulation collapsible
 
                                 ui.separator();
 
-                                // LFO A section
-                                ui.label(egui::RichText::new(format!("LFO A  ({})", lfo.a.wave.label()))
-                                    .small().color(egui::Color32::from_rgb(80, 220, 120)));
+                                // K-path readout (toggle is in the top toolbar)
                                 ui.horizontal(|ui| {
-                                    if ui.small_button(lfo.a.wave.label()).clicked() {
-                                        lfo.a.wave = lfo.a.wave.next();
-                                    }
-                                    ui.label(egui::RichText::new("rate").small());
-                                    ui.add(egui::Slider::new(&mut lfo.a.rate, 0.01..=4.0)
-                                        .show_value(true).suffix(" Hz"));
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("depth").small());
-                                    ui.add(egui::Slider::new(&mut lfo.a.depth, 0.0..=1.0).show_value(true));
-                                    ui.label(egui::RichText::new("phase").small());
-                                    ui.add(egui::Slider::new(&mut lfo.a.phase, 0.0..=1.0).show_value(true));
-                                });
-
-                                // LFO B section
-                                ui.label(egui::RichText::new(format!("LFO B  ({})", lfo.b.wave.label()))
-                                    .small().color(egui::Color32::from_rgb(120, 180, 255)));
-                                ui.horizontal(|ui| {
-                                    if ui.small_button(lfo.b.wave.label()).clicked() {
-                                        lfo.b.wave = lfo.b.wave.next();
-                                    }
-                                    ui.label(egui::RichText::new("rate").small());
-                                    ui.add(egui::Slider::new(&mut lfo.b.rate, 0.01..=4.0)
-                                        .show_value(true).suffix(" Hz"));
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("depth").small());
-                                    ui.add(egui::Slider::new(&mut lfo.b.depth, 0.0..=1.0).show_value(true));
-                                    ui.label(egui::RichText::new("phase").small());
-                                    ui.add(egui::Slider::new(&mut lfo.b.phase, 0.0..=1.0).show_value(true));
-                                });
-
-                                ui.separator();
-
-                                // Mic section
-                                let mic_col = if mic_active {
-                                    egui::Color32::from_rgb(255, 140, 80)
-                                } else {
-                                    egui::Color32::from_gray(100)
-                                };
-                                ui.label(egui::RichText::new(if mic_active { "MIC  (live)" } else { "MIC  (no device)" })
-                                    .small().color(mic_col));
-                                if mic_active {
-                                    // Band meters
-                                    ui.horizontal(|ui| {
-                                        ui.label(egui::RichText::new("A").small()
-                                            .color(egui::Color32::from_rgb(220,220,220)));
-                                        ui.add(egui::ProgressBar::new(cur_bands.amplitude).desired_width(38.0));
-                                        ui.label(egui::RichText::new("B").small()
-                                            .color(egui::Color32::from_rgb(255,80,80)));
-                                        ui.add(egui::ProgressBar::new(cur_bands.bass).desired_width(38.0));
-                                        ui.label(egui::RichText::new("M").small()
-                                            .color(egui::Color32::from_rgb(80,220,120)));
-                                        ui.add(egui::ProgressBar::new(cur_bands.mid).desired_width(38.0));
-                                        ui.label(egui::RichText::new("T").small()
-                                            .color(egui::Color32::from_rgb(80,160,255)));
-                                        ui.add(egui::ProgressBar::new(cur_bands.treble).desired_width(38.0));
-                                    });
-                                    ui.horizontal(|ui| {
-                                        ui.label(egui::RichText::new("depth").small());
-                                        ui.add(egui::Slider::new(&mut mic.depth, 0.0..=2.0).show_value(true));
-                                    });
-                                    ui.label(egui::RichText::new("Click · on a slider to pick source")
-                                        .small().color(egui::Color32::from_gray(130)));
-                                }
-
-                                ui.separator();
-
-                                // K-path controls
-                                ui.label(egui::RichText::new("K-PATH")
-                                    .small().color(egui::Color32::from_rgb(120, 120, 160)));
-                                ui.horizontal(|ui| {
-                                    ui.monospace(format!("k = {cur_kpt_label}"));
-                                    if ui.button(if cur_kpath_active { "■ STOP" } else { "▶ WALK" }).clicked() {
-                                        req.kpath_toggle = true;
-                                    }
+                                    ui.label(egui::RichText::new("k =").small()
+                                        .color(egui::Color32::from_gray(150)));
+                                    ui.monospace(cur_kpt_label.to_string());
                                 });
 
                                 ui.separator();
 
-                                // Mode toggle
-                                ui.horizontal(|ui| {
-                                    if ui.selectable_label(cur_render_mode == RenderMode::Atoms, "ATOMS").clicked() {
-                                        req.render_mode = Some(RenderMode::Atoms);
-                                    }
-                                    if ui.selectable_label(cur_render_mode == RenderMode::Field, "FIELD").clicked() {
-                                        req.render_mode = Some(RenderMode::Field);
-                                    }
-                                });
-
-                                ui.separator();
-
-                                // Tour controls
+                                // Crystal nav (transport: ATOMS/FIELD, TOUR, ?-help are all in toolbar)
                                 ui.horizontal(|ui| {
                                     if ui.button("◀ PREV").clicked() { req.prev = true; }
-                                    let tour_lbl = if cur_tour_active { "■ STOP" } else { "▶ TOUR" };
-                                    if ui.button(tour_lbl).clicked() { req.tour_toggle = true; }
-                                    if ui.button(cur_tour_style.label()).clicked() { req.tour_style_toggle = true; }
                                     if ui.button("NEXT ▶").clicked() { req.next = true; }
                                 });
 
                                 ui.separator();
 
-                                // Sequencer controls (panel section)
-                                ui.label(egui::RichText::new("SEQUENCER")
-                                    .small().color(egui::Color32::from_rgb(180, 140, 255)));
-                                ui.horizontal(|ui| {
-                                    let seq_lbl = if cur_seq_active { "■ STOP" } else { "▶ SEQ" };
-                                    if ui.button(seq_lbl).clicked() { req.seq_toggle = true; }
-                                    let man_col = if cur_seq_manual {
-                                        egui::Color32::from_rgb(255, 200, 60)
-                                    } else { egui::Color32::from_gray(150) };
-                                    if ui.add(egui::Button::new(
-                                        egui::RichText::new("MANUAL").color(man_col)
-                                    )).clicked() { req.seq_manual_toggle = true; }
-                                    if cur_seq_manual {
-                                        if ui.button("◀").clicked() { req.seq_manual_step = Some(-1); }
-                                        if ui.button("▶").clicked() { req.seq_manual_step = Some(1); }
-                                    }
-                                });
-                                ui.horizontal(|ui| {
-                                    if ui.button(cur_seq_curve.label()).clicked() {
-                                        req.seq_curve = Some(cur_seq_curve.next());
-                                    }
-                                    let pm_col = egui::Color32::from_rgb(180, 200, 255);
-                                    if ui.add(egui::Button::new(
-                                        egui::RichText::new(cur_seq_play_mode.label()).color(pm_col)
-                                    )).clicked() { req.seq_play_mode_toggle = true; }
-                                    ui.label(egui::RichText::new("step").small());
-                                    let mut dur = cur_seq_dur;
-                                    if ui.add(egui::Slider::new(&mut dur, 0.5_f32..=8.0_f32)
-                                        .show_value(true).suffix("s")).changed() {
-                                        req.seq_dur = Some(dur);
-                                    }
-                                });
-                                ui.horizontal(|ui| {
-                                    for (i, (name, _)) in SEQ_PRESETS.iter().enumerate() {
-                                        if ui.small_button(*name).clicked() { req.seq_preset = Some(i); }
-                                    }
-                                });
-                                ui.horizontal(|ui| {
-                                    let n = cur_seq_steps.len();
-                                    ui.label(egui::RichText::new(format!("{n}/32 steps")).small()
-                                        .color(egui::Color32::from_gray(160)));
-                                    let can_add = n < 32;
-                                    let can_del = n > 1 && cur_seq_selected.is_some();
-                                    if ui.add_enabled(can_add, egui::Button::new("+")).clicked() {
-                                        req.seq_add_step = true;
-                                    }
-                                    if ui.add_enabled(can_del, egui::Button::new("−")).clicked() {
-                                        req.seq_remove_step = true;
-                                    }
-                                    if ui.add_enabled(can_add, egui::Button::new(
-                                        egui::RichText::new("📸 CAPTURE")
-                                            .color(egui::Color32::from_rgb(255, 200, 120))
-                                    )).clicked() { req.seq_capture = true; }
-                                });
-
-                                if ui.button("📷 Screenshot").clicked() {
-                                    req.screenshot = true;
-                                }
                             });
                     }
 
-                    // Panel toggle button
-                    egui::Area::new("panel_toggle".into())
-                        .fixed_pos(egui::pos2(4.0, 4.0))
+                    // ── Consolidated bottom sequencer panel ─────────────
+                    // One source of truth: transport, grid, presets, and (when a
+                    // step is selected) an inline editor — all in a single dock.
+                    egui::TopBottomPanel::bottom("sequencer_panel")
+                        .resizable(false)
                         .show(ctx, |ui| {
-                            if ui.button(if req_panel_open { "◀" } else { "▶" }).clicked() {
-                                req.panel_toggle = true;
-                            }
-                        });
-
-                    // Sequencer grid (bottom bar)
-                    if cur_seq_active || !cur_seq_steps.is_empty() {
-                        egui::Area::new("seq_grid".into())
-                            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -8.0))
-                            .show(ctx, |ui| {
-                                ui.visuals_mut().widgets.inactive.bg_fill =
-                                    egui::Color32::from_rgba_unmultiplied(10, 8, 20, 220);
-                                egui::Frame::none()
-                                    .fill(egui::Color32::from_rgba_unmultiplied(12, 10, 24, 220))
-                                    .rounding(6.0)
-                                    .inner_margin(egui::vec2(8.0, 6.0))
-                                    .show(ui, |ui| {
-                                        let n = cur_seq_steps.len();
-                                        let cell_w = (440.0_f32 / n as f32).min(38.0).max(18.0);
-                                        let cell_h = 40.0_f32;
-
-                                        // Pass 1: allocate rects, collect interaction
-                                        let cells = ui.horizontal(|ui| {
-                                            let mut cells: Vec<(usize, egui::Rect, bool, bool, bool, u32)> = Vec::new();
-                                            for (i, &(is_cur, muted, is_sel, mode)) in cur_seq_steps.iter().enumerate() {
-                                                let (rect, resp) = ui.allocate_exact_size(
-                                                    egui::vec2(cell_w, cell_h),
-                                                    egui::Sense::click(),
-                                                );
-                                                if resp.double_clicked() {
-                                                    req.seq_randomize = Some(i);
-                                                } else if resp.clicked() {
-                                                    req.seq_select_step = Some(i);
-                                                }
-                                                cells.push((i, rect, is_cur, muted, is_sel, mode));
-                                                ui.add_space(3.0);
-                                            }
-                                            cells
-                                        }).inner;
-
-                                        // Pass 2: paint
-                                        let painter = ui.painter();
-                                        for &(_i, rect, is_cur, muted, is_sel, mode) in &cells {
-                                            let base_col = mode_color(mode);
-                                            let dim = if muted { 4 } else { 1 };
-                                            let fill = egui::Color32::from_rgba_unmultiplied(
-                                                base_col.r() / dim, base_col.g() / dim, base_col.b() / dim, 210);
-                                            painter.rect_filled(rect, 4.0, fill);
-
-                                            if is_cur && cur_seq_active {
-                                                let prog_rect = egui::Rect::from_min_size(
-                                                    rect.min,
-                                                    egui::vec2(rect.width() * cur_seq_progress, rect.height()),
-                                                );
-                                                painter.rect_filled(prog_rect, 4.0,
-                                                    egui::Color32::from_white_alpha(50));
-                                                painter.rect_stroke(rect, 4.0,
-                                                    egui::Stroke::new(2.0, egui::Color32::WHITE));
-                                            }
-
-                                            if is_sel {
-                                                painter.rect_stroke(rect, 4.0,
-                                                    egui::Stroke::new(1.5,
-                                                        egui::Color32::from_rgb(255, 210, 60)));
-                                            }
-
-                                            if muted {
-                                                let s = egui::Stroke::new(1.5, egui::Color32::from_gray(80));
-                                                painter.line_segment([rect.min, rect.max], s);
-                                                painter.line_segment(
-                                                    [egui::pos2(rect.max.x, rect.min.y),
-                                                     egui::pos2(rect.min.x, rect.max.y)], s);
-                                            }
-
-                                            let label = MODE_NAMES[mode as usize].chars().take(3).collect::<String>();
-                                            let txt_col = if muted { egui::Color32::from_gray(70) }
-                                                else if is_cur && cur_seq_active { egui::Color32::WHITE }
-                                                else { egui::Color32::from_gray(220) };
-                                            painter.text(rect.center(), egui::Align2::CENTER_CENTER,
-                                                label, egui::FontId::monospace(9.0), txt_col);
-                                        }
-
-                                        // Status row
-                                        ui.horizontal(|ui| {
-                                            let status_col = if cur_seq_active {
-                                                egui::Color32::from_rgb(140, 255, 140)
-                                            } else {
-                                                egui::Color32::from_gray(120)
-                                            };
-                                            ui.label(egui::RichText::new(
-                                                if cur_seq_active { "▶ SEQ" } else { "■ SEQ" }
-                                            ).monospace().size(10.0).color(status_col));
-                                            ui.label(egui::RichText::new(
-                                                format!("  {}  {:.1}s", cur_seq_curve.label(), cur_seq_dur)
-                                            ).monospace().size(10.0).color(egui::Color32::from_gray(160)));
-                                        });
-                                    });
-                            });
-                    }
-
-                    // Step editor window
-                    if let Some((edit_idx, ref mut ep)) = seq_selected_edit {
-                        egui::Window::new(format!("STEP {}  —  {}", edit_idx + 1, MODE_NAMES[ep.mode as usize]))
-                            .id(egui::Id::new("step_editor"))
-                            .collapsible(false)
-                            .resizable(false)
-                            .default_width(220.0)
-                            .show(ctx, |ui| {
-                                // Mode selector
-                                egui::ComboBox::from_label("mode")
-                                    .selected_text(MODE_NAMES[ep.mode as usize])
-                                    .show_ui(ui, |ui| {
-                                        for (i, name) in MODE_NAMES.iter().enumerate() {
-                                            ui.selectable_value(&mut ep.mode, i as u32, *name);
-                                        }
-                                    });
-                                ui.separator();
-                                // Param sliders
-                                macro_rules! esl {
-                                    ($ui:expr, $label:expr, $val:expr, $min:expr, $max:expr) => {
-                                        $ui.horizontal(|ui| {
-                                            ui.label(egui::RichText::new($label).small().monospace());
-                                            ui.add(egui::Slider::new($val, $min..=$max).show_value(true));
-                                        });
-                                    }
-                                }
-                                esl!(ui, "kscale   ", &mut ep.kscale,      0.1_f32, 5.0_f32);
-                                esl!(ui, "speed    ", &mut ep.speed,       0.0_f32, 2.0_f32);
-                                esl!(ui, "field_mix", &mut ep.field_mix,   0.0_f32, 1.0_f32);
-                                esl!(ui, "iso_level", &mut ep.iso_level,   0.0_f32, 1.0_f32);
-                                esl!(ui, "color_sft", &mut ep.color_shift, 0.0_f32, 1.0_f32);
-                                esl!(ui, "zoom     ", &mut ep.zoom,        0.2_f32, 5.0_f32);
-                                esl!(ui, "w_lattice", &mut ep.w_lattice,   0.0_f32, 2.0_f32);
-                                esl!(ui, "w_motif  ", &mut ep.w_motif,     0.0_f32, 2.0_f32);
-                                esl!(ui, "w_band   ", &mut ep.w_band,      0.0_f32, 2.0_f32);
-                                ui.separator();
-                                ui.horizontal(|ui| {
-                                    let is_muted = cur_seq_steps.get(edit_idx)
-                                        .map(|&(_, m, _, _)| m).unwrap_or(false);
-                                    let mute_col = if is_muted {
-                                        egui::Color32::from_rgb(255, 80, 80)
-                                    } else { egui::Color32::from_gray(160) };
-                                    if ui.add(egui::Button::new(
-                                        egui::RichText::new(if is_muted { "MUTED" } else { "MUTE" }).color(mute_col)
-                                    )).clicked() { req.seq_mute_step = Some(edit_idx); }
-                                    if ui.button("RAND").clicked() { req.seq_randomize = Some(edit_idx); }
-                                });
-
-                                // Per-step timing/curve/prob overrides
-                                if let Some((mut dm, curve_ov, mut pr)) = seq_selected_extras {
-                                    ui.separator();
-                                    ui.label(egui::RichText::new("step timing")
-                                        .small().color(egui::Color32::from_rgb(180, 200, 255)));
-                                    ui.horizontal(|ui| {
-                                        ui.label(egui::RichText::new("dur×").small().monospace());
-                                        if ui.add(egui::Slider::new(&mut dm, 0.25_f32..=4.0_f32)
-                                            .show_value(true)).changed() {
-                                            req.seq_step_dur_mul = Some((edit_idx, dm));
-                                        }
-                                    });
-                                    ui.horizontal(|ui| {
-                                        ui.label(egui::RichText::new("curve").small().monospace());
-                                        let lbl = match curve_ov {
-                                            Some(c) => c.label(),
-                                            None    => "(global)",
-                                        };
-                                        if ui.small_button(lbl).clicked() {
-                                            req.seq_step_curve_cycle = Some(edit_idx);
-                                        }
-                                    });
-                                    ui.horizontal(|ui| {
-                                        ui.label(egui::RichText::new("prob ").small().monospace());
-                                        if ui.add(egui::Slider::new(&mut pr, 0.0_f32..=1.0_f32)
-                                            .show_value(true)).changed() {
-                                            req.seq_step_prob = Some((edit_idx, pr));
-                                        }
-                                    });
-                                }
-                            });
-                    }
-
-                    // OSD
-                    let osd_offset = if cur_seq_active { -78.0 } else { -12.0 };
-                    egui::Area::new("osd".into())
-                        .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, osd_offset))
-                        .show(ctx, |ui| {
-                            ui.visuals_mut().override_text_color =
-                                Some(egui::Color32::from_rgba_unmultiplied(210, 210, 255, 210));
-                            ui.label(
-                                egui::RichText::new(format!(
+                            ui.add_space(2.0);
+                            // ── Status line (replaces the old bottom OSD)
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(format!(
                                     "{cur_crystal_name}  ·  {cur_sys_name}  ·  {cur_mode_name}  ·  k={cur_kpt_label}"
                                 )).monospace().size(11.0)
-                            );
+                                  .color(egui::Color32::from_rgba_unmultiplied(210, 210, 255, 210)));
+                            });
+
+                            // ── Inline step editor — only when a step is selected
+                            if let Some((edit_idx, ref mut ep)) = seq_selected_edit {
+                                let is_muted = cur_seq_steps.get(edit_idx)
+                                    .map(|&(_, m, _, _)| m).unwrap_or(false);
+                                egui::Frame::none()
+                                    .fill(egui::Color32::from_rgba_unmultiplied(20, 16, 36, 200))
+                                    .rounding(4.0)
+                                    .inner_margin(egui::vec2(8.0, 6.0))
+                                    .show(ui, |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.label(egui::RichText::new(format!("◆ STEP {}", edit_idx + 1))
+                                                .strong().color(egui::Color32::from_rgb(255, 210, 60)));
+                                            egui::ComboBox::from_id_salt("step_mode_combo")
+                                                .selected_text(MODE_NAMES[ep.mode as usize])
+                                                .width(160.0)
+                                                .show_ui(ui, |ui| {
+                                                    for (i, name) in MODE_NAMES.iter().enumerate() {
+                                                        ui.selectable_value(&mut ep.mode, i as u32, *name);
+                                                    }
+                                                });
+                                            let mute_col = if is_muted {
+                                                egui::Color32::from_rgb(255, 80, 80)
+                                            } else { egui::Color32::from_gray(160) };
+                                            if ui.add(egui::Button::new(
+                                                egui::RichText::new(if is_muted { "MUTED" } else { "MUTE" }).color(mute_col)
+                                            )).clicked() { req.seq_mute_step = Some(edit_idx); }
+                                            if ui.small_button("RAND").clicked() { req.seq_randomize = Some(edit_idx); }
+                                            if ui.small_button("✕").on_hover_text("Close step editor").clicked() {
+                                                req.seq_select_step = Some(edit_idx); // toggles off
+                                            }
+                                        });
+
+                                        macro_rules! esl {
+                                            ($ui:expr, $label:expr, $val:expr, $min:expr, $max:expr) => {
+                                                $ui.horizontal(|ui| {
+                                                    ui.label(egui::RichText::new($label).small().monospace());
+                                                    ui.add(egui::Slider::new($val, $min..=$max).show_value(true));
+                                                });
+                                            }
+                                        }
+                                        // Two columns to keep the editor short.
+                                        ui.horizontal(|ui| {
+                                            ui.vertical(|ui| {
+                                                ui.set_min_width(220.0);
+                                                esl!(ui, "kscale   ", &mut ep.kscale,      0.1_f32, 5.0_f32);
+                                                esl!(ui, "speed    ", &mut ep.speed,       0.0_f32, 2.0_f32);
+                                                esl!(ui, "field_mix", &mut ep.field_mix,   0.0_f32, 1.0_f32);
+                                                esl!(ui, "iso_level", &mut ep.iso_level,   0.0_f32, 1.0_f32);
+                                                esl!(ui, "color_sft", &mut ep.color_shift, 0.0_f32, 1.0_f32);
+                                            });
+                                            ui.separator();
+                                            ui.vertical(|ui| {
+                                                ui.set_min_width(220.0);
+                                                esl!(ui, "zoom     ", &mut ep.zoom,        0.2_f32, 5.0_f32);
+                                                esl!(ui, "w_lattice", &mut ep.w_lattice,   0.0_f32, 2.0_f32);
+                                                esl!(ui, "w_motif  ", &mut ep.w_motif,     0.0_f32, 2.0_f32);
+                                                esl!(ui, "w_band   ", &mut ep.w_band,      0.0_f32, 2.0_f32);
+                                            });
+                                        });
+
+                                        // Per-step timing/curve/prob overrides
+                                        if let Some((mut dm, curve_ov, mut pr)) = seq_selected_extras {
+                                            ui.horizontal(|ui| {
+                                                ui.label(egui::RichText::new("dur×").small().monospace());
+                                                if ui.add(egui::Slider::new(&mut dm, 0.25_f32..=4.0_f32)
+                                                    .show_value(true)).changed() {
+                                                    req.seq_step_dur_mul = Some((edit_idx, dm));
+                                                }
+                                                ui.label(egui::RichText::new("curve").small().monospace());
+                                                let lbl = match curve_ov {
+                                                    Some(c) => c.label(),
+                                                    None    => "(global)",
+                                                };
+                                                if ui.small_button(lbl).clicked() {
+                                                    req.seq_step_curve_cycle = Some(edit_idx);
+                                                }
+                                                ui.label(egui::RichText::new("prob").small().monospace());
+                                                if ui.add(egui::Slider::new(&mut pr, 0.0_f32..=1.0_f32)
+                                                    .show_value(true)).changed() {
+                                                    req.seq_step_prob = Some((edit_idx, pr));
+                                                }
+                                            });
+                                        }
+                                    });
+                                ui.add_space(4.0);
+                            }
+
+                            // ── Transport row
+                            ui.horizontal(|ui| {
+                                // Play / stop
+                                let seq_col = if cur_seq_active {
+                                    egui::Color32::from_rgb(140, 255, 140)
+                                } else { egui::Color32::from_gray(220) };
+                                if ui.add(egui::Button::new(
+                                    egui::RichText::new(if cur_seq_active { "■ STOP" } else { "▶ PLAY" }).color(seq_col)
+                                )).clicked() { req.seq_toggle = true; }
+
+                                // Manual + step arrows
+                                let man_col = if cur_seq_manual {
+                                    egui::Color32::from_rgb(255, 200, 60)
+                                } else { egui::Color32::from_gray(150) };
+                                if ui.add(egui::Button::new(
+                                    egui::RichText::new("MANUAL").color(man_col)
+                                )).clicked() { req.seq_manual_toggle = true; }
+                                if cur_seq_manual {
+                                    if ui.small_button("◀").clicked() { req.seq_manual_step = Some(-1); }
+                                    if ui.small_button("▶").clicked() { req.seq_manual_step = Some(1); }
+                                }
+                                ui.separator();
+
+                                // Play mode + curve
+                                let pm_col = egui::Color32::from_rgb(180, 200, 255);
+                                if ui.add(egui::Button::new(
+                                    egui::RichText::new(cur_seq_play_mode.label()).color(pm_col)
+                                )).on_hover_text("Play mode: Forward / Reverse / PingPong / Random").clicked() {
+                                    req.seq_play_mode_toggle = true;
+                                }
+                                if ui.small_button(cur_seq_curve.label())
+                                    .on_hover_text("Global transition curve").clicked() {
+                                    req.seq_curve = Some(cur_seq_curve.next());
+                                }
+
+                                // Step duration slider
+                                let mut dur = cur_seq_dur;
+                                ui.label(egui::RichText::new("step").small());
+                                if ui.add(egui::Slider::new(&mut dur, 0.5_f32..=8.0_f32)
+                                    .show_value(true).suffix("s")).changed() {
+                                    req.seq_dur = Some(dur);
+                                }
+                                ui.separator();
+
+                                // Step count + add/remove/capture
+                                let n = cur_seq_steps.len();
+                                ui.label(egui::RichText::new(format!("{n}/32")).small()
+                                    .color(egui::Color32::from_gray(160)));
+                                let can_add = n < 32;
+                                let can_del = n > 1 && cur_seq_selected.is_some();
+                                if ui.add_enabled(can_add, egui::Button::new("+")).clicked() {
+                                    req.seq_add_step = true;
+                                }
+                                if ui.add_enabled(can_del, egui::Button::new("−"))
+                                    .on_hover_text("Remove selected step").clicked() {
+                                    req.seq_remove_step = true;
+                                }
+                                if ui.add_enabled(can_add, egui::Button::new(
+                                    egui::RichText::new("📸 CAPTURE")
+                                        .color(egui::Color32::from_rgb(255, 200, 120))
+                                )).on_hover_text("Append a new step from the current live state").clicked() {
+                                    req.seq_capture = true;
+                                }
+                                ui.separator();
+
+                                // Presets
+                                for (i, (name, _)) in SEQ_PRESETS.iter().enumerate() {
+                                    if ui.small_button(*name).clicked() { req.seq_preset = Some(i); }
+                                }
+                            });
+
+                            // ── Step grid
+                            ui.add_space(4.0);
+                            egui::Frame::none()
+                                .fill(egui::Color32::from_rgba_unmultiplied(12, 10, 24, 220))
+                                .rounding(4.0)
+                                .inner_margin(egui::vec2(8.0, 6.0))
+                                .show(ui, |ui| {
+                                    let n = cur_seq_steps.len();
+                                    let avail_w = ui.available_width() - 16.0;
+                                    let cell_w = (avail_w / n.max(1) as f32 - 3.0)
+                                        .min(48.0).max(16.0);
+                                    let cell_h = 32.0_f32;
+
+                                    let cells = ui.horizontal(|ui| {
+                                        let mut cells: Vec<(usize, egui::Rect, bool, bool, bool, u32)> = Vec::new();
+                                        for (i, &(is_cur, muted, is_sel, mode)) in cur_seq_steps.iter().enumerate() {
+                                            let (rect, resp) = ui.allocate_exact_size(
+                                                egui::vec2(cell_w, cell_h),
+                                                egui::Sense::click(),
+                                            );
+                                            if resp.double_clicked() {
+                                                req.seq_randomize = Some(i);
+                                            } else if resp.clicked() {
+                                                req.seq_select_step = Some(i);
+                                            }
+                                            cells.push((i, rect, is_cur, muted, is_sel, mode));
+                                            ui.add_space(3.0);
+                                        }
+                                        cells
+                                    }).inner;
+
+                                    let painter = ui.painter();
+                                    for &(_i, rect, is_cur, muted, is_sel, mode) in &cells {
+                                        let base_col = mode_color(mode);
+                                        let dim = if muted { 4 } else { 1 };
+                                        let fill = egui::Color32::from_rgba_unmultiplied(
+                                            base_col.r() / dim, base_col.g() / dim, base_col.b() / dim, 210);
+                                        painter.rect_filled(rect, 4.0, fill);
+
+                                        if is_cur && cur_seq_active {
+                                            let prog_rect = egui::Rect::from_min_size(
+                                                rect.min,
+                                                egui::vec2(rect.width() * cur_seq_progress, rect.height()),
+                                            );
+                                            painter.rect_filled(prog_rect, 4.0,
+                                                egui::Color32::from_white_alpha(50));
+                                            painter.rect_stroke(rect, 4.0,
+                                                egui::Stroke::new(2.0, egui::Color32::WHITE));
+                                        }
+                                        if is_sel {
+                                            painter.rect_stroke(rect, 4.0,
+                                                egui::Stroke::new(1.5,
+                                                    egui::Color32::from_rgb(255, 210, 60)));
+                                        }
+                                        if muted {
+                                            let s = egui::Stroke::new(1.5, egui::Color32::from_gray(80));
+                                            painter.line_segment([rect.min, rect.max], s);
+                                            painter.line_segment(
+                                                [egui::pos2(rect.max.x, rect.min.y),
+                                                 egui::pos2(rect.min.x, rect.max.y)], s);
+                                        }
+                                        let label = MODE_NAMES[mode as usize].chars().take(3).collect::<String>();
+                                        let txt_col = if muted { egui::Color32::from_gray(70) }
+                                            else if is_cur && cur_seq_active { egui::Color32::WHITE }
+                                            else { egui::Color32::from_gray(220) };
+                                        painter.text(rect.center(), egui::Align2::CENTER_CENTER,
+                                            label, egui::FontId::monospace(9.0), txt_col);
+                                    }
+                                });
+                            ui.add_space(2.0);
                         });
+
+                    // (OSD is now folded into the bottom sequencer panel header above.)
+
+                    // ── Keymap help overlay ───────────────────────────
+                    if cur_show_keymap {
+                        let mut open = true;
+                        egui::Window::new("Keyboard shortcuts")
+                            .id(egui::Id::new("keymap_overlay"))
+                            .open(&mut open)
+                            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                            .resizable(false)
+                            .collapsible(false)
+                            .default_width(320.0)
+                            .show(ctx, |ui| {
+                                egui::Grid::new("keymap_grid")
+                                    .num_columns(2).spacing(egui::vec2(16.0, 4.0))
+                                    .show(ui, |ui| {
+                                        let kt = egui::Color32::from_rgb(220, 220, 255);
+                                        let row = |ui: &mut egui::Ui, k: &str, d: &str| {
+                                            ui.label(egui::RichText::new(k).monospace().color(kt));
+                                            ui.label(d);
+                                            ui.end_row();
+                                        };
+                                        ui.label(egui::RichText::new("VIEW")
+                                            .small().color(egui::Color32::from_gray(150)));
+                                        ui.label(""); ui.end_row();
+                                        row(ui, "Tab",   "toggle Atoms / Field render mode");
+                                        row(ui, "Space", "toggle auto-rotate camera");
+                                        row(ui, "1 / 2 / 3", "supercell size (Atoms mode)");
+                                        row(ui, "M", "cycle field mode");
+                                        ui.label(egui::RichText::new("FIELD")
+                                            .small().color(egui::Color32::from_gray(150)));
+                                        ui.label(""); ui.end_row();
+                                        row(ui, "[  ]", "color shift down / up");
+                                        row(ui, "R", "randomize field G-vectors");
+                                        row(ui, "K", "snap to next k-point");
+                                        row(ui, "P", "toggle k-path walk");
+                                        ui.label(egui::RichText::new("FEEDBACK / AUTO")
+                                            .small().color(egui::Color32::from_gray(150)));
+                                        ui.label(""); ui.end_row();
+                                        row(ui, "A", "toggle FB AUTO (auto-pilot)");
+                                        row(ui, "T", "toggle TOUR");
+                                        ui.label(egui::RichText::new("UI")
+                                            .small().color(egui::Color32::from_gray(150)));
+                                        ui.label(""); ui.end_row();
+                                        row(ui, "? / /", "toggle this help");
+                                        row(ui, "Esc", "exit");
+                                    });
+                                ui.add_space(4.0);
+                                ui.label(egui::RichText::new("Click · / A / B / M / T on a slider to route mic / LFO source.")
+                                    .small().color(egui::Color32::from_gray(150)));
+                            });
+                        if !open { req.keymap_toggle = true; }
+                    }
                 };
 
                 // ── Render ────────────────────────────────────────────
@@ -2080,6 +2195,7 @@ impl ApplicationHandler<UserEvent> for App {
                 self.mic_params   = mic;
                 self.search_str   = search;
                 if req.panel_toggle { self.panel_open = !cur_panel_open; }
+                if req.keymap_toggle { self.show_keymap = !cur_show_keymap; }
                 if req.fb_auto_toggle {
                     self.fb_auto = !cur_fb_auto;
                     // Turning auto on triggers a clean feedback restart and ensures fb_enabled
