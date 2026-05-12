@@ -632,6 +632,54 @@ fn tour_rand(seed: f32) -> f32 {
     bz_hash(seed * 71.17 + 4.91)
 }
 
+/// Auto-pilot for the feedback layer: overrides every fb_* field of `base` with an
+/// evolving Fraksl-style mix of scene-randomized picks (mirror/blend) and continuous
+/// multi-frequency sin/cos drift. Non-feedback params come through unchanged so this
+/// composes with the manual/tour/sequencer source of `base`.
+fn fb_auto_params(t: f32, base: &FieldParams) -> FieldParams {
+    const SCENE_LEN: f32 = 7.3;
+    let scene_f = (t / SCENE_LEN).floor();
+    let local   = (t / SCENE_LEN).fract();
+    let drift   = t * 0.13;
+    let punch   = (TAU * local).sin().max(0.0).powf(1.6);
+    let snap    = if local < 0.18 { (1.0 - local / 0.18).powf(2.0) } else { 0.0 };
+
+    // Per-scene discrete picks
+    let mirrors: [u32; 9] = [0, 1, 3, 5, 6, 7, 8, 9, 11];
+    let blends:  [u32; 7] = [0, 1, 2, 3, 5, 6, 9];
+    let mi = (tour_rand(scene_f + 11.0) * mirrors.len() as f32) as usize % mirrors.len();
+    let bi = (tour_rand(scene_f + 23.0) * blends.len()  as f32) as usize % blends.len();
+
+    // Continuous, energy-bounded variation. Keeps things "trippy" but stable.
+    let fb_zoom        = (0.965 + 0.045 * (TAU * (local * 0.35 + drift * 0.27)).sin()
+                                + 0.020 * snap).clamp(0.93, 1.05);
+    let fb_decay       = (0.82 + 0.14 * (TAU * (local * 0.55 + drift * 0.19)).cos()).clamp(0.50, 0.98);
+    let fb_inject      = (0.65 + 0.35 * punch).clamp(0.0, 1.0);
+    let fb_color_shift = 0.55 * (TAU * (drift * 0.17 + local * 0.41)).sin();
+    let fb_saturation  = (1.05 + 0.45 * (TAU * (local * 0.7 + drift * 0.11)).sin()).clamp(0.0, 2.0);
+    let fb_brightness  = (1.0  + 0.18 * (TAU * (local * 0.4 + drift * 0.09)).cos()).clamp(0.5, 1.5);
+    let fb_rotation    = 0.06  * (TAU * (drift * 0.09 + local * 0.27)).sin();
+    let fb_offset_x    = 0.035 * (TAU * (drift * 0.14 + local * 0.42)).sin();
+    let fb_offset_y    = 0.035 * (TAU * (drift * 0.11 + local * 0.36)).cos();
+    let fb_fold_angle  = 2.4   * (TAU * (drift * 0.06 + local * 0.22)).sin()
+                              + (tour_rand(scene_f + 37.0) - 0.5) * 1.6;
+    // Motion blur on for ~60% of scenes, lightly modulated.
+    let mb_on   = tour_rand(scene_f + 53.0) > 0.40;
+    let fb_motion_blur = if mb_on {
+        (0.18 + 0.22 * (TAU * (local * 0.30 + drift * 0.05)).sin().abs()).clamp(0.0, 0.65)
+    } else { 0.0 };
+
+    FieldParams {
+        fb_enabled:     true,
+        fb_mirror:      mirrors[mi],
+        fb_blend_mode:  blends[bi],
+        fb_zoom, fb_decay, fb_inject, fb_color_shift,
+        fb_saturation, fb_brightness, fb_rotation,
+        fb_offset_x, fb_offset_y, fb_fold_angle, fb_motion_blur,
+        ..base.clone()
+    }
+}
+
 fn tour_random_field_params(t: f32, crystal_idx: usize) -> FieldParams {
     let scene_f = (t / 4.6).floor();
     let local = (t / 4.6).fract();
@@ -870,6 +918,7 @@ struct UiReq {
     seq_curve:         Option<TranCurve>,
     seq_dur:           Option<f32>,
     fb_reset:          bool,
+    fb_auto_toggle:    bool,
 }
 
 struct App {
@@ -902,6 +951,7 @@ struct App {
     lfo:          LfoParams,
     mic_params:   MicParams,
     audio:        Option<audio::AudioCapture>,
+    fb_auto:      bool,
 }
 
 enum UserEvent {
@@ -931,6 +981,7 @@ impl App {
             lfo: LfoParams::default(),
             mic_params: MicParams::default(),
             audio: audio::AudioCapture::start(),
+            fb_auto: false,
         }
     }
 
@@ -1078,6 +1129,13 @@ impl ApplicationHandler<UserEvent> for App {
                             if let Some(kp) = &mut gpu.kpath { kp.reset(); }
                         }
                     }
+                    PhysicalKey::Code(KeyCode::KeyA) => {
+                        self.fb_auto = !self.fb_auto;
+                        if self.fb_auto {
+                            self.field_params.fb_enabled = true;
+                            gpu.fb_clear = true;
+                        }
+                    }
                     PhysicalKey::Code(KeyCode::BracketRight) => {
                         self.field_params.color_shift = (self.field_params.color_shift + 0.05) % 1.0;
                     }
@@ -1194,6 +1252,7 @@ impl ApplicationHandler<UserEvent> for App {
                 let cur_tour_style    = self.tour_style;
                 let cur_kpath_active  = self.kpath_active;
                 let cur_panel_open    = self.panel_open;
+                let cur_fb_auto       = self.fb_auto;
                 let cur_crystal_idx   = self.tour.crystal_idx;
                 let tour_fp = if self.tour.active {
                     Some(tour_field_params(t, self.tour.crystal_idx, self.tour_style))
@@ -1227,6 +1286,9 @@ impl ApplicationHandler<UserEvent> for App {
                     .and_then(|i| self.sequencer.steps.get(i).map(|s| (i, s.params.clone())));
                 // Snapshot field_params, lfo, mic, and current audio bands.
                 let mut fp  = seq_fp.or(tour_fp).unwrap_or_else(|| self.field_params.clone());
+                // FB AUTO: override every fb_* field with an evolving auto-pilot pattern.
+                // Composes on top of the manual/tour/sequencer source, before LFO/mic.
+                if self.fb_auto { fp = fb_auto_params(t, &fp); }
                 let mut lfo = self.lfo.clone();
                 let mut mic = self.mic_params.clone();
                 let cur_bands = self.audio.as_ref()
@@ -1411,6 +1473,14 @@ impl ApplicationHandler<UserEvent> for App {
                                         if fp.fb_enabled { req.fb_reset = true; }
                                     }
                                     if ui.small_button("RESET").clicked() { req.fb_reset = true; }
+                                    let auto_lbl = if cur_fb_auto { "■ AUTO" } else { "□ AUTO" };
+                                    let auto_btn = egui::Button::new(
+                                        egui::RichText::new(auto_lbl).color(
+                                            if cur_fb_auto { egui::Color32::from_rgb(255, 180, 80) }
+                                            else { egui::Color32::from_gray(180) }
+                                        )
+                                    );
+                                    if ui.add(auto_btn).clicked() { req.fb_auto_toggle = true; }
                                     ui.label(egui::RichText::new("mirror").small());
                                     let mirror_labels = ["none","H","V","HV","quad","3fold","6fold","8fold","tri","pin","4fold","12fold"];
                                     if ui.small_button(mirror_labels[fp.fb_mirror.min(11) as usize]).clicked() {
@@ -1786,6 +1856,14 @@ impl ApplicationHandler<UserEvent> for App {
                 self.mic_params   = mic;
                 self.search_str   = search;
                 if req.panel_toggle { self.panel_open = !cur_panel_open; }
+                if req.fb_auto_toggle {
+                    self.fb_auto = !cur_fb_auto;
+                    // Turning auto on triggers a clean feedback restart and ensures fb_enabled
+                    if self.fb_auto {
+                        self.field_params.fb_enabled = true;
+                        req.fb_reset = true;
+                    }
+                }
 
                 if let Some(rm) = req.render_mode { self.render_mode = rm; }
                 if req.kpath_toggle {
