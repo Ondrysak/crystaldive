@@ -12,6 +12,8 @@ use winit::{
 };
 
 use crystal_viz::{audio, crystals, kpoints, poscar, reciprocal, renderer, symmetry};
+
+mod midi;
 use crystals::{all_crystals, all_groups, CrystalDef};
 use poscar::Crystal;
 use reciprocal::{crossfade_pack, GpuField};
@@ -1118,6 +1120,7 @@ struct App {
     lfo:          LfoParams,
     mic_params:   MicParams,
     audio:        Option<audio::AudioCapture>,
+    midi_in:      Option<midi::MidiCapture>,
     fb_auto:      bool,
     show_keymap:  bool,
 }
@@ -1149,6 +1152,7 @@ impl App {
             lfo: LfoParams::default(),
             mic_params: MicParams::default(),
             audio: audio::AudioCapture::start(),
+            midi_in: midi::MidiCapture::start(),
             fb_auto: false,
             show_keymap: false,
         }
@@ -1469,6 +1473,22 @@ impl ApplicationHandler<UserEvent> for App {
                 // FB AUTO: override every fb_* field with an evolving auto-pilot pattern.
                 // Composes on top of the manual/tour/sequencer source, before LFO/mic.
                 if self.fb_auto { fp = fb_auto_params(t, &fp); }
+
+                // MIDI snapshot: pull CC values and drain triggered notes.
+                let mut midi_notes: Vec<u8> = Vec::new();
+                let mut midi_port_name: Option<String> = None;
+                let mut midi_last_cc: Option<(u8, u8)> = None;
+                let midi_cc_snap = if let Some(m) = self.midi_in.as_ref() {
+                    if let Ok(mut s) = m.state.lock() {
+                        midi_notes.append(&mut s.notes);
+                        midi_port_name = s.port_name.clone();
+                        midi_last_cc = s.last_cc;
+                        midi::CcSnapshot::from_state(&s)
+                    } else { midi::CcSnapshot::default() }
+                } else { midi::CcSnapshot::default() };
+                // CC: directly drive params (overrides tour/seq for the set CCs).
+                midi::apply_midi_cc(&mut fp, &midi_cc_snap);
+
                 let mut lfo = self.lfo.clone();
                 let mut mic = self.mic_params.clone();
                 let cur_bands = self.audio.as_ref()
@@ -1835,6 +1855,31 @@ impl ApplicationHandler<UserEvent> for App {
                                             ui.label(egui::RichText::new("Tip: click · on a slider to route a band.")
                                                 .small().color(egui::Color32::from_gray(130)));
                                         }
+
+                                        // ── MIDI status row
+                                        ui.add_space(4.0);
+                                        let midi_col = if midi_port_name.is_some() {
+                                            egui::Color32::from_rgb(180, 220, 255)
+                                        } else { egui::Color32::from_gray(100) };
+                                        ui.horizontal(|ui| {
+                                            ui.label(egui::RichText::new(
+                                                if let Some(ref p) = midi_port_name {
+                                                    format!("🎹 MIDI: {}", p)
+                                                } else {
+                                                    "🎹 MIDI — no port".to_string()
+                                                }
+                                            ).small().color(midi_col));
+                                            if let Some((cc, v)) = midi_last_cc {
+                                                ui.label(egui::RichText::new(format!("CC{cc}={v}"))
+                                                    .small().monospace()
+                                                    .color(egui::Color32::from_gray(150)));
+                                            }
+                                        });
+                                        if midi_port_name.is_some() {
+                                            ui.label(egui::RichText::new(
+                                                "CC1–9 → field · CC20–27 → feedback · Notes 36/38/40/41/43/45 → triggers"
+                                            ).small().color(egui::Color32::from_gray(130)));
+                                        }
                                     }); // end Modulation collapsible
 
                                 ui.separator();
@@ -2150,6 +2195,17 @@ impl ApplicationHandler<UserEvent> for App {
                                         ui.label(""); ui.end_row();
                                         row(ui, "? / /", "toggle this help");
                                         row(ui, "Esc", "exit");
+                                        ui.label(egui::RichText::new("MIDI (any channel)")
+                                            .small().color(egui::Color32::from_gray(150)));
+                                        ui.label(""); ui.end_row();
+                                        row(ui, "CC 1–9",   "field params (kscale, speed, …, w_band)");
+                                        row(ui, "CC 20–27", "feedback (decay, zoom, …, motion_blur)");
+                                        row(ui, "Note 36 C2", "toggle FB AUTO");
+                                        row(ui, "Note 38 D2", "toggle TOUR");
+                                        row(ui, "Note 40 E2", "toggle SEQ");
+                                        row(ui, "Note 41 F2", "SEQ prev step (manual)");
+                                        row(ui, "Note 43 G2", "SEQ next step (manual)");
+                                        row(ui, "Note 45 A2", "📸 CAPTURE step");
                                     });
                                 ui.add_space(4.0);
                                 ui.label(egui::RichText::new("Click · / A / B / M / T on a slider to route mic / LFO source.")
@@ -2194,6 +2250,21 @@ impl ApplicationHandler<UserEvent> for App {
                 self.lfo          = lfo;
                 self.mic_params   = mic;
                 self.search_str   = search;
+
+                // ── MIDI Note triggers — route them into the same UiReq path so
+                //    they behave exactly like clicking the corresponding button.
+                for n in midi_notes {
+                    match n {
+                        midi::note::FB_AUTO_TOGGLE => req.fb_auto_toggle = true,
+                        midi::note::TOUR_TOGGLE    => req.tour_toggle = true,
+                        midi::note::SEQ_TOGGLE     => req.seq_toggle = true,
+                        midi::note::SEQ_PREV       => req.seq_manual_step = Some(-1),
+                        midi::note::SEQ_NEXT       => req.seq_manual_step = Some(1),
+                        midi::note::SEQ_CAPTURE    => req.seq_capture = true,
+                        _ => {}
+                    }
+                }
+
                 if req.panel_toggle { self.panel_open = !cur_panel_open; }
                 if req.keymap_toggle { self.show_keymap = !cur_show_keymap; }
                 if req.fb_auto_toggle {
