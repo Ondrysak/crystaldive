@@ -49,6 +49,12 @@
         case 37u { col = render_crystal_dive(uv); }
         case 38u { col = render_nano_phase(uv); }
         case 39u { col = render_magnon(uv); }
+        // ── physics-experts batch (40..44) ────────────────────────────────
+        case 40u { col = render_wavepacket(uv); }
+        case 41u { col = render_dipole_rad(uv); }
+        case 42u { col = render_karman(uv); }
+        case 43u { col = render_lorenz(uv); }
+        case 44u { col = render_lensing(uv); }
         default  { col = render_crystal_dive(uv); }
     }
     // vignette — skip for XRD, RECIP3D, KIKUCHI, HOFSTADTER, SPECTRAL (own boundaries)

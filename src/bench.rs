@@ -905,7 +905,7 @@ mod tests {
     #[test]
     fn mode_names_count_matches_dispatch() {
         // Sanity: the mode name table must match the count rendered by the shader.
-        // 38 prior + NANO PHASE (38) + MAGNON (39) = 40.
-        assert_eq!(MODE_NAMES.len(), 40);
+        // 40 prior + physics-experts batch (WAVEPKT, DIPOLE, KARMAN, LORENZ, LENSING) = 45.
+        assert_eq!(MODE_NAMES.len(), 45);
     }
 }

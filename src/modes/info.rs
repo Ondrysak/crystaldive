@@ -1,5 +1,5 @@
 //! Per-mode metadata: display name, tagline, equations (unicode-styled math),
-//! and slider/usage notes. One source of truth for the 38 visualizer modes.
+//! and slider/usage notes. One source of truth for the 45 visualizer modes.
 //!
 //! Both `crate::main`'s `MODE_NAMES` array and `crate::bench`'s name slice are
 //! derived from `MODES` so they stay in sync automatically.
@@ -16,7 +16,7 @@ pub struct ModeInfo {
     pub notes: &'static str,
 }
 
-pub const MODES: [ModeInfo; 40] = [
+pub const MODES: [ModeInfo; 45] = [
     ModeInfo {
         idx: 0, name: "3D ISO",
         tagline: "Ray-marched isosurface of the crystal-field scalar.",
@@ -420,6 +420,58 @@ pub const MODES: [ModeInfo; 40] = [
             "Δ = 0.05 + 0.7·iso_level",
         ],
         notes: "iso_level sets the anisotropy gap Δ at q=0; field_mix crossfades FM (small-q quadratic) into AFM (linear); kscale stiffens the dispersion / Fermi velocity. w_motif dials the violet Stoner particle–hole cloud; w_band controls Landau damping (line broadens inside the continuum and above 2Δ where magnon decay opens). color_shift hue-rotates the magnon line; crystal_color tints it.",
+    },
+    ModeInfo {
+        idx: 40, name: "WAVEPKT",
+        tagline: "Free Gaussian wave packets: spreading, drifting, and interfering.",
+        equations: &[
+            "ψ(x,t) = (2π(σ₀² + iℏt/2m))^(−½) · exp[ik₀·(x−x₀) − iℏ|k₀|²t/2m]",
+            "          · exp[−(x − x₀ − v_g t)² / (4(σ₀² + iℏt/2m))]",
+            "σ(t) = σ₀ √(1 + (ℏt / 2mσ₀²)²)",
+            "iℏ ∂ψ/∂t = −(ℏ²/2m) ∇²ψ,    v_g = ℏk₀/m",
+        ],
+        notes: "field_mix controls mean momentum |k₀| (slow drift → fast streaks); iso_level sets the initial width σ₀ — narrow packets spread visibly within seconds, the textbook minimum-uncertainty quench. color_shift adds a global phase and rotates k₀'s propagation axis; zoom rescales the visible window in ψ-units. Watch the bright Re(ψ)² fringe comb during the head-on collision (period ≈ 14 s) — those stripes are genuine quantum interference, not a texture; hold the mouse to relocate the launch points and throw packets at each other.",
+    },
+    ModeInfo {
+        idx: 41, name: "DIPOLE",
+        tagline: "Hertzian dipole radiation: near-field loops + far-field wavefronts with retarded phase.",
+        equations: &[
+            "E_θ ∝ sinθ · ω²/(c²r) · cos(ω(t−r/c))         (far,  1/r)",
+            "      + ω/(cr²) · sin(ω(t−r/c))                (ind., 1/r²)",
+            "      − 1/r³ · cos(ω(t−r/c))                   (quasi-stat, 1/r³)",
+            "S = (1/μ₀c) · |E|² ∝ sin²θ / r²",
+        ],
+        notes: "field_mix sets the radiation angular frequency ω (controls wavelength on screen). iso_level fades in the near-field 1/r² and 1/r³ terms — at 0 you see clean far-field wavefronts, at 1 the swirling quasi-static loops near the source become visible. Watch the sin²θ donut envelope around r ≈ 2λ and the outgoing spherical phase fronts; the green arrow at origin is the instantaneous dipole moment p(t) = p₀ cos(ωt) ẑ.",
+    },
+    ModeInfo {
+        idx: 42, name: "KARMAN",
+        tagline: "Counter-rotating vortices shed from a bluff body in the Kármán wake regime.",
+        equations: &[
+            "ω(r,t) = Γ / (π r_c²) · exp(−r² / r_c²)",
+            "r_c²(t) = r_c0² + 4 ν t     (Lamb–Oseen viscous core growth)",
+            "f_s = St · U∞ / D,   St ≈ 0.21    (Strouhal shedding)",
+        ],
+        notes: "iso_level sets Reynolds number (60..300) — higher Re yields tighter cores and faster shedding; field_mix grows the initial vortex core radius (low Re → fat fuzzy vortices). speed acts as freestream U∞ (vortex drift rate downstream), zoom rescales the wake. Watch the staggered ±Γ pattern advect off the cylinder, the boundary-layer rim glow on its leading edge, and the streamline ribbons sweep around each core.",
+    },
+    ModeInfo {
+        idx: 43, name: "LORENZ",
+        tagline: "Lorenz attractor with per-pixel RK4 + Lyapunov coloring.",
+        equations: &[
+            "ẋ = σ(y − x)",
+            "ẏ = x(ρ − z) − y,    ż = xy − βz",
+            "λ = lim (1/T) · ln ‖δ(T)‖ / ‖δ(0)‖",
+        ],
+        notes: "field_mix sweeps ρ across the Hopf bifurcation (~24.74) — low values give regular spirals, high values give the full butterfly. iso_level controls the RK4 step length (shorter = finer trails, longer = wilder). zoom sets the phase-space window; hold the mouse for a probe spot. Watch the wings: bright regions = high local Lyapunov λ, sensitive to initial conditions; y₀ is perturbed by crystal_field so each loaded crystal stamps its signature onto the chaos.",
+    },
+    ModeInfo {
+        idx: 44, name: "LENSING",
+        tagline: "Schwarzschild black hole — shadow, photon ring, Doppler-beamed accretion disk.",
+        equations: &[
+            "ds² = −(1 − rₛ/r) c² dt² + (1 − rₛ/r)⁻¹ dr² + r² dΩ²",
+            "α(b) = 4GM/(c² b),    b_c = (3√3/2) rₛ",
+            "D = 1 / [γ(1 − β·n̂)],    I_obs = D⁴ · √(1 − rₛ/r) · I_em",
+        ],
+        notes: "field_mix raises the camera elevation (0 = edge-on disk, 1 = top-down). iso_level controls disk emissivity, color_shift rotates the disk hue, zoom is the camera FOV. Hold the mouse to orbit — sweep horizontally for azimuth, vertically for elevation. Watch the disk near-side pass in front of the black hole while the secondary image arcs over the top of the photon ring; the photon sphere sits at b = (3√3/2) rₛ.",
     },
 ];
 

@@ -27,10 +27,12 @@
       "Bash(git branch --show-current)",
       "Bash(git fetch*)",
       "Bash(git stash list*)",
-      "Bash(git rev-parse*)"
+      "Bash(git rev-parse*)",
+      "Bash(git push*)",
+      "Write(src/modes/mode_*.wgsl)",
+      "Write(presets/*.preset.json)"
     ],
     "deny": [
-      "Bash(git push*)",
       "Bash(git push --force*)",
       "Bash(git reset --hard*)",
       "Bash(git clean -f*)",

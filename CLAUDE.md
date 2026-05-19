@@ -1,6 +1,8 @@
 # crystaldive — agent orientation
 
-Real-time crystal visualizer. Rust + WGSL + WebGPU, native (winit+egui+wgpu) and wasm32 targets. Deployed as a single HTML to a Cloudflare Worker (`plain-band-13be`).
+Real-time crystal + physics-field visualizer. Rust + WGSL + WebGPU, native (winit+egui+wgpu) and wasm32 targets. Deployed as a single HTML to a Cloudflare Worker (`plain-band-13be`).
+
+The mode catalog started as condensed-matter visualizations (Bloch, Berry, Hofstadter, plasmon, magnon, …) and has expanded to cover broader physics — quantum wave mechanics (`wavepacket`), classical EM radiation (`dipole_rad`), fluid dynamics (`karman`), nonlinear dynamics (`lorenz`), and general relativity (`lensing`). All modes follow the same per-file contract; see [`src/modes/CONTRACT.md`](src/modes/CONTRACT.md). New physics domains are welcome — bias toward one self-contained `mode_<slug>.wgsl` file per concept rather than wider refactors.
 
 ## Layout
 
