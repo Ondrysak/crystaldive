@@ -17,7 +17,7 @@
 //! mode authors.
 
 pub mod info;
-pub use info::{ModeInfo, MODES, MODE_NAMES, MODE_NAMES_SLICE};
+pub use info::{ModeArea, ModeInfo, MODES, MODE_NAMES, MODE_NAMES_SLICE};
 
 pub const FIELD_SHADER: &str = concat!(
     include_str!("prelude.wgsl"),
@@ -89,6 +89,8 @@ pub const FIELD_SHADER: &str = concat!(
     include_str!("mode_lorenz.wgsl"),
     "\n",
     include_str!("mode_lensing.wgsl"),
+    "\n",
+    include_str!("mode_grav_wave.wgsl"),
     "\n",
     include_str!("dispatch.wgsl"),
 );

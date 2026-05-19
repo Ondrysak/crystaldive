@@ -55,6 +55,7 @@
         case 42u { col = render_karman(uv); }
         case 43u { col = render_lorenz(uv); }
         case 44u { col = render_lensing(uv); }
+        case 45u { col = render_grav_wave(uv); }
         default  { col = render_crystal_dive(uv); }
     }
     // vignette — skip for XRD, RECIP3D, KIKUCHI, HOFSTADTER, SPECTRAL (own boundaries)

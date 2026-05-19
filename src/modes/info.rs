@@ -1,5 +1,5 @@
 //! Per-mode metadata: display name, tagline, equations (unicode-styled math),
-//! and slider/usage notes. One source of truth for the 45 visualizer modes.
+//! and slider/usage notes. One source of truth for the 46 visualizer modes.
 //!
 //! Both `crate::main`'s `MODE_NAMES` array and `crate::bench`'s name slice are
 //! derived from `MODES` so they stay in sync automatically.
@@ -16,7 +16,64 @@ pub struct ModeInfo {
     pub notes: &'static str,
 }
 
-pub const MODES: [ModeInfo; 45] = [
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ModeArea {
+    Crystal,
+    Reciprocal,
+    Electronic,
+    Materials,
+    Classical,
+    Fields,
+}
+
+impl ModeArea {
+    pub const ALL: [ModeArea; 6] = [
+        ModeArea::Crystal,
+        ModeArea::Reciprocal,
+        ModeArea::Electronic,
+        ModeArea::Materials,
+        ModeArea::Classical,
+        ModeArea::Fields,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            ModeArea::Crystal => "Crystal",
+            ModeArea::Reciprocal => "Reciprocal",
+            ModeArea::Electronic => "Electronic",
+            ModeArea::Materials => "Materials",
+            ModeArea::Classical => "Classical",
+            ModeArea::Fields => "Fields",
+        }
+    }
+
+    pub const fn title(self) -> &'static str {
+        match self {
+            ModeArea::Crystal => "Crystal Fields",
+            ModeArea::Reciprocal => "Reciprocal & Diffraction",
+            ModeArea::Electronic => "Electronic & Topological",
+            ModeArea::Materials => "Materials & Order",
+            ModeArea::Classical => "Classical Continuum",
+            ModeArea::Fields => "Fields & Relativity",
+        }
+    }
+}
+
+impl ModeInfo {
+    pub const fn area(&self) -> ModeArea {
+        match self.idx {
+            0..=8 | 11 | 13 | 24 | 37 => ModeArea::Crystal,
+            9 | 10 | 14 | 18 => ModeArea::Reciprocal,
+            15 | 17 | 20..=22 | 28..=34 | 36 | 39 | 40 => ModeArea::Electronic,
+            12 | 16 | 19 | 23 | 25 | 26 | 35 | 38 => ModeArea::Materials,
+            27 | 42 | 43 => ModeArea::Classical,
+            41 | 44 | 45 => ModeArea::Fields,
+            _ => ModeArea::Crystal,
+        }
+    }
+}
+
+pub const MODES: [ModeInfo; 46] = [
     ModeInfo {
         idx: 0, name: "3D ISO",
         tagline: "Ray-marched isosurface of the crystal-field scalar.",
@@ -472,6 +529,17 @@ pub const MODES: [ModeInfo; 45] = [
             "D = 1 / [γ(1 − β·n̂)],    I_obs = D⁴ · √(1 − rₛ/r) · I_em",
         ],
         notes: "field_mix raises the camera elevation (0 = edge-on disk, 1 = top-down). iso_level controls disk emissivity, color_shift rotates the disk hue, zoom is the camera FOV. Hold the mouse to orbit — sweep horizontally for azimuth, vertically for elevation. Watch the disk near-side pass in front of the black hole while the secondary image arcs over the top of the photon ring; the photon sphere sits at b = (3√3/2) rₛ.",
+    },
+    ModeInfo {
+        idx: 45, name: "GRAV WAVE",
+        tagline: "Binary-inspiral gravitational waves with interferometer fringes.",
+        equations: &[
+            "h_+(r,t) = A/r * cos(2(phi - theta) - omega r)",
+            "h_x(r,t) = A/r * sin(2(phi - theta) - omega r)",
+            "ds^2 = -dt^2 + (1+h_+)dx^2 + (1-h_+)dy^2 + 2h_x dxdy",
+            "Delta L/L ~= h_+/2",
+        ],
+        notes: "A compact binary chirps from wide orbit to merger, sending quadrupole strain rings through a distorted test grid. The cross-shaped Michelson arms turn h+/hx into shifting interference fringes. field_mix raises chirp frequency, iso_level increases strain amplitude and ring sharpness, color_shift rotates the polarization basis, and zoom sets the detector window.",
     },
 ];
 
