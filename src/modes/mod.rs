@@ -16,6 +16,9 @@
 //! See `CONTRACT.md` in this directory for the full surface available to
 //! mode authors.
 
+pub mod info;
+pub use info::{ModeInfo, MODES, MODE_NAMES, MODE_NAMES_SLICE};
+
 pub const FIELD_SHADER: &str = concat!(
     include_str!("prelude.wgsl"),
     "\n",
@@ -68,6 +71,14 @@ pub const FIELD_SHADER: &str = concat!(
     include_str!("mode_plasmon.wgsl"),
     "\n",
     include_str!("mode_nematic.wgsl"),
+    "\n",
+    include_str!("mode_abrikosov.wgsl"),
+    "\n",
+    include_str!("mode_crystal_dive.wgsl"),
+    "\n",
+    include_str!("mode_nano_phase.wgsl"),
+    "\n",
+    include_str!("mode_magnon.wgsl"),
     "\n",
     include_str!("dispatch.wgsl"),
 );

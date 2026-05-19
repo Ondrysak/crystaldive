@@ -12,16 +12,7 @@ use crate::poscar::{Atom, Crystal};
 use crate::reciprocal::{GpuField, MAX_G};
 use crate::renderer::{FEEDBACK_SHADER, BLIT_SHADER};
 
-pub const MODE_NAMES: &[&str] = &[
-    "3D ISO", "BZ SLICE", "FERMI", "DENSITY", "NODAL", "PHASE",
-    "STRIPES", "WARP", "LINKS", "XRD", "RECIP", "NONEUC",
-    "PHONON", "MOIRE", "EWALD", "WANNIER", "MAGNETIC", "DISPERSION",
-    "KIKUCHI", "DEFECT", "BAND SURFACE", "SPIN TEXTURE",
-    "BZ PATH", "CDW", "QUASICRYSTAL", "THERMAL", "DOMAIN WALL",
-    "FRACTURE",
-    "BERRY", "HOFSTADTER", "STM", "SPECTRAL", "VORTEX KNOT",
-    "BLOCH WAVE", "PLASMON", "NEMATIC",
-];
+pub use crate::modes::MODE_NAMES_SLICE as MODE_NAMES;
 
 #[derive(Debug, Clone)]
 pub struct ModeTiming {
@@ -608,6 +599,276 @@ pub fn slow_modes(results: &[ModeTiming], max_ratio: f64) -> (f64, Vec<ModeTimin
     (median, slow)
 }
 
+// ── Headless clip rendering ──────────────────────────────────────────────
+//
+// `render_clip` is the workhorse behind `crystal-viz --render preset.json …`:
+// it spins up an offscreen wgpu device sized to the requested resolution,
+// renders one frame per fps tick by calling `eval(t)` to get a FieldUniform,
+// copies the framebuffer back, and writes a PNG per frame.
+//
+// Feedback path is intentionally NOT wired in here — the headless renderer
+// does the single-pass field shader only. Adding feedback would mean keeping a
+// persistent ping-pong texture across frames; doable but out of scope for v1.
+
+pub struct ClipOpts {
+    pub width:    u32,
+    pub height:   u32,
+    pub fps:      u32,
+    pub duration: f32,         // seconds
+    pub start:    f32,         // seconds offset added to t
+    pub out_dir:  std::path::PathBuf,
+}
+
+pub fn render_clip<F>(opts: ClipOpts, crystal: &Crystal, eval: F) -> Result<(), String>
+where
+    F: FnMut(f32) -> crate::renderer::FieldUniform,
+{
+    pollster::block_on(render_clip_async(opts, crystal, eval))
+}
+
+async fn render_clip_async<F>(opts: ClipOpts, crystal: &Crystal, mut eval: F) -> Result<(), String>
+where
+    F: FnMut(f32) -> crate::renderer::FieldUniform,
+{
+    type FU = crate::renderer::FieldUniform;
+    use std::io::Write;
+    std::fs::create_dir_all(&opts.out_dir).map_err(|e| format!("mkdir {}: {e}", opts.out_dir.display()))?;
+
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::all(), ..Default::default()
+    });
+    let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        compatible_surface: None, force_fallback_adapter: false,
+    }).await.ok_or_else(|| "no GPU adapter".to_string())?;
+    let info = adapter.get_info();
+    eprintln!("GPU: {} ({:?}, {:?})", info.name, info.backend, info.device_type);
+
+    let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("render-clip"),
+        required_features: wgpu::Features::empty(),
+        required_limits: wgpu::Limits::default(),
+        memory_hints: Default::default(),
+    }, None).await.map_err(|e| format!("device: {e}"))?;
+
+    // sRGB output: matches the live-app surface format so the offline renders
+    // look the same as what the user sees. The GPU encodes shader values into
+    // sRGB on write; we copy those raw bytes verbatim into a PNG, which is the
+    // sRGB colour space by default.
+    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("clip target"),
+        size: wgpu::Extent3d { width: opts.width, height: opts.height, depth_or_array_layers: 1 },
+        mip_level_count: 1, sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let target_view = target.create_view(&Default::default());
+
+    // Per-row alignment requirement for buffer→texture copies.
+    let bytes_per_pixel = 4u32;
+    let unpadded_row = opts.width * bytes_per_pixel;
+    let row_align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    let padded_row = unpadded_row.div_ceil(row_align) * row_align;
+    let buf_size   = (padded_row as u64) * (opts.height as u64);
+
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("readback"),
+        size: buf_size,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+
+    let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("uniform"),
+        size: std::mem::size_of::<FU>() as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+
+    let g_texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("g_tex"),
+        size: wgpu::Extent3d { width: MAX_G as u32, height: 2, depth_or_array_layers: 1 },
+        mip_level_count: 1, sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba32Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let g_view = g_texture.create_view(&Default::default());
+
+    let mut field = GpuField::from_crystal(crystal, 3);
+    field.seed_kpoint([0.0, 0.0, 0.0], 1.0);
+    let num_g = field.count as u32;
+    let packed = field.pack();
+    queue.write_texture(
+        wgpu::ImageCopyTexture {
+            texture: &g_texture, mip_level: 0,
+            origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
+        },
+        bytemuck::cast_slice(&packed),
+        wgpu::ImageDataLayout {
+            offset: 0,
+            bytes_per_row: Some((MAX_G * 4 * 4) as u32),
+            rows_per_image: Some(2),
+        },
+        wgpu::Extent3d { width: MAX_G as u32, height: 2, depth_or_array_layers: 1 },
+    );
+
+    let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("clip bgl"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0, visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false, min_binding_size: None,
+                }, count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1, visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                }, count: None,
+            },
+        ],
+    });
+    let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("clip bg"), layout: &bgl,
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: uniform_buf.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&g_view) },
+        ],
+    });
+    let sm = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("field"),
+        source: wgpu::ShaderSource::Wgsl(FIELD_SHADER.into()),
+    });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None, bind_group_layouts: &[&bgl], push_constant_ranges: &[],
+    });
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("clip pl"), layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &sm, entry_point: "vs_screen", buffers: &[],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &sm, entry_point: "fs_field",
+            targets: &[Some(wgpu::ColorTargetState {
+                format, blend: None, write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None, multisample: wgpu::MultisampleState::default(),
+        multiview: None, cache: None,
+    });
+
+    let total_frames = (opts.duration * opts.fps as f32).ceil() as u32;
+    eprintln!(
+        "Rendering {} frames at {}×{} @ {}fps ({:.2}s)…",
+        total_frames, opts.width, opts.height, opts.fps, opts.duration,
+    );
+
+    let t_start = Instant::now();
+    for frame_idx in 0..total_frames {
+        let t = opts.start + frame_idx as f32 / opts.fps as f32;
+        let mut u = eval(t);
+        // Caller can't know num_g (it's set inside this fn from the crystal),
+        // so we patch it on every frame.
+        u.num_g = num_g;
+        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&u));
+
+        let mut enc = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("clip"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target_view, resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None, timestamp_writes: None,
+            });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        enc.copy_texture_to_buffer(
+            wgpu::ImageCopyTexture {
+                texture: &target, mip_level: 0,
+                origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::ImageCopyBuffer {
+                buffer: &readback,
+                layout: wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_row),
+                    rows_per_image: Some(opts.height),
+                },
+            },
+            wgpu::Extent3d { width: opts.width, height: opts.height, depth_or_array_layers: 1 },
+        );
+        queue.submit([enc.finish()]);
+
+        // Map readback and write PNG.
+        let slice = readback.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| { tx.send(r).ok(); });
+        device.poll(wgpu::Maintain::Wait);
+        rx.recv().map_err(|e| format!("recv: {e}"))?
+            .map_err(|e| format!("map: {e:?}"))?;
+        let data = slice.get_mapped_range();
+
+        // Strip per-row padding.
+        let mut pixels = Vec::with_capacity((unpadded_row * opts.height) as usize);
+        for row in 0..opts.height {
+            let off = (row * padded_row) as usize;
+            pixels.extend_from_slice(&data[off..off + unpadded_row as usize]);
+        }
+        drop(data);
+        readback.unmap();
+
+        // Encode PNG (image::Rgba8 + RgbaImage from raw).
+        let img = image::RgbaImage::from_raw(opts.width, opts.height, pixels)
+            .ok_or_else(|| "RgbaImage::from_raw: size mismatch".to_string())?;
+        let path = opts.out_dir.join(format!("frame_{frame_idx:06}.png"));
+        img.save(&path).map_err(|e| format!("save {}: {e}", path.display()))?;
+
+        if frame_idx % 30 == 0 || frame_idx + 1 == total_frames {
+            let pct = 100.0 * (frame_idx + 1) as f32 / total_frames as f32;
+            eprint!("\r  frame {:>5}/{}  ({:.0}%)", frame_idx + 1, total_frames, pct);
+            let _ = std::io::stderr().flush();
+        }
+    }
+    eprintln!();
+    let elapsed = t_start.elapsed().as_secs_f64();
+    eprintln!(
+        "Done in {:.1}s ({:.1} render-fps). Frames at: {}",
+        elapsed, total_frames as f64 / elapsed, opts.out_dir.display(),
+    );
+    eprintln!();
+    eprintln!("To encode the result with ffmpeg, run:");
+    eprintln!(
+        "  ffmpeg -framerate {} -i {}/frame_%06d.png -c:v libx264 \\",
+        opts.fps,
+        opts.out_dir.display(),
+    );
+    eprintln!(
+        "         -pix_fmt yuv420p -crf 18 -preset slow {}.mp4",
+        opts.out_dir.file_stem().and_then(|s| s.to_str()).unwrap_or("clip"),
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -644,7 +905,7 @@ mod tests {
     #[test]
     fn mode_names_count_matches_dispatch() {
         // Sanity: the mode name table must match the count rendered by the shader.
-        // After CLOUD/ORBITAL/NEUTRON removal we expect exactly 36.
-        assert_eq!(MODE_NAMES.len(), 36);
+        // 38 prior + NANO PHASE (38) + MAGNON (39) = 40.
+        assert_eq!(MODE_NAMES.len(), 40);
     }
 }

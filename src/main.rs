@@ -14,6 +14,7 @@ use winit::{
 use crystal_viz::{audio, crystals, kpoints, poscar, reciprocal, renderer, symmetry};
 
 mod midi;
+mod preset;
 use crystals::{all_crystals, all_groups, CrystalDef};
 use poscar::Crystal;
 use reciprocal::{crossfade_pack, GpuField};
@@ -26,7 +27,7 @@ use winit::platform::web::{EventLoopExtWebSys, WindowAttributesExtWebSys};
 
 // ── field parameters ──────────────────────────────────────────────────────
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct FieldParams {
     pub mode:           u32,
     pub kscale:         f32,
@@ -70,20 +71,11 @@ impl Default for FieldParams {
     }
 }
 
-const MODE_NAMES: [&str; 36] = [
-    "3D ISO", "BZ SLICE", "FERMI", "DENSITY", "NODAL", "PHASE",
-    "STRIPES", "WARP", "LINKS", "XRD", "RECIP", "NONEUC",
-    "PHONON", "MOIRE", "EWALD", "WANNIER", "MAGNETIC", "DISPERSION",
-    "KIKUCHI", "DEFECT", "BAND SURFACE", "SPIN TEXTURE",
-    "BZ PATH", "CDW", "QUASICRYSTAL", "THERMAL", "DOMAIN WALL",
-    "FRACTURE",
-    "BERRY", "HOFSTADTER", "STM", "SPECTRAL", "VORTEX KNOT",
-    "BLOCH WAVE", "PLASMON", "NEMATIC",
-];
+use crystal_viz::modes::{ModeInfo, MODES, MODE_NAMES};
 
 // ── LFO ───────────────────────────────────────────────────────────────────
 
-#[derive(Clone, Copy, PartialEq, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Default, Debug, serde::Serialize, serde::Deserialize)]
 pub enum LfoWave {
     #[default]
     Sine,
@@ -133,14 +125,14 @@ impl LfoWave {
     }
 }
 
-fn bz_hash(n: f32) -> f32 {
+pub fn bz_hash(n: f32) -> f32 {
     (n * 127.1 + 19.19).sin().fract().abs()
 }
 
 const TAU: f32 = std::f32::consts::PI * 2.0;
 
 /// Which LFO bank drives a target parameter.
-#[derive(Clone, Copy, PartialEq, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Default, Debug, serde::Serialize, serde::Deserialize)]
 pub enum LfoSrc {
     #[default]
     Off,
@@ -166,7 +158,7 @@ impl LfoSrc {
 
 /// One LFO bank: a waveform, rate, depth, and phase offset.
 /// Two independent banks (A and B) live inside `LfoParams`.
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct LfoEngine {
     pub rate:  f32,    // cycles per second
     pub depth: f32,    // 0..1 — scaled by each param's range
@@ -180,7 +172,7 @@ impl LfoEngine {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct LfoParams {
     pub a: LfoEngine,
     pub b: LfoEngine,
@@ -311,10 +303,83 @@ impl Default for MicParams {
 
 const TOUR_MODES: [u32; 14] = [22, 32, 28, 20, 30, 15, 24, 34, 4, 29, 21, 25, 18, 35];
 
+// ── Trip level ────────────────────────────────────────────────────────────
+//
+// 0 = stillness (no LFOs routed, single mode, no feedback layer, slow walks)
+// 9 = total madness (steps/pulse LFOs, fast mode swaps, heavy fractal feedback)
+// Every other knob (scene length, walk duration, LFO rate/depth/wave, feedback
+// routing) is interpolated smoothly between the two.
+
+#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TripLevel(u8);
+
+impl Default for TripLevel { fn default() -> Self { Self(4) } }
+
+impl TripLevel {
+    pub const MAX_VAL: u8 = 9;
+
+    pub fn new(v: u8) -> Self { Self(v.min(Self::MAX_VAL)) }
+    pub fn get(self) -> u8 { self.0 }
+    pub fn inc(self) -> Self { Self((self.0 + 1).min(Self::MAX_VAL)) }
+    pub fn dec(self) -> Self { Self(self.0.saturating_sub(1)) }
+
+    fn t(self) -> f32 { self.0 as f32 / Self::MAX_VAL as f32 }
+    fn lerp(self, lo: f32, hi: f32) -> f32 { lo + (hi - lo) * self.t() }
+
+    fn wave_a(self) -> LfoWave {
+        match self.0 {
+            0..=2 => LfoWave::Sine,
+            3..=5 => LfoWave::Triangle,
+            6..=7 => LfoWave::Saw,
+            8     => LfoWave::Pulse,
+            _     => LfoWave::Steps,
+        }
+    }
+    fn wave_b(self) -> LfoWave {
+        match self.0 {
+            0..=1 => LfoWave::Sine,
+            2..=4 => LfoWave::Triangle,
+            5..=6 => LfoWave::Saw,
+            7     => LfoWave::Pulse,
+            _     => LfoWave::Square,
+        }
+    }
+
+    fn scene_len(self)   -> f32 { self.lerp(28.0, 1.8) }
+    fn walk_dur(self)    -> f32 { self.lerp(28.0, 2.0) }
+    fn fade_dur(self)    -> f32 { self.lerp(3.0, 0.8) }
+    fn lfo_a_rate(self)  -> f32 { self.lerp(0.03, 1.00) }
+    fn lfo_b_rate(self)  -> f32 { self.lerp(0.02, 0.65) }
+    fn lfo_a_depth(self) -> f32 { self.lerp(0.0, 0.70) }
+    fn lfo_b_depth(self) -> f32 { self.lerp(0.0, 0.55) }
+    fn fb_enabled(self)  -> bool { self.0 >= 3 }
+    fn fb_strength(self) -> f32 {
+        if self.0 < 3 { 0.0 } else {
+            let t = (self.0 - 3) as f32 / (Self::MAX_VAL - 3) as f32;
+            0.35 + 0.65 * t
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self.0 {
+            0 => "0 still",
+            1 => "1 drift",
+            2 => "2 calm",
+            3 => "3 sway",
+            4 => "4 flow",
+            5 => "5 swirl",
+            6 => "6 churn",
+            7 => "7 wobble",
+            8 => "8 strobe",
+            _ => "9 madness",
+        }
+    }
+}
+
 // ── Sequencer ────────────────────────────────────────────────────────────
 
-#[derive(Clone, Copy, PartialEq)]
-enum TranCurve { Linear, EaseInOut, Snap, Bounce }
+#[derive(Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum TranCurve { Linear, EaseInOut, Snap, Bounce }
 
 impl TranCurve {
     fn apply(self, t: f32) -> f32 {
@@ -347,27 +412,27 @@ impl TranCurve {
     }
 }
 
-#[derive(Clone)]
-struct SeqStep {
-    params:         FieldParams,
-    muted:          bool,
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct SeqStep {
+    pub params:         FieldParams,
+    pub muted:          bool,
     /// Per-step duration multiplier in [0.25, 4.0]. 1.0 = global step_dur.
-    dur_mul:        f32,
+    pub dur_mul:        f32,
     /// Per-step transition curve override (None = use Sequencer.curve).
-    curve_override: Option<TranCurve>,
+    pub curve_override: Option<TranCurve>,
     /// Probability the step plays when advance lands on it (0..1, 1.0 = always).
-    prob:           f32,
+    pub prob:           f32,
 }
 
 impl SeqStep {
-    fn new(p: FieldParams) -> Self {
+    pub fn new(p: FieldParams) -> Self {
         Self { params: p, muted: false, dur_mul: 1.0, curve_override: None, prob: 1.0 }
     }
 }
 
 /// Step traversal order for the sequencer.
-#[derive(Clone, Copy, PartialEq, Default)]
-enum SeqPlayMode {
+#[derive(Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub enum SeqPlayMode {
     #[default]
     Forward,
     Reverse,
@@ -398,8 +463,12 @@ fn lerp_fp(a: &FieldParams, b: &FieldParams, t: f32) -> FieldParams {
     let l = |x: f32, y: f32| x + (y - x) * t;
     let d = b.color_shift - a.color_shift;
     let cs_delta = if d > 0.5 { d - 1.0 } else if d < -0.5 { d + 1.0 } else { d };
+    // Discrete fields snap to `b` immediately at t=0 (Digitakt-style trig: when
+    // the sequencer advances to step N, that step's mode/mirror/blend is what
+    // we see for the whole step duration — no half-step desync against the
+    // visual highlight). Continuous fields still glide smoothly across the step.
     FieldParams {
-        mode:           if t < 0.5 { a.mode } else { b.mode },
+        mode:           b.mode,
         kscale:         l(a.kscale,    b.kscale),
         speed:          l(a.speed,     b.speed),
         field_mix:      l(a.field_mix, b.field_mix),
@@ -409,8 +478,8 @@ fn lerp_fp(a: &FieldParams, b: &FieldParams, t: f32) -> FieldParams {
         w_lattice:      l(a.w_lattice, b.w_lattice),
         w_motif:        l(a.w_motif,   b.w_motif),
         w_band:         l(a.w_band,    b.w_band),
-        fb_enabled:     if t < 0.5 { a.fb_enabled } else { b.fb_enabled },
-        fb_mirror:      if t < 0.5 { a.fb_mirror } else { b.fb_mirror },
+        fb_enabled:     b.fb_enabled,
+        fb_mirror:      b.fb_mirror,
         fb_zoom:        l(a.fb_zoom,        b.fb_zoom),
         fb_offset_x:    l(a.fb_offset_x,    b.fb_offset_x),
         fb_offset_y:    l(a.fb_offset_y,    b.fb_offset_y),
@@ -421,7 +490,7 @@ fn lerp_fp(a: &FieldParams, b: &FieldParams, t: f32) -> FieldParams {
         fb_fold_angle:  l(a.fb_fold_angle,  b.fb_fold_angle),
         fb_saturation:  l(a.fb_saturation,  b.fb_saturation),
         fb_brightness:  l(a.fb_brightness,  b.fb_brightness),
-        fb_blend_mode:  if t < 0.5 { a.fb_blend_mode } else { b.fb_blend_mode },
+        fb_blend_mode:  b.fb_blend_mode,
         fb_motion_blur: l(a.fb_motion_blur,  b.fb_motion_blur),
     }
 }
@@ -495,7 +564,7 @@ const SEQ_PRESETS: [(&str, fn() -> Vec<SeqStep>); 4] = [
     ("CHROMA",   seq_preset_chromatic),
 ];
 
-struct Sequencer {
+pub struct Sequencer {
     pub active:     bool,
     pub manual:     bool,
     pub steps:      Vec<SeqStep>,
@@ -505,9 +574,9 @@ struct Sequencer {
     pub curve:      TranCurve,
     pub selected:   Option<usize>,
     pub play_mode:  SeqPlayMode,
-    pub pp_dir:     i8,       // direction for PingPong: +1 or -1 (0 = not started)
-    pub rng_seed:   u32,      // LCG state for Random mode and prob gates
-    from_params:    FieldParams,
+    pub pp_dir:     i8,           // direction for PingPong: +1 or -1 (0 = not started)
+    pub rng_seed:   u32,          // LCG state for Random mode and prob gates
+    pub from_params: FieldParams, // pub so preset::apply can rewind to step 0 cleanly
 }
 
 impl Sequencer {
@@ -692,7 +761,7 @@ fn hue_to_rgb(h: f32) -> (u8, u8, u8) {
     ((r * 200.0) as u8, (g * 200.0) as u8, (b * 200.0) as u8)
 }
 
-fn randomize_fp(seed: f32) -> FieldParams {
+pub fn randomize_fp(seed: f32) -> FieldParams {
     let r = |s: f32| tour_rand(seed + s * 13.17);
     let fb_on = r(11.0) > 0.55; // ~45% chance of feedback
     let mirror_roll = r(12.0);
@@ -756,19 +825,66 @@ impl TourStyle {
     }
 }
 
-fn tour_lfo_preset() -> LfoParams {
-    LfoParams {
-        a: LfoEngine { rate: 0.18, depth: 0.18, wave: LfoWave::Triangle, phase: 0.0  },
-        b: LfoEngine { rate: 0.07, depth: 0.12, wave: LfoWave::Sine,     phase: 0.33 },
-        kscale: LfoSrc::A, speed: LfoSrc::A, field_mix: LfoSrc::A, iso_level: LfoSrc::A,
-        color_shift: LfoSrc::A, zoom: LfoSrc::A,
-        w_lattice: LfoSrc::A, w_motif: LfoSrc::A, w_band: LfoSrc::A,
-        fb_zoom: LfoSrc::B, fb_decay: LfoSrc::Off, fb_color_shift: LfoSrc::B,
-        fb_saturation: LfoSrc::A, fb_brightness: LfoSrc::Off,
-        fb_rotation: LfoSrc::B, fb_offset_x: LfoSrc::Off, fb_offset_y: LfoSrc::Off,
-        fb_inject: LfoSrc::Off, fb_fold_angle: LfoSrc::B,
-        fb_motion_blur: LfoSrc::Off,
+/// Build the curated tour LFO preset for a given trip level.
+///
+/// At level 0 the LFOs are present but nothing is routed (silent). Each level
+/// step wires more targets (color first, then geometry, then feedback), and
+/// engine rate/depth/wave all scale up via `TripLevel`.
+pub fn tour_lfo_preset_for_level(level: TripLevel) -> LfoParams {
+    let mut p = LfoParams::default();
+    p.a = LfoEngine {
+        rate:  level.lfo_a_rate(),
+        depth: level.lfo_a_depth(),
+        wave:  level.wave_a(),
+        phase: 0.0,
+    };
+    p.b = LfoEngine {
+        rate:  level.lfo_b_rate(),
+        depth: level.lfo_b_depth(),
+        wave:  level.wave_b(),
+        phase: 0.33,
+    };
+    let l = level.get();
+    if l >= 1 {
+        p.color_shift    = LfoSrc::A;
+        p.fb_color_shift = LfoSrc::B;
     }
+    if l >= 2 {
+        p.field_mix = LfoSrc::A;
+        p.fb_zoom   = LfoSrc::B;
+    }
+    if l >= 3 {
+        p.iso_level     = LfoSrc::A;
+        p.fb_fold_angle = LfoSrc::B;
+        p.fb_saturation = LfoSrc::A;
+    }
+    if l >= 4 {
+        p.kscale      = LfoSrc::A;
+        p.speed       = LfoSrc::A;
+        p.zoom        = LfoSrc::A;
+        p.w_lattice   = LfoSrc::A;
+        p.w_motif     = LfoSrc::A;
+        p.w_band      = LfoSrc::A;
+        p.fb_rotation = LfoSrc::B;
+    }
+    if l >= 5 {
+        p.fb_offset_x = LfoSrc::B;
+        p.fb_offset_y = LfoSrc::B;
+        p.fb_decay    = LfoSrc::B;
+    }
+    if l >= 6 {
+        p.fb_brightness  = LfoSrc::A;
+        p.fb_motion_blur = LfoSrc::B;
+    }
+    if l >= 7 {
+        p.fb_inject = LfoSrc::A;
+    }
+    p
+}
+
+#[cfg(test)]
+fn tour_lfo_preset() -> LfoParams {
+    tour_lfo_preset_for_level(TripLevel::default())
 }
 
 fn tour_lfo_preset_fb_heavy() -> LfoParams {
@@ -838,16 +954,23 @@ fn fb_auto_params(t: f32, base: &FieldParams) -> FieldParams {
     }
 }
 
-fn tour_random_field_params(t: f32, crystal_idx: usize) -> FieldParams {
-    let scene_f = (t / 4.6).floor();
-    let local = (t / 4.6).fract();
+fn tour_random_field_params(t: f32, crystal_idx: usize, level: TripLevel) -> FieldParams {
+    // Random tour cadence: at level 0 a "scene" stretches to ~25s and morphs slowly,
+    // at level 9 it snaps every ~1.5s with chaotic bursts. Level 0 also collapses to
+    // a single curated mode so the user truly sees stillness.
+    let scene_len = level.lerp(25.0, 1.5);
+    let scene_f = (t / scene_len).floor();
+    let local = (t / scene_len).fract();
     let seed = scene_f + crystal_idx as f32 * 37.0;
     let ease = local * local * (3.0 - 2.0 * local);
-    let burst = if local < 0.22 { (1.0 - local / 0.22).powf(2.0) } else { 0.0 };
+    let burst_scale = level.lerp(0.0, 1.0);
+    let burst = if local < 0.22 { (1.0 - local / 0.22).powf(2.0) * burst_scale } else { 0.0 };
 
     let mode_a = (tour_rand(seed + 1.0) * MODE_NAMES.len() as f32).floor() as u32;
     let mode_b = (tour_rand(seed + 2.0) * MODE_NAMES.len() as f32).floor() as u32;
-    let mode = if local < 0.72 { mode_a } else { mode_b };
+    // Below level 2 we lock to a single mode per crystal so transitions are not the focus.
+    let mode = if level.get() < 2 { TOUR_MODES[crystal_idx % TOUR_MODES.len()] }
+               else if local < 0.72 { mode_a } else { mode_b };
 
     let morph = |slot: f32, min: f32, max: f32| -> f32 {
         let a = tour_rand(seed + slot);
@@ -855,7 +978,7 @@ fn tour_random_field_params(t: f32, crystal_idx: usize) -> FieldParams {
         min + (max - min) * (a + (b - a) * ease)
     };
 
-    let fb_on = tour_rand(seed + 77.0) > 0.45;
+    let fb_on = level.fb_enabled() && tour_rand(seed + 77.0) > 0.45;
     let mirror_roll = tour_rand(seed + 88.0);
     let fb_mirror = if mirror_roll < 0.3 { 0u32 }
         else if mirror_roll < 0.5 { 1 }
@@ -892,22 +1015,36 @@ fn tour_random_field_params(t: f32, crystal_idx: usize) -> FieldParams {
     }
 }
 
-fn tour_field_params(t: f32, crystal_idx: usize, style: TourStyle) -> FieldParams {
+fn tour_field_params(t: f32, crystal_idx: usize, style: TourStyle, level: TripLevel) -> FieldParams {
     if style == TourStyle::Random {
-        return tour_random_field_params(t, crystal_idx);
+        return tour_random_field_params(t, crystal_idx, level);
     }
 
-    let scene = (t / 5.8).floor() as usize;
-    let local = (t / 5.8).fract();
-    let drift = t * 0.17 + crystal_idx as f32 * 0.31;
-    let punch = (TAU * local).sin().max(0.0).powf(1.8);
-    let snap = if local < 0.16 { (1.0 - local / 0.16).powf(2.0) } else { 0.0 };
+    // Curated cadence: scene_len shrinks from ~25s (still) to ~1.8s (madness).
+    // drift, punch, snap intensity also scale with level so visual movement is
+    // gentle at the bottom and aggressive at the top. fb_enabled is gated by
+    // level — feedback only kicks in at 3+.
+    let scene_len = level.scene_len();
+    let scene = (t / scene_len).floor() as usize;
+    let local = (t / scene_len).fract();
+    let drift_rate = level.lerp(0.04, 0.45);
+    let drift = t * drift_rate + crystal_idx as f32 * 0.31;
+    let punch_amt = level.lerp(0.0, 1.0);
+    let punch = (TAU * local).sin().max(0.0).powf(1.8) * punch_amt;
+    let snap_amt = level.lerp(0.0, 1.0);
+    let snap = if local < 0.16 { (1.0 - local / 0.16).powf(2.0) * snap_amt } else { 0.0 };
 
-    let fb_on = (scene % 3) != 0; // feedback in 2/3 of curated scenes
+    let fb_on = level.fb_enabled() && (scene % 3) != 0;
+    let fb_strength = level.fb_strength();
     let fb_mirrors = [0u32, 1, 3, 5, 6, 7, 8, 9];
     let fb_mirror = fb_mirrors[scene % fb_mirrors.len()];
+
+    // Mode-cycling rate: at level 0 the curated mode list is sampled by crystal
+    // only (no scene rotation), so the user sees a single mode per crystal. As
+    // level rises, the scene index folds back in to swap modes every scene_len.
+    let mode_scene = if level.get() < 2 { 0 } else { scene };
     FieldParams {
-        mode: TOUR_MODES[(scene + crystal_idx) % TOUR_MODES.len()],
+        mode: TOUR_MODES[(mode_scene + crystal_idx) % TOUR_MODES.len()],
         kscale:      (1.05 + 0.72 * (TAU * drift).sin().abs() + 0.45 * snap).clamp(0.1, 5.0),
         speed:       (0.22 + 0.82 * punch + 0.18 * (TAU * (drift * 0.37)).sin().abs()).clamp(0.0, 2.0),
         field_mix:   (0.50 + 0.38 * (TAU * (local + drift * 0.11)).sin()).clamp(0.0, 1.0),
@@ -921,18 +1058,18 @@ fn tour_field_params(t: f32, crystal_idx: usize, style: TourStyle) -> FieldParam
         fb_mirror,
         fb_zoom:        (0.96 + 0.04 * (TAU * (local * 0.3 + drift * 0.07)).sin()).clamp(0.90, 1.10),
         fb_decay:       (0.82 + 0.12 * (TAU * (local * 0.5)).cos()).clamp(0.30, 0.99),
-        fb_color_shift: 0.08 * (TAU * (drift * 0.11 + local * 0.3)).sin(),
-        fb_inject:      (0.7 + 0.3 * punch).clamp(0.0, 1.0),
+        fb_color_shift: 0.08 * fb_strength * (TAU * (drift * 0.11 + local * 0.3)).sin(),
+        fb_inject:      (0.4 + 0.6 * fb_strength * punch).clamp(0.0, 1.0),
         fb_saturation:  (1.0 + 0.3 * (TAU * (local * 0.7 + drift * 0.13)).sin()).clamp(0.0, 2.0),
         fb_brightness:  (1.0 + 0.15 * (TAU * local).cos()).clamp(0.0, 2.0),
-        fb_rotation:    0.015 * (TAU * (drift * 0.07 + local * 0.25)).sin(),
-        fb_offset_x:    0.012 * (TAU * (drift * 0.13 + local * 0.4)).sin(),
-        fb_offset_y:    0.012 * (TAU * (drift * 0.09 + local * 0.35)).cos(),
-        fb_fold_angle:  1.2 * (TAU * (drift * 0.05 + local * 0.2)).sin(),
+        fb_rotation:    0.015 * fb_strength * (TAU * (drift * 0.07 + local * 0.25)).sin(),
+        fb_offset_x:    0.012 * fb_strength * (TAU * (drift * 0.13 + local * 0.4)).sin(),
+        fb_offset_y:    0.012 * fb_strength * (TAU * (drift * 0.09 + local * 0.35)).cos(),
+        fb_fold_angle:  1.2 * fb_strength * (TAU * (drift * 0.05 + local * 0.2)).sin(),
         fb_blend_mode:  (scene % 4) as u32,
         // Curated tour: motion blur cycles in 1/4 of scenes (smooth tail feel)
         fb_motion_blur: if (scene % 4) == 2 {
-            (0.20 + 0.18 * (TAU * (local * 0.4)).sin()).clamp(0.0, 0.6)
+            (0.20 + 0.18 * fb_strength * (TAU * (local * 0.4)).sin()).clamp(0.0, 0.6)
         } else { 0.0 },
         ..FieldParams::default()
     }
@@ -1004,8 +1141,6 @@ struct Tour {
 }
 
 const SETTLE_DUR: f32 = 1.2;
-const WALK_DUR:   f32 = 8.0;
-const FADE_DUR:   f32 = 2.5;
 
 impl Tour {
     fn new() -> Self {
@@ -1017,8 +1152,12 @@ impl Tour {
     }
 
     /// Returns true when it's time to snapshot and load the next crystal.
-    fn tick(&mut self, dt: f32) -> bool {
+    /// Walk and fade durations scale with `level` — level 0 lingers on each
+    /// crystal for ~28s, level 9 swaps every ~2s.
+    fn tick(&mut self, dt: f32, level: TripLevel) -> bool {
         if !self.active { return false; }
+        let walk_dur = level.walk_dur();
+        let fade_dur = level.fade_dur();
         self.phase_timer += dt;
         match self.phase {
             TourPhase::Settling => {
@@ -1028,7 +1167,7 @@ impl Tour {
                 }
             }
             TourPhase::Walking => {
-                if self.phase_timer >= WALK_DUR {
+                if self.phase_timer >= walk_dur {
                     self.phase = TourPhase::Fading;
                     self.phase_timer = 0.0;
                     self.fade_t = 0.0;
@@ -1036,8 +1175,8 @@ impl Tour {
                 }
             }
             TourPhase::Fading => {
-                self.fade_t = (self.phase_timer / FADE_DUR).clamp(0.0, 1.0);
-                if self.phase_timer >= FADE_DUR {
+                self.fade_t = (self.phase_timer / fade_dur).clamp(0.0, 1.0);
+                if self.phase_timer >= fade_dur {
                     self.prev_field = None;
                     self.fade_t = 0.0;
                     self.phase = TourPhase::Settling;
@@ -1066,6 +1205,9 @@ struct UiReq {
     screenshot:   bool,
     tour_toggle:  bool,
     tour_style_toggle: bool,
+    trip_level_inc:   bool,
+    trip_level_dec:   bool,
+    trip_level_set:   Option<u8>,
     kpath_toggle: bool,
     panel_toggle: bool,
     render_mode:  Option<RenderMode>,
@@ -1083,11 +1225,22 @@ struct UiReq {
     fb_reset:          bool,
     fb_auto_toggle:    bool,
     keymap_toggle:     bool,
+    mode_info_toggle:  bool,
     seq_play_mode_toggle: bool,
     seq_capture:          bool,
     seq_step_dur_mul:     Option<(usize, f32)>,
     seq_step_curve_cycle: Option<usize>,
     seq_step_prob:        Option<(usize, f32)>,
+    // Preset I/O
+    preset_load_bundled:  Option<usize>,
+    preset_random:        bool,
+    preset_show_json:     bool,
+    preset_copy_json:     bool,
+    preset_apply_json:    Option<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    preset_save_path:     Option<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    preset_load_path:     Option<String>,
 }
 
 struct App {
@@ -1112,6 +1265,7 @@ struct App {
 
     tour:         Tour,
     tour_style:   TourStyle,
+    trip_level:   TripLevel,
     sequencer:    Sequencer,
     all_crystals: Vec<&'static CrystalDef>,
 
@@ -1123,6 +1277,14 @@ struct App {
     midi_in:      Option<midi::MidiCapture>,
     fb_auto:      bool,
     show_keymap:  bool,
+    show_mode_info: bool,
+    // Preset editor modal
+    preset_editor_open: bool,
+    preset_editor_text: String,
+    preset_status:      String,
+    preset_random_seed: u32,
+    #[cfg(not(target_arch = "wasm32"))]
+    preset_path_input:  String,
 }
 
 enum UserEvent {
@@ -1145,6 +1307,7 @@ impl App {
             kpath_active: false, kpt_idx: 0,
             tour: Tour::new(),
             tour_style: TourStyle::default(),
+            trip_level: TripLevel::default(),
             sequencer: Sequencer::new(),
             all_crystals: all,
             panel_open: true,
@@ -1155,6 +1318,13 @@ impl App {
             midi_in: midi::MidiCapture::start(),
             fb_auto: false,
             show_keymap: false,
+            show_mode_info: false,
+            preset_editor_open: false,
+            preset_editor_text: String::new(),
+            preset_status: String::new(),
+            preset_random_seed: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            preset_path_input: String::new(),
         }
     }
 
@@ -1258,16 +1428,6 @@ impl ApplicationHandler<UserEvent> for App {
                 if event.state != ElementState::Pressed { return }
                 match event.physical_key {
                     PhysicalKey::Code(KeyCode::Escape) => event_loop.exit(),
-                    PhysicalKey::Code(KeyCode::Tab) => {
-                        self.render_mode = match self.render_mode {
-                            RenderMode::Atoms => RenderMode::Field,
-                            RenderMode::Field => RenderMode::Atoms,
-                        };
-                    }
-                    PhysicalKey::Code(KeyCode::Space) => { self.auto_rotate = !self.auto_rotate; }
-                    PhysicalKey::Code(KeyCode::Digit1) => gpu.set_supercell(1),
-                    PhysicalKey::Code(KeyCode::Digit2) => gpu.set_supercell(2),
-                    PhysicalKey::Code(KeyCode::Digit3) => gpu.set_supercell(3),
                     PhysicalKey::Code(KeyCode::KeyM) => {
                         self.field_params.mode = (self.field_params.mode + 1) % MODE_NAMES.len() as u32;
                     }
@@ -1298,8 +1458,21 @@ impl ApplicationHandler<UserEvent> for App {
                         if self.tour.active {
                             self.render_mode = RenderMode::Field;
                             self.kpath_active = true;
-                            self.lfo = tour_lfo_preset();
+                            self.lfo = tour_lfo_preset_for_level(self.trip_level);
                             if let Some(kp) = &mut gpu.kpath { kp.reset(); }
+                        }
+                    }
+                    // Minus / Equals: step the trip level down/up
+                    PhysicalKey::Code(KeyCode::Minus) => {
+                        self.trip_level = self.trip_level.dec();
+                        if self.tour.active {
+                            self.lfo = tour_lfo_preset_for_level(self.trip_level);
+                        }
+                    }
+                    PhysicalKey::Code(KeyCode::Equal) => {
+                        self.trip_level = self.trip_level.inc();
+                        if self.tour.active {
+                            self.lfo = tour_lfo_preset_for_level(self.trip_level);
                         }
                     }
                     PhysicalKey::Code(KeyCode::KeyA) => {
@@ -1370,7 +1543,7 @@ impl ApplicationHandler<UserEvent> for App {
 
                 // ── Tour tick ─────────────────────────────────────────
                 if self.tour.active && render_mode == RenderMode::Field {
-                    let should_advance = self.tour.tick(dt);
+                    let should_advance = self.tour.tick(dt, self.trip_level);
                     if should_advance {
                         let total = self.all_crystals.len();
                         let next_idx = (self.tour.crystal_idx + 1) % total;
@@ -1431,9 +1604,11 @@ impl ApplicationHandler<UserEvent> for App {
                 let cur_panel_open    = self.panel_open;
                 let cur_fb_auto       = self.fb_auto;
                 let cur_show_keymap   = self.show_keymap;
+                let cur_show_mode_info = self.show_mode_info;
                 let cur_crystal_idx   = self.tour.crystal_idx;
+                let cur_trip_level    = self.trip_level;
                 let tour_fp = if self.tour.active {
-                    Some(tour_field_params(t, self.tour.crystal_idx, self.tour_style))
+                    Some(tour_field_params(t, self.tour.crystal_idx, self.tour_style, self.trip_level))
                 } else {
                     None
                 };
@@ -1539,6 +1714,13 @@ impl ApplicationHandler<UserEvent> for App {
                 // Snapshot search string
                 let mut search = self.search_str.clone();
 
+                // Preset editor snapshot
+                let cur_preset_editor_open = self.preset_editor_open;
+                let mut preset_editor_text = self.preset_editor_text.clone();
+                let cur_preset_status      = self.preset_status.clone();
+                #[cfg(not(target_arch = "wasm32"))]
+                let mut preset_path_input  = self.preset_path_input.clone();
+
                 // Crystal list (static data, no borrows)
                 let groups   = all_groups();
                 let all_defs = all_crystals();
@@ -1558,14 +1740,6 @@ impl ApplicationHandler<UserEvent> for App {
                                 req.panel_toggle = true;
                             }
                             ui.separator();
-                            // Atoms / Field render mode
-                            if ui.selectable_label(cur_render_mode == RenderMode::Atoms, "ATOMS").clicked() {
-                                req.render_mode = Some(RenderMode::Atoms);
-                            }
-                            if ui.selectable_label(cur_render_mode == RenderMode::Field, "FIELD").clicked() {
-                                req.render_mode = Some(RenderMode::Field);
-                            }
-                            ui.separator();
                             // Tour / sequencer transport
                             let tour_lbl = if cur_tour_active { "■ TOUR" } else { "▶ TOUR" };
                             let tour_col = if cur_tour_active {
@@ -1577,6 +1751,25 @@ impl ApplicationHandler<UserEvent> for App {
                             if ui.small_button(cur_tour_style.label()).clicked() {
                                 req.tour_style_toggle = true;
                             }
+                            // Trip-level stepper: − [lvl] +
+                            if ui.small_button("−")
+                                .on_hover_text("Lower trip level (-)")
+                                .clicked() { req.trip_level_dec = true; }
+                            let trip_col = {
+                                // Color ramps from cool gray (0) through warm amber to hot magenta (9)
+                                let f = cur_trip_level.t();
+                                let r = (140.0 + 115.0 * f) as u8;
+                                let g = (180.0 - 110.0 * f) as u8;
+                                let b = (220.0 - 100.0 * f) as u8;
+                                egui::Color32::from_rgb(r, g, b)
+                            };
+                            ui.add(egui::Label::new(
+                                egui::RichText::new(cur_trip_level.label())
+                                    .color(trip_col).monospace()
+                            )).on_hover_text("Trip intensity (0 still → 9 madness). Keys: − / =");
+                            if ui.small_button("+")
+                                .on_hover_text("Raise trip level (=)")
+                                .clicked() { req.trip_level_inc = true; }
                             let seq_lbl = if cur_seq_active { "■ SEQ" } else { "▶ SEQ" };
                             let seq_col = if cur_seq_active {
                                 egui::Color32::from_rgb(180, 140, 255)
@@ -1731,6 +1924,21 @@ impl ApplicationHandler<UserEvent> for App {
                                             }
                                             if ui.small_button("▶").clicked() {
                                                 fp.mode = (fp.mode + 1) % MODE_NAMES.len() as u32;
+                                            }
+                                            let info_btn = egui::Button::new(
+                                                egui::RichText::new("ⓘ").color(
+                                                    if cur_show_mode_info {
+                                                        egui::Color32::from_rgb(255, 220, 120)
+                                                    } else {
+                                                        egui::Color32::from_rgb(180, 180, 200)
+                                                    }
+                                                )
+                                            ).small();
+                                            if ui.add(info_btn)
+                                                .on_hover_text("Mode info: equations + slider semantics")
+                                                .clicked()
+                                            {
+                                                req.mode_info_toggle = true;
                                             }
                                         });
                                         ui.add_space(2.0);
@@ -2071,9 +2279,27 @@ impl ApplicationHandler<UserEvent> for App {
                                 }
                                 ui.separator();
 
-                                // Presets
-                                for (i, (name, _)) in SEQ_PRESETS.iter().enumerate() {
-                                    if ui.small_button(*name).clicked() { req.seq_preset = Some(i); }
+                                // Bundled-preset dropdown (full Preset, applies LFO + level too)
+                                egui::ComboBox::from_id_salt("preset_combo")
+                                    .selected_text("PRESET")
+                                    .width(110.0)
+                                    .show_ui(ui, |ui| {
+                                        for (i, (name, _)) in preset::BUNDLED_PRESETS.iter().enumerate() {
+                                            if ui.selectable_label(false, *name).clicked() {
+                                                req.preset_load_bundled = Some(i);
+                                            }
+                                        }
+                                    });
+
+                                if ui.add(egui::Button::new(
+                                    egui::RichText::new("🎲 RANDOM")
+                                        .color(egui::Color32::from_rgb(255, 180, 255))
+                                )).on_hover_text("Roll a fresh random preset (steps + LFO + trip level)").clicked() {
+                                    req.preset_random = true;
+                                }
+                                if ui.small_button("{ } JSON")
+                                    .on_hover_text("Open the preset JSON editor").clicked() {
+                                    req.preset_show_json = true;
                                 }
                             });
 
@@ -2174,9 +2400,6 @@ impl ApplicationHandler<UserEvent> for App {
                                         ui.label(egui::RichText::new("VIEW")
                                             .small().color(egui::Color32::from_gray(150)));
                                         ui.label(""); ui.end_row();
-                                        row(ui, "Tab",   "toggle Atoms / Field render mode");
-                                        row(ui, "Space", "toggle auto-rotate camera");
-                                        row(ui, "1 / 2 / 3", "supercell size (Atoms mode)");
                                         row(ui, "M", "cycle field mode");
                                         ui.label(egui::RichText::new("FIELD")
                                             .small().color(egui::Color32::from_gray(150)));
@@ -2190,6 +2413,7 @@ impl ApplicationHandler<UserEvent> for App {
                                         ui.label(""); ui.end_row();
                                         row(ui, "A", "toggle FB AUTO (auto-pilot)");
                                         row(ui, "T", "toggle TOUR");
+                                        row(ui, "− / =", "trip level down / up (0 still → 9 madness)");
                                         ui.label(egui::RichText::new("UI")
                                             .small().color(egui::Color32::from_gray(150)));
                                         ui.label(""); ui.end_row();
@@ -2212,6 +2436,118 @@ impl ApplicationHandler<UserEvent> for App {
                                     .small().color(egui::Color32::from_gray(150)));
                             });
                         if !open { req.keymap_toggle = true; }
+                    }
+
+                    // ── Mode info overlay ─────────────────────────────
+                    if cur_show_mode_info {
+                        let mut open = true;
+                        let info: &ModeInfo = &MODES[cur_mode_idx];
+                        egui::Window::new(format!("Mode {} — {}", info.idx, info.name))
+                            .id(egui::Id::new("mode_info_overlay"))
+                            .open(&mut open)
+                            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-12.0, 56.0))
+                            .resizable(true)
+                            .collapsible(false)
+                            .default_width(380.0)
+                            .show(ctx, |ui| {
+                                ui.label(egui::RichText::new(info.tagline)
+                                    .italics()
+                                    .color(egui::Color32::from_rgb(200, 210, 230)));
+                                ui.add_space(6.0);
+                                ui.separator();
+                                ui.add_space(4.0);
+                                ui.label(egui::RichText::new("equations")
+                                    .small()
+                                    .color(egui::Color32::from_gray(140)));
+                                ui.add_space(2.0);
+                                for eq in info.equations.iter() {
+                                    ui.label(egui::RichText::new(*eq)
+                                        .monospace()
+                                        .size(13.5)
+                                        .color(egui::Color32::from_rgb(230, 230, 200)));
+                                }
+                                ui.add_space(6.0);
+                                ui.separator();
+                                ui.add_space(4.0);
+                                ui.label(egui::RichText::new("notes")
+                                    .small()
+                                    .color(egui::Color32::from_gray(140)));
+                                ui.add_space(2.0);
+                                ui.label(egui::RichText::new(info.notes)
+                                    .color(egui::Color32::from_rgb(220, 220, 230)));
+                            });
+                        if !open { req.mode_info_toggle = true; }
+                    }
+
+                    // ── Preset JSON editor modal ─────────────────────
+                    if cur_preset_editor_open {
+                        let mut open = true;
+                        egui::Window::new("Preset (JSON)")
+                            .id(egui::Id::new("preset_editor"))
+                            .open(&mut open)
+                            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                            .resizable(true)
+                            .collapsible(false)
+                            .default_size(egui::vec2(540.0, 480.0))
+                            .show(ctx, |ui| {
+                                ui.horizontal(|ui| {
+                                    if ui.button("📋 Copy to clipboard").clicked() {
+                                        ui.ctx().copy_text(preset_editor_text.clone());
+                                    }
+                                    if ui.button("📥 Paste from clipboard").clicked() {
+                                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+                                    }
+                                    if ui.add(egui::Button::new(
+                                        egui::RichText::new("Apply →").color(egui::Color32::from_rgb(140, 255, 140))
+                                    )).on_hover_text("Parse the JSON above and load it into the sequencer").clicked() {
+                                        req.preset_apply_json = Some(preset_editor_text.clone());
+                                    }
+                                });
+                                ui.add_space(4.0);
+
+                                #[cfg(not(target_arch = "wasm32"))]
+                                ui.horizontal(|ui| {
+                                    ui.label("Path:");
+                                    ui.add(egui::TextEdit::singleline(&mut preset_path_input)
+                                        .hint_text("presets/my_preset.preset.json")
+                                        .desired_width(280.0));
+                                    if ui.button("💾 Save").clicked()
+                                        && !preset_path_input.is_empty() {
+                                        req.preset_save_path = Some(preset_path_input.clone());
+                                    }
+                                    if ui.button("📁 Load").clicked()
+                                        && !preset_path_input.is_empty() {
+                                        req.preset_load_path = Some(preset_path_input.clone());
+                                    }
+                                });
+
+                                if !cur_preset_status.is_empty() {
+                                    ui.label(egui::RichText::new(&cur_preset_status)
+                                        .small().color(egui::Color32::from_rgb(180, 220, 255)));
+                                }
+
+                                ui.add_space(4.0);
+                                // Paste events land into the editor text directly so
+                                // Ctrl-V in the text area works the way users expect.
+                                ui.ctx().input(|i| {
+                                    for ev in &i.events {
+                                        if let egui::Event::Paste(s) = ev {
+                                            preset_editor_text = s.clone();
+                                        }
+                                    }
+                                });
+                                egui::ScrollArea::vertical()
+                                    .auto_shrink([false, false])
+                                    .show(ui, |ui| {
+                                        ui.add_sized(
+                                            ui.available_size(),
+                                            egui::TextEdit::multiline(&mut preset_editor_text)
+                                                .code_editor()
+                                                .desired_rows(20),
+                                        );
+                                    });
+                            });
+                        if !open { req.preset_show_json = true; }
                     }
                 };
 
@@ -2246,10 +2582,13 @@ impl ApplicationHandler<UserEvent> for App {
                 }
 
                 // ── Apply UI mutations (closure is dropped, borrows released) ──
-                self.field_params = fp;
-                self.lfo          = lfo;
-                self.mic_params   = mic;
-                self.search_str   = search;
+                self.field_params       = fp;
+                self.lfo                = lfo;
+                self.mic_params         = mic;
+                self.search_str         = search;
+                self.preset_editor_text = preset_editor_text;
+                #[cfg(not(target_arch = "wasm32"))]
+                { self.preset_path_input = preset_path_input; }
 
                 // ── MIDI Note triggers — route them into the same UiReq path so
                 //    they behave exactly like clicking the corresponding button.
@@ -2267,6 +2606,7 @@ impl ApplicationHandler<UserEvent> for App {
 
                 if req.panel_toggle { self.panel_open = !cur_panel_open; }
                 if req.keymap_toggle { self.show_keymap = !cur_show_keymap; }
+                if req.mode_info_toggle { self.show_mode_info = !cur_show_mode_info; }
                 if req.fb_auto_toggle {
                     self.fb_auto = !cur_fb_auto;
                     // Turning auto on triggers a clean feedback restart and ensures fb_enabled
@@ -2290,7 +2630,7 @@ impl ApplicationHandler<UserEvent> for App {
                     if self.tour.active {
                         self.render_mode = RenderMode::Field;
                         self.kpath_active = true;
-                        self.lfo = tour_lfo_preset();
+                        self.lfo = tour_lfo_preset_for_level(self.trip_level);
                         if let Some(gpu2) = &mut self.gpu {
                             if let Some(kp) = &mut gpu2.kpath { kp.reset(); }
                         }
@@ -2299,9 +2639,18 @@ impl ApplicationHandler<UserEvent> for App {
                 if req.tour_style_toggle {
                     self.tour_style = self.tour_style.next();
                     self.lfo = match self.tour_style {
-                        TourStyle::Curated => tour_lfo_preset(),
+                        TourStyle::Curated => tour_lfo_preset_for_level(self.trip_level),
                         TourStyle::Random  => tour_lfo_preset_fb_heavy(),
                     };
+                }
+                // Trip-level requests: re-apply the curated preset so LFOs follow
+                // the new level immediately. (Random style keeps fb_heavy preset.)
+                let trip_changed = req.trip_level_inc || req.trip_level_dec || req.trip_level_set.is_some();
+                if req.trip_level_dec { self.trip_level = self.trip_level.dec(); }
+                if req.trip_level_inc { self.trip_level = self.trip_level.inc(); }
+                if let Some(v) = req.trip_level_set { self.trip_level = TripLevel::new(v); }
+                if trip_changed && self.tour.active && self.tour_style == TourStyle::Curated {
+                    self.lfo = tour_lfo_preset_for_level(self.trip_level);
                 }
                 if req.seq_toggle {
                     self.sequencer.active = !cur_seq_active;
@@ -2355,6 +2704,96 @@ impl ApplicationHandler<UserEvent> for App {
                         self.sequencer.load_preset(SEQ_PRESETS[i].1);
                         self.sequencer.active = true;
                         self.render_mode = RenderMode::Field;
+                    }
+                }
+                // ── Preset I/O ────────────────────────────────────────
+                if let Some(i) = req.preset_load_bundled {
+                    if let Some((name, json)) = preset::BUNDLED_PRESETS.get(i) {
+                        match preset::Preset::from_json(json) {
+                            Ok(p) => {
+                                p.apply(&mut self.sequencer, &mut self.lfo, &mut self.trip_level);
+                                self.sequencer.active = true;
+                                self.render_mode = RenderMode::Field;
+                                self.preset_status = format!("Loaded preset '{name}'");
+                            }
+                            Err(e) => self.preset_status = format!("bundled '{name}' failed: {e}"),
+                        }
+                    }
+                }
+                if req.preset_random {
+                    // Seed off the wall clock so each click is a fresh roll;
+                    // remember the seed so the user can paste it / reproduce.
+                    let seed = (t * 1_000_000.0) as u32 ^ self.preset_random_seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                    self.preset_random_seed = seed;
+                    let p = preset::random_preset(seed);
+                    self.preset_status = format!("Rolled '{}' (seed 0x{seed:08x})", p.name);
+                    p.apply(&mut self.sequencer, &mut self.lfo, &mut self.trip_level);
+                    self.sequencer.active = true;
+                    self.render_mode = RenderMode::Field;
+                }
+                if req.preset_show_json {
+                    self.preset_editor_open = !self.preset_editor_open;
+                    if self.preset_editor_open {
+                        // Pre-fill with the current state so users see what they have.
+                        let cur = preset::Preset::from_state(
+                            "edited",
+                            &self.sequencer,
+                            &self.lfo,
+                            self.trip_level,
+                        );
+                        self.preset_editor_text = cur.to_pretty_json();
+                    }
+                }
+                if req.preset_copy_json {
+                    let cur = preset::Preset::from_state(
+                        "current",
+                        &self.sequencer,
+                        &self.lfo,
+                        self.trip_level,
+                    );
+                    self.preset_editor_text = cur.to_pretty_json();
+                    self.preset_status = "Preset JSON ready in the editor — Ctrl-C to copy".to_string();
+                    self.preset_editor_open = true;
+                }
+                if let Some(json) = req.preset_apply_json {
+                    match preset::Preset::from_json(&json) {
+                        Ok(p) => {
+                            let nm = p.name.clone();
+                            p.apply(&mut self.sequencer, &mut self.lfo, &mut self.trip_level);
+                            self.sequencer.active = true;
+                            self.render_mode = RenderMode::Field;
+                            self.preset_status = format!("Applied '{nm}'");
+                        }
+                        Err(e) => self.preset_status = format!("Apply failed: {e}"),
+                    }
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    if let Some(path) = req.preset_save_path {
+                        let cur = preset::Preset::from_state(
+                            std::path::Path::new(&path)
+                                .file_stem().and_then(|s| s.to_str()).unwrap_or("preset"),
+                            &self.sequencer, &self.lfo, self.trip_level,
+                        );
+                        self.preset_status = match std::fs::write(&path, cur.to_pretty_json()) {
+                            Ok(_)  => format!("Saved → {path}"),
+                            Err(e) => format!("Save failed: {e}"),
+                        };
+                    }
+                    if let Some(path) = req.preset_load_path {
+                        self.preset_status = match std::fs::read_to_string(&path)
+                            .map_err(|e| e.to_string())
+                            .and_then(|s| preset::Preset::from_json(&s))
+                        {
+                            Ok(p) => {
+                                let nm = p.name.clone();
+                                p.apply(&mut self.sequencer, &mut self.lfo, &mut self.trip_level);
+                                self.sequencer.active = true;
+                                self.render_mode = RenderMode::Field;
+                                format!("Loaded '{nm}' from {path}")
+                            }
+                            Err(e) => format!("Load {path} failed: {e}"),
+                        };
                     }
                 }
                 if let Some(c) = req.seq_curve { self.sequencer.curve = c; }
@@ -2446,9 +2885,28 @@ fn default_crystal() -> Crystal {
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
     env_logger::init();
+    let args: Vec<String> = std::env::args().collect();
 
-    let crystal = if let Some(path) = std::env::args().nth(1) {
-        poscar::Crystal::from_file(&path).unwrap_or_else(|e| {
+    // ── Headless clip render mode ────────────────────────────────────────
+    //
+    //   crystal-viz --render preset.json --out frames/ --res 1280x720 --fps 60
+    //               --duration 10 [--start 0] [--poscar POSCAR]
+    //
+    // Reads the preset, advances the sequencer at every 1/fps tick, and writes
+    // one PNG per frame. Prints an ffmpeg encode command at the end.
+    if args.iter().any(|a| a == "--list-crystals") {
+        for c in crystals::all_crystals() { println!("{}", c.name); }
+        std::process::exit(0);
+    }
+    if args.iter().any(|a| a == "--render") {
+        match run_render_cli(&args) {
+            Ok(_)  => std::process::exit(0),
+            Err(e) => { eprintln!("render: {e}"); std::process::exit(1); }
+        }
+    }
+
+    let crystal = if let Some(path) = args.get(1).filter(|a| !a.starts_with("--")) {
+        poscar::Crystal::from_file(path).unwrap_or_else(|e| {
             eprintln!("Error loading '{path}': {e}");
             std::process::exit(1);
         })
@@ -2463,15 +2921,153 @@ fn main() {
     };
     println!("Loaded {} atoms", crystal.atoms.len());
     println!("Controls:");
-    println!("  Tab      — Atoms / Field toggle");
     println!("  T        — auto-tour on/off");
     println!("  M        — cycle render mode  P — k-path walk  K — next k-pt");
     println!("  [ / ]    — colour shift       scroll — zoom");
-    println!("  1/2/3    — supercell  Space — auto-rotate  (atom mode)");
+    println!("  − / =    — trip level 0..9");
+    println!("  --render preset.json --out frames/ --res WxH --fps 60 --duration 10");
+    println!("           (offline clip render — produces a PNG sequence)");
 
     let event_loop = EventLoop::<UserEvent>::with_user_event().build().unwrap();
     event_loop.set_control_flow(ControlFlow::Poll);
     event_loop.run_app(&mut App::new(crystal)).unwrap();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn run_render_cli(args: &[String]) -> Result<(), String> {
+    use crystal_viz::bench;
+
+    // Tiny ad-hoc CLI parser — we only have a handful of flags.
+    fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
+        args.windows(2).find_map(|w| (w[0] == name).then_some(w[1].as_str()))
+    }
+    let preset_path = flag(args, "--render")
+        .ok_or_else(|| "missing --render <preset.json>".to_string())?;
+    let out_dir     = flag(args, "--out")
+        .ok_or_else(|| "missing --out <dir>".to_string())?;
+    let res         = flag(args, "--res").unwrap_or("1280x720");
+    let fps: u32    = flag(args, "--fps").unwrap_or("60")
+        .parse().map_err(|e| format!("--fps not a number: {e}"))?;
+    let start: f32  = flag(args, "--start").unwrap_or("0.0")
+        .parse().map_err(|e| format!("--start not a number: {e}"))?;
+    let poscar_path = flag(args, "--poscar");
+    let crystal_name = flag(args, "--crystal");
+    let bpm  = flag(args, "--bpm").map(|s| s.parse::<f32>()).transpose()
+        .map_err(|e| format!("--bpm not a number: {e}"))?;
+    let bars = flag(args, "--bars").map(|s| s.parse::<f32>()).transpose()
+        .map_err(|e| format!("--bars not a number: {e}"))?;
+    // --bpm + --bars together override --duration and trigger loop-snap.
+    let duration: f32 = match (bpm, bars) {
+        (Some(b), Some(n)) if b > 0.0 && n > 0.0 => n * 4.0 * 60.0 / b,
+        _ => flag(args, "--duration").unwrap_or("10.0")
+                .parse().map_err(|e| format!("--duration not a number: {e}"))?,
+    };
+    let loop_snap = bpm.is_some() && bars.is_some();
+
+    let (width, height): (u32, u32) = res.split_once('x')
+        .and_then(|(w, h)| Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?)))
+        .ok_or_else(|| format!("--res must be WxH, got '{res}'"))?;
+
+    let crystal = if let Some(name) = crystal_name {
+        let needle = name.to_lowercase();
+        let pick = crystals::all_crystals().into_iter()
+            .find(|c| c.name.to_lowercase().contains(&needle))
+            .ok_or_else(|| format!("--crystal '{name}' not found (try --list-crystals)"))?;
+        eprintln!("Crystal: '{}'", pick.name);
+        pick.to_crystal()
+    } else if let Some(p) = poscar_path {
+        poscar::Crystal::from_file(p).map_err(|e| format!("poscar {p}: {e}"))?
+    } else {
+        default_crystal()
+    };
+
+    let json = std::fs::read_to_string(preset_path)
+        .map_err(|e| format!("read {preset_path}: {e}"))?;
+    let p = preset::Preset::from_json(&json)?;
+
+    eprintln!("Preset: '{}' — {} steps, trip {}", p.name, p.steps.len(), p.trip_level.get());
+
+    // Build a sequencer + LFO state from the preset and tick it as we render.
+    let mut seq   = Sequencer::new();
+    let mut lfo   = LfoParams::default();
+    let mut level = TripLevel::default();
+    p.apply(&mut seq, &mut lfo, &mut level);
+    seq.active = true;
+
+    // Seamless-loop snap: when --bpm/--bars set, scale step_dur so one full
+    // pass through the step list = duration, and round LFO rates to integer
+    // cycles per loop so iso/color modulation wraps cleanly at t=duration.
+    if loop_snap {
+        let total_dur_mul: f32 = seq.steps.iter().map(|s| s.dur_mul.max(1e-6)).sum();
+        if total_dur_mul > 0.0 {
+            seq.step_dur = duration / total_dur_mul;
+        }
+        let snap = |r: f32| -> f32 {
+            let cycles = (r * duration).round().max(0.0);
+            cycles / duration
+        };
+        lfo.a.rate = snap(lfo.a.rate);
+        lfo.b.rate = snap(lfo.b.rate);
+        eprintln!(
+            "Loop snap: dur {:.3}s, step_dur {:.3}s, LFO A {:.4}Hz ({} cyc), B {:.4}Hz ({} cyc)",
+            duration, seq.step_dur,
+            lfo.a.rate, (lfo.a.rate * duration).round() as i32,
+            lfo.b.rate, (lfo.b.rate * duration).round() as i32,
+        );
+    }
+
+    // The closure tracks its own `prev_t` so we can advance the sequencer by
+    // the exact 1/fps delta even though render_clip just hands us absolute t.
+    let mut prev_t: f32 = start;
+    let mic = MicParams::default();
+    let bands = audio::AudioBands::default();
+    let aspect = width as f32 / height.max(1) as f32;
+    let accent = crystal_color(&crystal);
+
+    let eval = move |t: f32| -> FieldUniform {
+        let dt = (t - prev_t).max(0.0);
+        prev_t = t;
+        seq.tick(dt);
+        let fp_seq = seq.current_params();
+        let fp = apply_modulation(&fp_seq, &lfo, &mic, &bands, t);
+        // Headless render skips the feedback pass, so blank fb_enabled regardless.
+        let mut fp = fp;
+        fp.fb_enabled = false;
+        field_params_to_uniform(&fp, t, aspect, &accent)
+    };
+
+    let opts = bench::ClipOpts {
+        width, height, fps, duration, start,
+        out_dir: std::path::PathBuf::from(out_dir),
+    };
+    bench::render_clip(opts, &crystal, eval)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn crystal_color(_c: &Crystal) -> [f32; 4] {
+    // Same accent the UI uses — for the headless path we keep it neutral.
+    [0.50, 0.70, 1.00, 0.0]
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn field_params_to_uniform(fp: &FieldParams, t: f32, aspect: f32, crystal_color: &[f32; 4]) -> FieldUniform {
+    FieldUniform {
+        time: t, kscale: fp.kscale, speed: fp.speed,
+        field_mix: fp.field_mix, iso_level: fp.iso_level,
+        color_shift: fp.color_shift, zoom: fp.zoom,
+        w_lattice: fp.w_lattice, w_motif: fp.w_motif, w_band: fp.w_band,
+        mode: fp.mode, num_g: 0,        // num_g is populated by GpuField at upload — keep 0 here; the shader uses textureLoad with bounds-check loops
+        crystal_color: *crystal_color,
+        mouse: [0.5, 0.5], mouse_down: 0.0, aspect,
+        fb_enabled: 0, fb_mirror: 0,
+        fb_zoom: fp.fb_zoom, fb_offset_x: fp.fb_offset_x, fb_offset_y: fp.fb_offset_y,
+        fb_rotation: fp.fb_rotation, fb_decay: fp.fb_decay,
+        fb_color_shift: fp.fb_color_shift, fb_inject: fp.fb_inject,
+        fb_fold_angle: fp.fb_fold_angle, fb_saturation: fp.fb_saturation,
+        fb_brightness: fp.fb_brightness, fb_blend_mode: fp.fb_blend_mode,
+        fb_motion_blur: fp.fb_motion_blur,
+        _pad: [0.0; 2],
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -2614,6 +3210,40 @@ mod seq_tests {
         let p = seq.current_params();
         assert!((p.kscale - seq.from_params.kscale).abs() < 1e-5,
             "at t=0 current_params should equal from_params");
+    }
+
+    // Digitakt sync: when the sequencer advances to step N (manually or via tick),
+    // current_params().mode must equal steps[N].mode immediately at t=0, so the
+    // rendered field matches the highlight in the seq dock with no half-step lag.
+    #[test]
+    fn current_params_mode_snaps_to_cur_on_advance() {
+        let mut seq = make_seq(4);
+        // Manually step from 0 → 1 (cur=1, timer=0).
+        seq.manual_step(1);
+        let p_just_after = seq.current_params();
+        assert_eq!(p_just_after.mode, seq.steps[1].params.mode,
+            "after manual_step, mode must match new cur immediately (t=0)");
+        // Mid-step (t=0.4): same mode.
+        seq.step_timer = seq.step_dur * 0.4;
+        let p_mid = seq.current_params();
+        assert_eq!(p_mid.mode, seq.steps[1].params.mode,
+            "mid-step mode must equal cur's mode (no half-step lag)");
+    }
+
+    // Same property when auto-tick crosses a step boundary.
+    #[test]
+    fn current_params_mode_snaps_on_auto_tick_boundary() {
+        let mut seq = make_seq(4);
+        seq.manual = false;
+        seq.cur = 0;
+        seq.step_timer = 0.0;
+        seq.from_params = seq.steps[0].params.clone();
+        // Tick just past the step boundary so cur advances to 1.
+        seq.tick(seq.step_dur + 0.001);
+        assert_eq!(seq.cur, 1);
+        let p = seq.current_params();
+        assert_eq!(p.mode, seq.steps[1].params.mode,
+            "after auto-tick crossing boundary, mode must equal new cur's mode");
     }
 
     // current_params at step_timer=step_dur returns the destination (t=1)
@@ -3064,15 +3694,22 @@ mod routing_tests {
     }
 
     #[test]
-    fn lerp_fp_discrete_switches_at_half() {
-        let mut a = FieldParams::default(); a.mode = 1; a.fb_blend_mode = 0;
-        let mut b = FieldParams::default(); b.mode = 7; b.fb_blend_mode = 3;
-        assert_eq!(lerp_fp(&a, &b, 0.0).mode, 1);
-        assert_eq!(lerp_fp(&a, &b, 0.49).mode, 1);
-        assert_eq!(lerp_fp(&a, &b, 0.5).mode, 7,  "discrete field switches at t=0.5");
-        assert_eq!(lerp_fp(&a, &b, 1.0).mode, 7);
-        assert_eq!(lerp_fp(&a, &b, 0.49).fb_blend_mode, 0);
-        assert_eq!(lerp_fp(&a, &b, 0.5).fb_blend_mode,  3);
+    fn lerp_fp_discrete_snaps_to_destination_immediately() {
+        // Digitakt-style: when a trig fires, that step's discrete params apply
+        // for the entire duration. mode / fb_blend_mode / fb_mirror / fb_enabled
+        // must equal `b` from t=0, so the rendered mode matches the highlighted
+        // step in the sequencer dock without a half-step lag.
+        let mut a = FieldParams::default();
+        a.mode = 1; a.fb_blend_mode = 0; a.fb_mirror = 0; a.fb_enabled = false;
+        let mut b = FieldParams::default();
+        b.mode = 7; b.fb_blend_mode = 3; b.fb_mirror = 5; b.fb_enabled = true;
+        for t in [0.0_f32, 0.25, 0.5, 0.75, 1.0] {
+            let r = lerp_fp(&a, &b, t);
+            assert_eq!(r.mode,          7, "mode must snap to b at t={t}");
+            assert_eq!(r.fb_blend_mode, 3, "fb_blend_mode must snap to b at t={t}");
+            assert_eq!(r.fb_mirror,     5, "fb_mirror must snap to b at t={t}");
+            assert!(r.fb_enabled,          "fb_enabled must snap to b at t={t}");
+        }
     }
 
     // fb_auto_params must override every fb_* field of base, and only those.
@@ -3210,5 +3847,107 @@ mod routing_tests {
         let active = fb_targets.iter().filter(|&&s| s != LfoSrc::Off).count();
         assert!(active >= 6,
             "fb_heavy preset should route at least 6 feedback params to an LFO, got {active}");
+    }
+
+    // Number of LFO targets routed in a preset (anything not Off).
+    fn routed_count(p: &LfoParams) -> usize {
+        let targets = [
+            p.kscale, p.speed, p.field_mix, p.iso_level, p.color_shift, p.zoom,
+            p.w_lattice, p.w_motif, p.w_band,
+            p.fb_zoom, p.fb_decay, p.fb_offset_x, p.fb_offset_y, p.fb_rotation,
+            p.fb_color_shift, p.fb_saturation, p.fb_brightness, p.fb_inject,
+            p.fb_fold_angle, p.fb_motion_blur,
+        ];
+        targets.iter().filter(|&&s| s != LfoSrc::Off).count()
+    }
+
+    // ── Trip level ────────────────────────────────────────────────────────
+    #[test]
+    fn trip_level_clamps_to_valid_range() {
+        assert_eq!(TripLevel::new(0).get(), 0);
+        assert_eq!(TripLevel::new(9).get(), 9);
+        assert_eq!(TripLevel::new(99).get(), 9);
+        assert_eq!(TripLevel::new(0).dec().get(), 0);
+        assert_eq!(TripLevel::new(9).inc().get(), 9);
+    }
+
+    #[test]
+    fn trip_level_zero_is_silent() {
+        let p = tour_lfo_preset_for_level(TripLevel::new(0));
+        assert_eq!(routed_count(&p), 0,
+            "level 0 must not route any LFO target — got {} routed", routed_count(&p));
+        assert_eq!(p.a.depth, 0.0, "level 0 LFO A depth should be 0");
+        assert_eq!(p.b.depth, 0.0, "level 0 LFO B depth should be 0");
+        let lvl0 = TripLevel::new(0);
+        assert!(!lvl0.fb_enabled(), "level 0 disables the feedback layer");
+    }
+
+    #[test]
+    fn trip_level_nine_is_madness() {
+        let p = tour_lfo_preset_for_level(TripLevel::new(9));
+        let r = routed_count(&p);
+        assert!(r >= 15, "level 9 should route >=15 LFO targets, got {r}");
+        assert!(p.a.depth > 0.5 && p.b.depth > 0.4,
+            "level 9 depths should be near max");
+        let lvl9 = TripLevel::new(9);
+        assert!(lvl9.fb_enabled(), "level 9 enables feedback layer");
+        // Madness wave choices: steps on A, square on B.
+        assert_eq!(p.a.wave, LfoWave::Steps);
+        assert_eq!(p.b.wave, LfoWave::Square);
+    }
+
+    #[test]
+    fn trip_level_scales_routed_targets_monotonically() {
+        // Each level should route at least as many targets as the previous one.
+        let mut prev = 0;
+        for l in 0..=9u8 {
+            let r = routed_count(&tour_lfo_preset_for_level(TripLevel::new(l)));
+            assert!(r >= prev,
+                "routed-target count must be monotonic — level {l} got {r} after {prev}");
+            prev = r;
+        }
+    }
+
+    #[test]
+    fn trip_level_scales_scene_and_walk_durations_downward() {
+        // Higher level → shorter scene / walk.
+        for l in 0..9u8 {
+            let lo = TripLevel::new(l);
+            let hi = TripLevel::new(l + 1);
+            assert!(lo.scene_len() > hi.scene_len(),
+                "scene_len must shrink with level — level {l}: {} vs level {}: {}",
+                lo.scene_len(), l + 1, hi.scene_len());
+            assert!(lo.walk_dur() > hi.walk_dur(),
+                "walk_dur must shrink with level");
+        }
+    }
+
+    #[test]
+    fn trip_level_feedback_gated_by_level() {
+        for l in 0..=2u8 { assert!(!TripLevel::new(l).fb_enabled()); }
+        for l in 3..=9u8 { assert!( TripLevel::new(l).fb_enabled()); }
+    }
+
+    #[test]
+    fn tour_field_params_level_zero_holds_mode_steady() {
+        let lvl0 = TripLevel::new(0);
+        // Two times far apart should yield the SAME mode at level 0 (no scene rotation).
+        let a = tour_field_params(0.5,   3, TourStyle::Curated, lvl0);
+        let b = tour_field_params(120.0, 3, TourStyle::Curated, lvl0);
+        assert_eq!(a.mode, b.mode,
+            "level 0 should keep a single mode per crystal across time");
+        assert!(!a.fb_enabled, "level 0 should disable the feedback layer");
+    }
+
+    #[test]
+    fn tour_field_params_level_nine_swaps_modes() {
+        let lvl9 = TripLevel::new(9);
+        // Sample several points; at level 9 we expect the mode index to change at least once.
+        let modes: Vec<u32> = (0..20)
+            .map(|i| tour_field_params(i as f32 * 0.4, 0, TourStyle::Curated, lvl9).mode)
+            .collect();
+        let distinct: std::collections::HashSet<_> = modes.iter().copied().collect();
+        assert!(distinct.len() >= 3,
+            "level 9 should swap modes rapidly — got distinct={:?}", distinct);
     }
 }

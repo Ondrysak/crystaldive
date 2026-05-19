@@ -1,0 +1,112 @@
+{
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "teammateMode": "in-process",
+  "permissions": {
+    "allow": [
+      "Bash(cargo build *)",
+      "Bash(cargo check *)",
+      "Bash(cargo test *)",
+      "Bash(cargo run *)",
+      "Bash(cargo clippy *)",
+      "Bash(cargo fmt *)",
+      "Bash(cargo bench *)",
+      "Bash(rustup *)",
+      "Bash(wasm-bindgen *)",
+      "Bash(node scripts/make-single-html.mjs*)",
+      "Bash(pwsh scripts/build-web.ps1*)",
+      "Bash(sh scripts/build-web.sh*)",
+      "Bash(target/release/crystal-viz*)",
+      "Bash(./target/release/crystal-viz*)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git show*)",
+      "Bash(git branch)",
+      "Bash(git branch --show-current)",
+      "Bash(git fetch*)",
+      "Bash(git stash list*)",
+      "Bash(git rev-parse*)"
+    ],
+    "deny": [
+      "Bash(git push*)",
+      "Bash(git push --force*)",
+      "Bash(git reset --hard*)",
+      "Bash(git clean -f*)",
+      "Bash(git branch -D*)",
+      "Bash(npx wrangler deploy*)",
+      "Bash(wrangler deploy*)",
+      "Bash(rm -rf*)",
+      "Bash(Remove-Item -Recurse -Force*)"
+    ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/discord-notify.py", "Stop"],
+            "async": true,
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/discord-notify.py", "StopFailure"],
+            "async": true,
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/discord-notify.py", "SubagentStop"],
+            "async": true,
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "TaskCompleted": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/discord-notify.py", "TaskCompleted"],
+            "async": true,
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/discord-notify.py", "SessionEnd"],
+            "async": true,
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

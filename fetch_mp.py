@@ -2,12 +2,39 @@
 """
 Fetch crystal structures from the Materials Project API and emit Rust CrystalDef entries.
 
-Usage: python3 fetch_mp.py > crystals_mp_generated.rs
+Usage:
+    1) Get a key at https://next-gen.materialsproject.org/api  (free).
+    2) Drop it in a local `.env` file:
+           MP_API_KEY=your_key_here
+       …or export it in the shell:  export MP_API_KEY=your_key_here
+    3) python3 fetch_mp.py > crystals_mp_generated.rs
+
+The key is never committed; .env is ignored by git.
 """
 
-import requests, json, math, sys, time
+import os, sys, math, time, requests
 
-API_KEY = "JopaiBgR2QYpgoiW2UEbY9vQpp4hJ5DZ"
+def _load_dotenv(path: str = ".env") -> None:
+    if not os.path.isfile(path):
+        return
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+_load_dotenv()
+
+API_KEY = os.environ.get("MP_API_KEY")
+if not API_KEY:
+    sys.exit(
+        "MP_API_KEY is not set.\n"
+        "  Get a free key at https://next-gen.materialsproject.org/api\n"
+        "  then put it in .env  (MP_API_KEY=...)  or export it in your shell."
+    )
+
 BASE    = "https://api.materialsproject.org"
 HEADERS = {"X-API-KEY": API_KEY}
 

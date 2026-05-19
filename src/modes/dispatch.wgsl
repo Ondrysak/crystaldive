@@ -44,7 +44,12 @@
         case 32u { col = render_vortex_knot(uv); }
         case 33u { col = render_bloch_wave(uv); }
         case 34u { col = render_plasmon(uv); }
-        default  { col = render_nematic(uv); }
+        case 35u { col = render_nematic(uv); }
+        case 36u { col = render_abrikosov(uv); }
+        case 37u { col = render_crystal_dive(uv); }
+        case 38u { col = render_nano_phase(uv); }
+        case 39u { col = render_magnon(uv); }
+        default  { col = render_crystal_dive(uv); }
     }
     // vignette — skip for XRD, RECIP3D, KIKUCHI, HOFSTADTER, SPECTRAL (own boundaries)
     if u.mode != 9u && u.mode != 10u && u.mode != 18u && u.mode != 29u && u.mode != 31u {
