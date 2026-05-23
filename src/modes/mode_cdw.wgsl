@@ -16,7 +16,7 @@ fn cdw_safe_dir(g: vec2<f32>, fallback: vec2<f32>) -> vec2<f32> {
 
 fn cdw_gdir(idx: i32, fallback: vec2<f32>) -> vec2<f32> {
     if idx < i32(u.num_g) {
-        let g = textureLoad(g_tex, vec2<i32>(idx, 0), 0).xy;
+        let g = g_block.gamp[idx].xy;
         return cdw_safe_dir(g, fallback);
     }
     return fallback;

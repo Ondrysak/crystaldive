@@ -71,9 +71,9 @@ fn abrikosov_crystal_basis() -> mat2x2<f32> {
     var b2 = vec2<f32>(0.0, 1.0);
     var l1 = 1e9;
     var l2 = 1e9;
-    for (var i = 0i; i < 64i; i++) {
-        if (i >= i32(u.num_g)) { break; }
-        let g3 = textureLoad(g_tex, vec2<i32>(i, 0), 0).xyz;
+    let ng_ab = i32(u.num_g);
+    for (var i = 0i; i < ng_ab; i++) {
+        let g3 = g_block.gamp[i].xyz;
         // Project into the (x,y) plane; ignore strongly out-of-plane G's so we
         // get a clean 2D basis. (Out-of-plane = |gz| > |gxy|.)
         let gxy = g3.xy;

@@ -37,7 +37,16 @@ struct FU {
     fb_motion_blur: f32,
 }
 @group(0) @binding(0) var<uniform> u: FU;
-@group(0) @binding(1) var g_tex: texture_2d<f32>;
+
+// G-vector uniform block — replaces the old g_tex texture_2d binding.
+// Uniform cache is broadcast-optimised: all fragments read the same slots each
+// loop iteration, so constant-cache hit rate is 100% vs. texture cache misses.
+// Layout matches GpuField::pack() exactly (128 × vec4 + 128 × vec4 phases).
+struct GBlock {
+    gamp:   array<vec4<f32>, 128>,  // xyz = G (unscaled Å⁻¹), w = amplitude
+    phases: array<vec4<f32>, 128>,  // x = initial phase  (yzw unused)
+}
+@group(0) @binding(1) var<uniform> g_block: GBlock;
 
 struct VOut {
     @builtin(position) pos: vec4<f32>,
@@ -56,11 +65,11 @@ const TAU: f32 = 6.28318530718;
 
 fn crystal_field(x: vec3<f32>) -> f32 {
     var v = 0.0; var ns = 0.0;
-    let t = u.time * u.speed;
-    for (var i = 0i; i < 64i; i++) {
-        if (i >= i32(u.num_g)) { break; }
-        let ga  = textureLoad(g_tex, vec2<i32>(i, 0), 0);
-        let ph  = textureLoad(g_tex, vec2<i32>(i, 1), 0).r;
+    let t  = u.time * u.speed;
+    let ng = i32(u.num_g);
+    for (var i = 0i; i < ng; i++) {
+        let ga  = g_block.gamp[i];
+        let ph  = g_block.phases[i].x;
         let G   = ga.xyz * u.kscale;
         let amp = ga.w;
         let gx  = dot(G, x);
@@ -88,10 +97,10 @@ fn sdf_combined(p: vec3<f32>) -> f32 {
     let p2 = p * 1.37 + vec3<f32>(1.618, 2.718, 3.141);
     var v1 = 0.0; var v2 = 0.0; var ns = 0.0;
     let t  = u.time * u.speed;
-    for (var i = 0i; i < 64i; i++) {
-        if (i >= i32(u.num_g)) { break; }
-        let ga  = textureLoad(g_tex, vec2<i32>(i, 0), 0);
-        let ph  = textureLoad(g_tex, vec2<i32>(i, 1), 0).r;
+    let ng = i32(u.num_g);
+    for (var i = 0i; i < ng; i++) {
+        let ga  = g_block.gamp[i];
+        let ph  = g_block.phases[i].x;
         let G   = ga.xyz * u.kscale;
         let amp = ga.w;
         let gg      = dot(G, G);
@@ -111,19 +120,40 @@ fn sdf_combined(p: vec3<f32>) -> f32 {
 }
 
 
-// Tetrahedron normal (Inigo Quilez) — 4 sdf samples instead of 6.
+// Analytical gradient of sdf_combined — one G-loop instead of 8 (4 sdf × 2 cf calls each).
+// d/dp sdf = sign(mix(v1,v2,fm)) · mix(∇v1, ∇v2·1.37, fm) / ns
 fn calc_normal(p: vec3<f32>) -> vec3<f32> {
-    let e  = 0.004;
-    let k0 = vec3<f32>( 1.0, -1.0, -1.0);
-    let k1 = vec3<f32>(-1.0, -1.0,  1.0);
-    let k2 = vec3<f32>(-1.0,  1.0, -1.0);
-    let k3 = vec3<f32>( 1.0,  1.0,  1.0);
-    return normalize(
-        k0 * sdf(p + k0 * e) +
-        k1 * sdf(p + k1 * e) +
-        k2 * sdf(p + k2 * e) +
-        k3 * sdf(p + k3 * e)
-    );
+    let p2 = p * 1.37 + vec3<f32>(1.618, 2.718, 3.141);
+    var v1 = 0.0; var v2 = 0.0; var ns = 0.0;
+    var g1 = vec3<f32>(0.0);
+    var g2 = vec3<f32>(0.0);
+    let t  = u.time * u.speed;
+    let ng = i32(u.num_g);
+    for (var i = 0i; i < ng; i++) {
+        let ga  = g_block.gamp[i];
+        let ph  = g_block.phases[i].x;
+        let G   = ga.xyz * u.kscale;
+        let amp = ga.w;
+        let gg  = dot(G, G);
+        let lt  = t * (1.0 + f32(i) * 0.01);
+        let gx1 = dot(G, p);  let gx2 = dot(G, p2);
+        let la1 = gx1 + ph + lt;  let la2 = gx2 + ph + lt;
+        let ma1 = gx1 * 1.13 + ph * 1.7 + t * 0.7;
+        let ma2 = gx2 * 1.13 + ph * 1.7 + t * 0.7;
+        let ba1 = gx1 + gg * 0.12 + t * 0.4;
+        let ba2 = gx2 + gg * 0.12 + t * 0.4;
+        v1 += amp * (u.w_lattice*cos(la1) + u.w_motif*cos(ma1) + u.w_band*cos(ba1));
+        v2 += amp * (u.w_lattice*cos(la2) + u.w_motif*cos(ma2) + u.w_band*cos(ba2));
+        ns += amp;
+        let ds1 = u.w_lattice*sin(la1) + u.w_motif*sin(ma1)*1.13 + u.w_band*sin(ba1);
+        let ds2 = u.w_lattice*sin(la2) + u.w_motif*sin(ma2)*1.13 + u.w_band*sin(ba2);
+        g1 -= amp * G * ds1;
+        g2 -= amp * G * ds2 * 1.37;
+    }
+    let inv_ns  = 1.0 / max(ns, 0.001);
+    let mixed_v = mix(v1, v2, u.field_mix) * inv_ns;
+    let grad    = mix(g1, g2, u.field_mix) * inv_ns * sign(mixed_v);
+    return normalize(grad + vec3<f32>(1e-12));
 }
 
 // Returns vec3(value, dvalue/dx, dvalue/dy) for crystal_field in a single G-vector pass.
@@ -131,11 +161,11 @@ fn calc_normal(p: vec3<f32>) -> vec3<f32> {
 fn crystal_field_val_grad_xy(x: vec3<f32>) -> vec3<f32> {
     var v = 0.0; var ns = 0.0;
     var gx_acc = 0.0; var gy_acc = 0.0;
-    let t = u.time * u.speed;
-    for (var i = 0i; i < 64i; i++) {
-        if (i >= i32(u.num_g)) { break; }
-        let ga  = textureLoad(g_tex, vec2<i32>(i, 0), 0);
-        let ph  = textureLoad(g_tex, vec2<i32>(i, 1), 0).r;
+    let t  = u.time * u.speed;
+    let ng = i32(u.num_g);
+    for (var i = 0i; i < ng; i++) {
+        let ga  = g_block.gamp[i];
+        let ph  = g_block.phases[i].x;
         let G   = ga.xyz * u.kscale;
         let amp = ga.w;
         let gx  = dot(G, x);

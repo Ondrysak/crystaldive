@@ -3,10 +3,10 @@
 fn vortex_psi(r: vec3<f32>) -> vec2<f32> {
     var re = 0.0;
     var im = 0.0;
-    for (var i = 0i; i < 64i; i++) {
-        if (i >= i32(u.num_g)) { break; }
-        let ga = textureLoad(g_tex, vec2<i32>(i, 0), 0);
-        let ph = textureLoad(g_tex, vec2<i32>(i, 1), 0).r;
+    let ng_vk = i32(u.num_g);
+    for (var i = 0i; i < ng_vk; i++) {
+        let ga = g_block.gamp[i];
+        let ph = g_block.phases[i].x;
         let G  = ga.xyz * u.kscale;
         let amp = ga.w;
         let arg = dot(G, r) + ph + u.time * u.speed * 0.15 * f32(i + 1);

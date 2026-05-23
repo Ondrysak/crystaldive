@@ -35,24 +35,34 @@ struct FU {
     w_motif:       f32,    // band weight
     w_band:        f32,    // band weight
     mode:          u32,    // current mode index
-    num_g:         u32,    // number of valid entries in g_tex (≤ 64 for crystal_field, ≤ 128 for direct G access)
+    num_g:         u32,    // number of valid entries in g_block (≤ 128)
     crystal_color: vec4<f32>,  // .xyz accent color of current crystal system
     mouse:         vec2<f32>,  // .x,.y in [0,1] when mouse_down >= 0.5
     mouse_down:    f32,        // 0 or 1
     aspect:        f32,        // viewport.x / viewport.y
 }
 @group(0) @binding(0) var<uniform> u: FU;
-@group(0) @binding(1) var g_tex: texture_2d<f32>;
+
+struct GBlock {
+    gamp:   array<vec4<f32>, 128>,  // xyz = G (unscaled Å⁻¹), w = amplitude
+    phases: array<vec4<f32>, 128>,  // x = initial phase (yzw unused)
+}
+@group(0) @binding(1) var<uniform> g_block: GBlock;
 ```
 
 ## Reading G vectors directly
 
 ```wgsl
-let ga = textureLoad(g_tex, vec2<i32>(i, 0), 0);  // ga.xyz = G, ga.w = amp
-let ph = textureLoad(g_tex, vec2<i32>(i, 1), 0).r; // initial phase
+let ga = g_block.gamp[i];   // ga.xyz = G (unscaled), ga.w = amp
+let ph = g_block.phases[i].x;  // initial phase
 ```
 
 There are up to `MAX_G = 128` entries; iterate while `i < i32(u.num_g)`.
+Use a hoisted bound for efficiency:
+```wgsl
+let ng = i32(u.num_g);
+for (var i = 0i; i < ng; i++) { ... }
+```
 
 ## Available helpers (from prelude.wgsl)
 

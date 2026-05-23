@@ -21,8 +21,8 @@ fn bz_path_k_point(s: f32) -> vec3<f32> {
     var kx = vec3<f32>(0.55, 0.0, 0.0) * u.kscale;
     var km = vec3<f32>(0.55, 0.55, 0.0) * u.kscale;
     if (u.num_g >= 2u) {
-        let g0 = textureLoad(g_tex, vec2<i32>(0, 0), 0).xyz;
-        let g1 = textureLoad(g_tex, vec2<i32>(1, 0), 0).xyz;
+        let g0 = g_block.gamp[0].xyz;
+        let g1 = g_block.gamp[1].xyz;
         kx = g0 * u.kscale * 0.5;
         km = (g0 + g1) * u.kscale * 0.5;
     }
@@ -78,10 +78,10 @@ fn bz_path_nearest_path(p: vec2<f32>) -> vec3<f32> {
 fn bz_path_response(k: vec3<f32>, phase: f32) -> f32 {
     var v = 0.0;
     var norm = 0.0;
-    for (var i = 0; i < 96; i++) {
-        if (i >= i32(u.num_g)) { break; }
-        let ga = textureLoad(g_tex, vec2<i32>(i, 0), 0);
-        let ph = textureLoad(g_tex, vec2<i32>(i, 1), 0).r;
+    let ng_bzp = i32(u.num_g);
+    for (var i = 0; i < ng_bzp; i++) {
+        let ga = g_block.gamp[i];
+        let ph = g_block.phases[i].x;
         let g = ga.xyz * u.kscale;
         let amp = ga.w;
         let band = dot(g, k) * (0.35 + 0.45 * u.w_band);

@@ -3,10 +3,10 @@
 fn wannier_psi(r: vec3<f32>) -> vec2<f32> {
     var re = 0.0;
     var im = 0.0;
-    for (var i = 0i; i < 64i; i++) {
-        if (i >= i32(u.num_g)) { break; }
-        let ga  = textureLoad(g_tex, vec2<i32>(i, 0), 0);
-        let ph  = textureLoad(g_tex, vec2<i32>(i, 1), 0).r;
+    let ng_wa = i32(u.num_g);
+    for (var i = 0i; i < ng_wa; i++) {
+        let ga  = g_block.gamp[i];
+        let ph  = g_block.phases[i].x;
         let G   = ga.xyz * u.kscale;
         let amp = ga.w;
         let arg = dot(G, r) + ph;
@@ -83,10 +83,10 @@ fn render_wannier(uv: vec2<f32>) -> vec3<f32> {
         var re  = 0.0;  var im  = 0.0;
         var gre = vec3<f32>(0.0);
         var gim = vec3<f32>(0.0);
-        for (var k = 0i; k < 64i; k++) {
-            if (k >= i32(u.num_g)) { break; }
-            let ga  = textureLoad(g_tex, vec2<i32>(k, 0), 0);
-            let ph  = textureLoad(g_tex, vec2<i32>(k, 1), 0).r;
+        let ng_wn = i32(u.num_g);
+        for (var k = 0i; k < ng_wn; k++) {
+            let ga  = g_block.gamp[k];
+            let ph  = g_block.phases[k].x;
             let G   = ga.xyz * u.kscale;
             let amp = ga.w;
             let arg = dot(G, rl) + ph;

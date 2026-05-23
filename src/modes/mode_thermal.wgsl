@@ -25,9 +25,9 @@ fn render_thermal(uv: vec2<f32>) -> vec3<f32> {
     var intensity = 0.0;
     var sharp = 0.0;
     var soft = 0.0;
-    for (var i = 0; i < 96; i++) {
-        if (i >= i32(u.num_g)) { break; }
-        let ga = textureLoad(g_tex, vec2<i32>(i, 0), 0);
+    let ng_th = i32(u.num_g);
+    for (var i = 0; i < ng_th; i++) {
+        let ga = g_block.gamp[i];
         let g = ga.xy * u.kscale * 0.38;
         let amp = ga.w;
         let g2 = dot(ga.xyz, ga.xyz);

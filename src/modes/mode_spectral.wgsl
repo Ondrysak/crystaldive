@@ -13,12 +13,12 @@ fn spectral_hue_shift(c: vec3<f32>, h: f32) -> vec3<f32> {
 // dispersion's helpers. use_phase=0 → first band, =1 → phase-shifted band.
 fn spectral_eps(K: vec3<f32>, use_phase: f32) -> f32 {
     var e = 0.0;
-    for (var i = 0; i < 64; i++) {
-        if (i >= i32(u.num_g)) { break; }
-        let ga  = textureLoad(g_tex, vec2<i32>(i, 0), 0);
+    let ng_sp = i32(u.num_g);
+    for (var i = 0; i < ng_sp; i++) {
+        let ga  = g_block.gamp[i];
         let G   = ga.xyz;
         let amp = ga.w;
-        let ph  = textureLoad(g_tex, vec2<i32>(i, 1), 0).r;
+        let ph  = g_block.phases[i].x;
         e += amp * cos(dot(G, K) + ph * use_phase);
     }
     return e;
@@ -29,8 +29,8 @@ fn spectral_path_K(k_param: f32) -> vec3<f32> {
     var K1: vec3<f32>;
     var K2: vec3<f32>;
     if (u.num_g >= 2u) {
-        let g0 = textureLoad(g_tex, vec2<i32>(0, 0), 0).xyz;
-        let g1 = textureLoad(g_tex, vec2<i32>(1, 0), 0).xyz;
+        let g0 = g_block.gamp[0].xyz;
+        let g1 = g_block.gamp[1].xyz;
         K1 = g0 * u.kscale * 0.5;
         K2 = (g0 + g1) * u.kscale * 0.5;
     } else {

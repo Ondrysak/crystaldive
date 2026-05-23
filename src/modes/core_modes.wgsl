@@ -29,38 +29,28 @@ fn render_rm(uv: vec2<f32>) -> vec3<f32> {
             let sgn   = sign(mixed);
             let t_n   = u.time * u.speed;
             let p2    = p * 1.37 + vec3<f32>(1.618, 2.718, 3.141);
-            var gx1 = 0.0; var gy1 = 0.0; var gz1 = 0.0; var ns_n = 0.0;
-            for (var j = 0i; j < 64i; j++) {
-                if (j >= i32(u.num_g)) { break; }
-                let ga_n = textureLoad(g_tex, vec2<i32>(j, 0), 0);
-                let ph_n = textureLoad(g_tex, vec2<i32>(j, 1), 0).r;
+            var grad1 = vec3<f32>(0.0); var grad2 = vec3<f32>(0.0); var ns_n = 0.0;
+            let ng_n  = i32(u.num_g);
+            for (var j = 0i; j < ng_n; j++) {
+                let ga_n = g_block.gamp[j];
+                let ph_n = g_block.phases[j].x;
                 let G_n  = ga_n.xyz * u.kscale;
-                let gx_n = dot(G_n, p);
-                let ds   = u.w_lattice * sin(gx_n + ph_n + t_n*(1.0 + f32(j)*0.01))
-                         + u.w_motif  * sin(gx_n*1.13 + ph_n*1.7 + t_n*0.7) * 1.13
-                         + u.w_band   * sin(gx_n + dot(G_n,G_n)*0.12 + t_n*0.4);
-                gx1 -= ga_n.w * G_n.x * ds;
-                gy1 -= ga_n.w * G_n.y * ds;
-                gz1 -= ga_n.w * G_n.z * ds;
-                ns_n += ga_n.w;
-            }
-            var gx2 = 0.0; var gy2 = 0.0; var gz2 = 0.0;
-            for (var j = 0i; j < 64i; j++) {
-                if (j >= i32(u.num_g)) { break; }
-                let ga_n = textureLoad(g_tex, vec2<i32>(j, 0), 0);
-                let ph_n = textureLoad(g_tex, vec2<i32>(j, 1), 0).r;
-                let G_n  = ga_n.xyz * u.kscale;
-                let gx_n = dot(G_n, p2);
-                let ds   = u.w_lattice * sin(gx_n + ph_n + t_n*(1.0 + f32(j)*0.01))
-                         + u.w_motif  * sin(gx_n*1.13 + ph_n*1.7 + t_n*0.7) * 1.13
-                         + u.w_band   * sin(gx_n + dot(G_n,G_n)*0.12 + t_n*0.4);
-                gx2 -= ga_n.w * G_n.x * ds;
-                gy2 -= ga_n.w * G_n.y * ds;
-                gz2 -= ga_n.w * G_n.z * ds;
+                let gg_n = dot(G_n, G_n);
+                let lt_n = t_n * (1.0 + f32(j) * 0.01);
+                let gx1  = dot(G_n, p);   let gx2 = dot(G_n, p2);
+                let ds1  = u.w_lattice * sin(gx1 + ph_n + lt_n)
+                         + u.w_motif  * sin(gx1*1.13 + ph_n*1.7 + t_n*0.7) * 1.13
+                         + u.w_band   * sin(gx1 + gg_n*0.12 + t_n*0.4);
+                let ds2  = u.w_lattice * sin(gx2 + ph_n + lt_n)
+                         + u.w_motif  * sin(gx2*1.13 + ph_n*1.7 + t_n*0.7) * 1.13
+                         + u.w_band   * sin(gx2 + gg_n*0.12 + t_n*0.4);
+                grad1 -= ga_n.w * G_n * ds1;
+                grad2 -= ga_n.w * G_n * ds2;
+                ns_n  += ga_n.w;
             }
             let inv_ns = 1.0 / max(ns_n, 0.001);
-            let g1  = vec3<f32>(gx1, gy1, gz1) * inv_ns;
-            let g2  = vec3<f32>(gx2, gy2, gz2) * (inv_ns * 1.37);
+            let g1  = grad1 * inv_ns;
+            let g2  = grad2 * (inv_ns * 1.37);
             let nm  = normalize(sgn * ((1.0 - u.field_mix) * g1 + u.field_mix * g2)
                               + vec3<f32>(1e-12));
             col = cfield_col(cf_v, cf2_v, nm) * (0.5 + 0.5*(1.0-f32(i)/80.0));
@@ -337,9 +327,9 @@ fn render_xrd(uv: vec2<f32>) -> vec3<f32> {
     var spots  = 0.0;
     var powder = 0.0;
 
-    for (var i = 0; i < 128; i++) {
-        if (i >= i32(u.num_g)) { break; }
-        let ga  = textureLoad(g_tex, vec2<i32>(i, 0), 0);
+    let ng_xrd = i32(u.num_g);
+    for (var i = 0; i < ng_xrd; i++) {
+        let ga  = g_block.gamp[i];
         let amp = ga.w;
         let G   = ga.xyz * u.kscale;
 
@@ -417,9 +407,9 @@ fn render_recip3d(uv: vec2<f32>) -> vec3<f32> {
         }
     }
 
-    for (var i = 0; i < 128; i++) {
-        if (i >= i32(u.num_g)) { break; }
-        let ga  = textureLoad(g_tex, vec2<i32>(i, 0), 0);
+    let ng_r3d = i32(u.num_g);
+    for (var i = 0; i < ng_r3d; i++) {
+        let ga  = g_block.gamp[i];
         let amp = ga.w;
         let G   = ga.xyz * u.kscale * G_scale;
 
@@ -455,9 +445,8 @@ fn render_recip3d(uv: vec2<f32>) -> vec3<f32> {
     var col = vec3<f32>(0.005, 0.003, 0.012);
     if got_hit { col = best_col; }
 
-    for (var i = 0; i < 128; i++) {
-        if (i >= i32(u.num_g)) { break; }
-        let ga    = textureLoad(g_tex, vec2<i32>(i, 0), 0);
+    for (var i = 0; i < ng_r3d; i++) {
+        let ga    = g_block.gamp[i];
         let amp   = ga.w;
         let G     = ga.xyz * u.kscale * G_scale;
         let oc    = G - cp;
@@ -469,9 +458,8 @@ fn render_recip3d(uv: vec2<f32>) -> vec3<f32> {
         col += amp*amp * exp(-dist2 / (gr*gr)) * u.crystal_color.xyz * 0.12;
     }
 
-    for (var i = 0; i < 128; i++) {
-        if (i >= i32(u.num_g)) { break; }
-        let ga   = textureLoad(g_tex, vec2<i32>(i, 0), 0);
+    for (var i = 0; i < ng_r3d; i++) {
+        let ga   = g_block.gamp[i];
         let amp  = ga.w;
         let G    = ga.xyz * u.kscale * G_scale;
         let oc   = -cp;
@@ -511,7 +499,7 @@ fn render_noneuclidean(uv: vec2<f32>) -> vec3<f32> {
     var ctrs: array<vec2<f32>, 4>;
     var rads: array<f32, 4>;
     for (var i = 0u; i < 4u; i++) {
-        let ga  = textureLoad(g_tex, vec2<i32>(i32(i), 0), 0);
+        let ga  = g_block.gamp[i];
         let G   = ga.xyz * sc;
         let gx  = G.x*ca - G.z*sa;
         let gyr = G.x*sa + G.z*ca;

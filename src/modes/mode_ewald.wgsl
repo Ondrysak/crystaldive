@@ -76,9 +76,9 @@ fn render_ewald(uv: vec2<f32>) -> vec3<f32> {
     }
 
     // ── G-point spheres, tinted by Ewald-shell proximity ──
-    for (var i = 0; i < 128; i++) {
-        if (i >= i32(u.num_g)) { break; }
-        let ga  = textureLoad(g_tex, vec2<i32>(i, 0), 0);
+    let ng_ew = i32(u.num_g);
+    for (var i = 0; i < ng_ew; i++) {
+        let ga  = g_block.gamp[i];
         let amp = ga.w;
         let G   = ga.xyz * G_scale;
 
@@ -154,9 +154,8 @@ fn render_ewald(uv: vec2<f32>) -> vec3<f32> {
     }
 
     // ── Halo glows around each G (screen-space Gaussian via closest-approach) ──
-    for (var i = 0; i < 128; i++) {
-        if (i >= i32(u.num_g)) { break; }
-        let ga    = textureLoad(g_tex, vec2<i32>(i, 0), 0);
+    for (var i = 0; i < ng_ew; i++) {
+        let ga    = g_block.gamp[i];
         let amp   = ga.w;
         let G     = ga.xyz * G_scale;
         let oc    = G - cp;

@@ -16,9 +16,9 @@ fn render_kikuchi(uv: vec2<f32>) -> vec3<f32> {
     var bands  = 0.0;
     var excess = 0.0;
 
-    for (var i = 0; i < 128; i++) {
-        if (i >= i32(u.num_g)) { break; }
-        let ga  = textureLoad(g_tex, vec2<i32>(i, 0), 0);
+    let ng_ki = i32(u.num_g);
+    for (var i = 0; i < ng_ki; i++) {
+        let ga  = g_block.gamp[i];
         let amp = ga.w;
         let G   = ga.xyz * u.kscale;
 

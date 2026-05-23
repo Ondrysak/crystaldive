@@ -155,33 +155,17 @@ async fn run_async(opts: &BenchOpts) -> Result<(String, Vec<ModeTiming>), String
         mapped_at_creation: false,
     });
 
-    let g_texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("g_tex"),
-        size: wgpu::Extent3d { width: MAX_G as u32, height: 2, depth_or_array_layers: 1 },
-        mip_level_count: 1, sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba32Float,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
+    let g_buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("g_block"),
+        size:  (MAX_G * 4 * 2 * std::mem::size_of::<f32>()) as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
     });
-    let g_view = g_texture.create_view(&Default::default());
 
     let mut field = GpuField::from_crystal(&nacl(), 3);
     field.seed_kpoint([0.0, 0.0, 0.0], 1.0);
     let packed = field.pack();
-    queue.write_texture(
-        wgpu::ImageCopyTexture {
-            texture: &g_texture, mip_level: 0,
-            origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
-        },
-        bytemuck::cast_slice(&packed),
-        wgpu::ImageDataLayout {
-            offset: 0,
-            bytes_per_row: Some((MAX_G * 4 * 4) as u32),
-            rows_per_image: Some(2),
-        },
-        wgpu::Extent3d { width: MAX_G as u32, height: 2, depth_or_array_layers: 1 },
-    );
+    queue.write_buffer(&g_buf, 0, bytemuck::cast_slice(&packed));
     let num_g = field.count as u32;
 
     let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -197,10 +181,10 @@ async fn run_async(opts: &BenchOpts) -> Result<(String, Vec<ModeTiming>), String
             },
             wgpu::BindGroupLayoutEntry {
                 binding: 1, visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
                 },
                 count: None,
             },
@@ -210,7 +194,7 @@ async fn run_async(opts: &BenchOpts) -> Result<(String, Vec<ModeTiming>), String
         label: Some("field bg"), layout: &bgl,
         entries: &[
             wgpu::BindGroupEntry { binding: 0, resource: uniform_buf.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&g_view) },
+            wgpu::BindGroupEntry { binding: 1, resource: g_buf.as_entire_binding() },
         ],
     });
 
@@ -339,28 +323,17 @@ async fn run_feedback_smoke_async(frames: u32, w: u32, h: u32) -> Result<u8, Str
         mapped_at_creation: false,
     });
 
-    // ── G-texture ─────────────────────────────────────────────────────────
-    let g_texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("g_tex"),
-        size: wgpu::Extent3d { width: MAX_G as u32, height: 2, depth_or_array_layers: 1 },
-        mip_level_count: 1, sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba32Float,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
+    // ── G-block uniform buffer ────────────────────────────────────────────
+    let g_buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("g_block"),
+        size: (MAX_G * 4 * 2 * std::mem::size_of::<f32>()) as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
     });
-    let g_view = g_texture.create_view(&Default::default());
     let mut field = GpuField::from_crystal(&nacl(), 3);
     field.seed_kpoint([0.0, 0.0, 0.0], 1.0);
     let packed = field.pack();
-    queue.write_texture(
-        wgpu::ImageCopyTexture { texture: &g_texture, mip_level: 0,
-            origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-        cast_slice(&packed),
-        wgpu::ImageDataLayout { offset: 0,
-            bytes_per_row: Some((MAX_G * 4 * 4) as u32), rows_per_image: Some(2) },
-        wgpu::Extent3d { width: MAX_G as u32, height: 2, depth_or_array_layers: 1 },
-    );
+    queue.write_buffer(&g_buf, 0, cast_slice(&packed));
 
     // ── Field bind group layout ───────────────────────────────────────────
     let field_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -374,10 +347,8 @@ async fn run_feedback_smoke_async(frames: u32, w: u32, h: u32) -> Result<u8, Str
             },
             wgpu::BindGroupLayoutEntry {
                 binding: 1, visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2, multisampled: false,
-                },
+                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false, min_binding_size: None },
                 count: None,
             },
         ],
@@ -386,7 +357,7 @@ async fn run_feedback_smoke_async(frames: u32, w: u32, h: u32) -> Result<u8, Str
         label: Some("field bg"), layout: &field_bgl,
         entries: &[
             wgpu::BindGroupEntry { binding: 0, resource: uniform_buf.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&g_view) },
+            wgpu::BindGroupEntry { binding: 1, resource: g_buf.as_entire_binding() },
         ],
     });
 
@@ -688,34 +659,18 @@ where
         mapped_at_creation: false,
     });
 
-    let g_texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("g_tex"),
-        size: wgpu::Extent3d { width: MAX_G as u32, height: 2, depth_or_array_layers: 1 },
-        mip_level_count: 1, sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba32Float,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
+    let g_buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("g_block"),
+        size: (MAX_G * 4 * 2 * std::mem::size_of::<f32>()) as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
     });
-    let g_view = g_texture.create_view(&Default::default());
 
     let mut field = GpuField::from_crystal(crystal, 3);
     field.seed_kpoint([0.0, 0.0, 0.0], 1.0);
     let num_g = field.count as u32;
     let packed = field.pack();
-    queue.write_texture(
-        wgpu::ImageCopyTexture {
-            texture: &g_texture, mip_level: 0,
-            origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
-        },
-        bytemuck::cast_slice(&packed),
-        wgpu::ImageDataLayout {
-            offset: 0,
-            bytes_per_row: Some((MAX_G * 4 * 4) as u32),
-            rows_per_image: Some(2),
-        },
-        wgpu::Extent3d { width: MAX_G as u32, height: 2, depth_or_array_layers: 1 },
-    );
+    queue.write_buffer(&g_buf, 0, bytemuck::cast_slice(&packed));
 
     let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("clip bgl"),
@@ -729,10 +684,9 @@ where
             },
             wgpu::BindGroupLayoutEntry {
                 binding: 1, visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false, min_binding_size: None,
                 }, count: None,
             },
         ],
@@ -741,7 +695,7 @@ where
         label: Some("clip bg"), layout: &bgl,
         entries: &[
             wgpu::BindGroupEntry { binding: 0, resource: uniform_buf.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&g_view) },
+            wgpu::BindGroupEntry { binding: 1, resource: g_buf.as_entire_binding() },
         ],
     });
     let sm = device.create_shader_module(wgpu::ShaderModuleDescriptor {

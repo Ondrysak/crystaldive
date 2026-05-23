@@ -45,9 +45,9 @@ fn crystal_dive_basis() -> mat2x2<f32> {
     var b2 = vec2<f32>(0.0, 1.0);
     var l1 = 1e9;
     var l2 = 1e9;
-    for (var i = 0i; i < 64i; i++) {
-        if (i >= i32(u.num_g)) { break; }
-        let g3 = textureLoad(g_tex, vec2<i32>(i, 0), 0).xyz;
+    let ng_cd = i32(u.num_g);
+    for (var i = 0i; i < ng_cd; i++) {
+        let g3 = g_block.gamp[i].xyz;
         let gxy = g3.xy;
         let lxy = length(gxy);
         if (lxy < 0.05) { continue; }

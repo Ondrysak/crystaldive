@@ -84,8 +84,8 @@ pub struct FieldUniform {
 
 pub struct FieldPipeline {
     pub uniform_buf: wgpu::Buffer,
+    pub g_buf:       wgpu::Buffer,
     uniform_bg:      wgpu::BindGroup,
-    g_texture:       wgpu::Texture,
     field_pl:        wgpu::RenderPipeline,
 }
 
@@ -98,48 +98,32 @@ impl FieldPipeline {
             mapped_at_creation: false,
         });
 
-        // G-vector texture: MAX_G columns × 2 rows, Rgba32Float
-        let g_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("g_tex"),
-            size:  wgpu::Extent3d { width: MAX_G as u32, height: 2, depth_or_array_layers: 1 },
-            mip_level_count: 1, sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba32Float,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
+        // G-vector uniform buffer: GBlock layout = 128 × vec4 (gamp) + 128 × vec4 (phases)
+        // Matches GpuField::pack() output directly; no format conversion needed.
+        let g_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("g_block"),
+            size:  (MAX_G * 4 * 2 * std::mem::size_of::<f32>()) as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
-        let g_tex_view = g_texture.create_view(&Default::default());
 
         let bgl = field_bgl(device);
         let uniform_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("field bg"), layout: &bgl,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: uniform_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&g_tex_view) },
+                wgpu::BindGroupEntry { binding: 1, resource: g_buf.as_entire_binding() },
             ],
         });
 
         let field_pl = build_field_pl(device, &bgl, surface_fmt);
-        Self { uniform_buf, uniform_bg, g_texture, field_pl }
+        Self { uniform_buf, g_buf, uniform_bg, field_pl }
     }
 
     /// Upload packed G-vector data (from `GpuField::pack()`).
+    /// The pack() layout matches GBlock exactly: 128 × vec4 gamp then 128 × vec4 phases.
     pub fn upload_gfield(&self, queue: &wgpu::Queue, data: &[f32]) {
-        queue.write_texture(
-            wgpu::ImageCopyTexture {
-                texture:   &self.g_texture,
-                mip_level: 0,
-                origin:    wgpu::Origin3d::ZERO,
-                aspect:    wgpu::TextureAspect::All,
-            },
-            bytemuck::cast_slice(data),
-            wgpu::ImageDataLayout {
-                offset:         0,
-                bytes_per_row:  Some((MAX_G * 4 * 4) as u32), // MAX_G * RGBA * f32
-                rows_per_image: Some(2),
-            },
-            wgpu::Extent3d { width: MAX_G as u32, height: 2, depth_or_array_layers: 1 },
-        );
+        queue.write_buffer(&self.g_buf, 0, bytemuck::cast_slice(data));
     }
 }
 
@@ -1237,10 +1221,10 @@ fn field_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
             },
             wgpu::BindGroupLayoutEntry {
                 binding: 1, visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type:   wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled:   false,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
                 },
                 count: None,
             },

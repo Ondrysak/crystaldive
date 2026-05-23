@@ -21,9 +21,9 @@ fn render_phonon(uv: vec2<f32>) -> vec3<f32> {
     let up  = cross(fwd, rgt);
     let rd  = normalize(fwd + uv.x*rgt + uv.y*up);
 
-    // ── Pick q vector from g_tex ─────────────────────────────────────────
+    // ── Pick q vector from g_block ───────────────────────────────────────
     let q_idx = clamp(i32(u.iso_level * f32(u.num_g)), 0, i32(u.num_g) - 1);
-    let q     = textureLoad(g_tex, vec2<i32>(q_idx, 0), 0).xyz * u.kscale;
+    let q     = g_block.gamp[q_idx].xyz * u.kscale;
 
     // ── Eigenvector ê (mix transverse → longitudinal) ────────────────────
     let q_len = max(length(q), 1e-5);

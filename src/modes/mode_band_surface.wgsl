@@ -16,10 +16,10 @@ fn band_surface_rot(p: vec2<f32>, a: f32) -> vec2<f32> {
 fn band_surface_wave(k: vec2<f32>, phase_mix: f32) -> f32 {
     var e  = 0.0;
     var ns = 0.0;
-    for (var i = 0; i < 64; i++) {
-        if (i >= i32(u.num_g)) { break; }
-        let ga  = textureLoad(g_tex, vec2<i32>(i, 0), 0);
-        let ph  = textureLoad(g_tex, vec2<i32>(i, 1), 0).r;
+    let ng_bs = i32(u.num_g);
+    for (var i = 0; i < ng_bs; i++) {
+        let ga  = g_block.gamp[i];
+        let ph  = g_block.phases[i].x;
         let g2  = ga.xy * u.kscale;
         let amp = ga.w;
         let q   = dot(g2, k);
