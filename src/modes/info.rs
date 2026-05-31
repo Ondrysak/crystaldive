@@ -1,5 +1,5 @@
 //! Per-mode metadata: display name, tagline, equations (unicode-styled math),
-//! and slider/usage notes. One source of truth for the 46 visualizer modes.
+//! and slider/usage notes. One source of truth for the visualizer modes.
 //!
 //! Both `crate::main`'s `MODE_NAMES` array and `crate::bench`'s name slice are
 //! derived from `MODES` so they stay in sync automatically.
@@ -64,7 +64,7 @@ pub const CANONICAL: &[ParamDesc] = &[
 /// Tailored parameter panel for `mode`. Modes with a bespoke list (see the
 /// `match`) get mode-specific labels/ranges and extra free slots (9..15);
 /// everything else falls back to the canonical 9.
-// 43 LORENZ — chaotic attractor; sigma/rho/beta/dt are now direct knobs
+// 28 LORENZ — chaotic attractor; sigma/rho/beta/dt are now direct knobs
 // (free slots 9..12) instead of hardcoded constants. window = zoom slot.
 const LORENZ_PARAMS: &[ParamDesc] = &[
     P_SPEED,
@@ -76,74 +76,220 @@ const LORENZ_PARAMS: &[ParamDesc] = &[
     ParamDesc::new(12, "dt",     0.002, 0.012, 0.006),
 ];
 
-// Relabel-only panels: these modes reuse the canonical slots (same ranges and
-// defaults) but the generic names ("field_mix", "iso_level", …) are misleading
-// for what the knob does, so each gets physics-meaningful labels. No shader or
-// preset changes — purely a clearer UI.
+// Per-mode panels. Slots a mode samples through the crystal-field generator
+// (kscale / speed / w_lattice / w_motif / w_band — and field_mix / iso_level
+// via `sdf`) keep their canonical names since they genuinely shape the field;
+// each mode's *headline* control is relabelled to what it actually does (drawn
+// from the mode's `notes`). Defaults match canonical so a mode switch stays
+// well-behaved. Physics modes 25..30 use bespoke ranges; LORENZ also free slots.
 
-// 34 PLASMON — loss-function map ω(q).
-const PLASMON_PARAMS: &[ParamDesc] = &[
-    P_SPEED,
-    ParamDesc::new(5, "w_scale",  0.2, 5.0, 1.0),
-    ParamDesc::new(2, "omega_p",  0.0, 1.0, 0.55),
-    ParamDesc::new(3, "damping",  0.0, 1.0, 0.5),
-    ParamDesc::new(4, "hue",      0.0, 1.0, 0.0),
+// Common relabel helpers.
+const fn p(slot: usize, name: &'static str, def: f32) -> ParamDesc {
+    // canonical-range relabel: pick the right range by slot family.
+    match slot {
+        0 => ParamDesc::new(0, name, 0.1, 5.0, def),  // kscale-like
+        5 => ParamDesc::new(5, name, 0.2, 5.0, def),  // zoom-like
+        6 | 7 | 8 => ParamDesc::new(slot, name, 0.0, 2.0, def), // weight-like
+        _ => ParamDesc::new(slot, name, 0.0, 1.0, def), // unit sliders (1..4)
+    }
+}
+
+// ── crystal-field core (0..9) ────────────────────────────────────────────
+const ISO_PARAMS: &[ParamDesc] = &[
+    P_KSCALE, P_SPEED, P_ZOOM,
+    p(2, "cf2_mix", 0.55), p(3, "iso_lvl", 0.5),
+    P_W_LATTICE, P_W_MOTIF, P_W_BAND,
+];
+const BZ_PARAMS: &[ParamDesc] = &[
+    P_KSCALE, P_SPEED, p(3, "contour", 0.5), p(4, "hue", 0.0),
+    P_W_LATTICE, P_W_MOTIF, P_W_BAND,
+];
+const FERMI_PARAMS: &[ParamDesc] = &[
+    P_KSCALE, P_SPEED, P_ZOOM, p(3, "energy", 0.5),
+    P_W_LATTICE, P_W_MOTIF, P_W_BAND,
+];
+const DENSITY_PARAMS: &[ParamDesc] = &[
+    P_KSCALE, P_SPEED, P_ZOOM, p(4, "hue", 0.0),
+    P_W_LATTICE, P_W_MOTIF, P_W_BAND,
+];
+const NODAL_PARAMS: &[ParamDesc] = &[
+    P_KSCALE, P_SPEED, P_ZOOM, P_W_LATTICE, P_W_MOTIF, P_W_BAND,
+];
+const PHASE_PARAMS: &[ParamDesc] = &[
+    P_KSCALE, P_SPEED, P_ZOOM, p(4, "hue", 0.0),
+    P_W_LATTICE, P_W_MOTIF, P_W_BAND,
+];
+const STRIPES_PARAMS: &[ParamDesc] = &[
+    P_KSCALE, P_SPEED, P_ZOOM,
+    p(3, "contours", 0.5), p(2, "tilt", 0.55), p(4, "hue", 0.0),
+    P_W_LATTICE, P_W_MOTIF, P_W_BAND,
+];
+const WARP_PARAMS: &[ParamDesc] = &[
+    P_KSCALE, P_SPEED, P_ZOOM,
+    p(2, "bend", 0.55), p(8, "shimmer", 0.4), p(4, "hue", 0.0),
+    P_W_LATTICE, P_W_MOTIF,
+];
+const NONEUC_PARAMS: &[ParamDesc] = &[
+    P_KSCALE, P_SPEED, p(3, "tiling", 0.5), p(4, "hue", 0.0),
+];
+const MOIRE_PARAMS: &[ParamDesc] = &[
+    P_KSCALE, P_SPEED, P_ZOOM,
+    p(2, "twist", 0.55), p(3, "sharpen", 0.5), p(4, "hue", 0.0),
+    P_W_LATTICE, P_W_MOTIF, P_W_BAND,
 ];
 
-// 40 WAVEPACKET — Gaussian wavepacket dispersion.
+// ── reciprocal / electronic / materials (10..24) ──────────────────────────
+const WANNIER_PARAMS: &[ParamDesc] = &[
+    P_KSCALE, P_SPEED, P_ZOOM,
+    p(2, "orbital", 0.55), p(3, "envelope", 0.5),
+    P_W_LATTICE, P_W_MOTIF, P_W_BAND,
+];
+const MAGNETIC_PARAMS: &[ParamDesc] = &[
+    P_KSCALE, P_SPEED, P_ZOOM, p(3, "tilt", 0.5),
+    p(6, "type_lat", 1.0), p(7, "type_mot", 0.6),
+];
+const KIKUCHI_PARAMS: &[ParamDesc] = &[
+    P_KSCALE, P_SPEED, P_ZOOM, p(3, "sharpen", 0.5),
+];
+const DEFECT_PARAMS: &[ParamDesc] = &[
+    P_KSCALE, P_SPEED, P_ZOOM, p(2, "depth", 0.55), p(3, "friedel", 0.5),
+];
+const BAND_SURFACE_PARAMS: &[ParamDesc] = &[
+    P_KSCALE, P_SPEED, P_ZOOM,
+    p(2, "gap", 0.55), p(3, "fermi", 0.5), p(4, "hue", 0.0),
+    P_W_LATTICE, P_W_MOTIF, P_W_BAND,
+];
+const SPIN_TEXTURE_PARAMS: &[ParamDesc] = &[
+    P_SPEED, P_ZOOM,
+    p(2, "winding", 0.55), p(3, "scale", 0.5), p(4, "hue", 0.0),
+    P_W_LATTICE, P_W_MOTIF, P_W_BAND,
+];
+const CDW_PARAMS: &[ParamDesc] = &[
+    P_KSCALE, P_SPEED, P_ZOOM,
+    p(2, "tilt", 0.55), p(3, "sharpen", 0.5), p(4, "hue", 0.0),
+];
+const QUASICRYSTAL_PARAMS: &[ParamDesc] = &[
+    P_KSCALE, P_SPEED, P_ZOOM, p(2, "phason", 0.55), p(3, "edges", 0.5), p(4, "hue", 0.0),
+];
+const THERMAL_PARAMS: &[ParamDesc] = &[
+    P_KSCALE, P_SPEED, P_ZOOM, p(3, "temp", 0.5), p(4, "hue", 0.0),
+];
+const DOMAIN_WALL_PARAMS: &[ParamDesc] = &[
+    P_SPEED, P_ZOOM, p(2, "order", 0.55), p(3, "wall_w", 0.5), p(4, "hue", 0.0),
+];
+const BERRY_PARAMS: &[ParamDesc] = &[
+    P_SPEED, P_ZOOM, p(2, "mass_m", 0.55), p(3, "scale", 0.5), p(4, "hue", 0.0),
+];
+const STM_PARAMS: &[ParamDesc] = &[
+    p(0, "k_F", 1.4), P_ZOOM, p(2, "qpi_k", 0.55), p(3, "qpi_amp", 0.5), p(4, "hue", 0.0),
+];
+const VORTEX_KNOT_PARAMS: &[ParamDesc] = &[
+    P_KSCALE, P_SPEED, P_ZOOM, p(2, "twist", 0.55), p(3, "tube_r", 0.5), p(4, "hue", 0.0),
+];
+const NEMATIC_PARAMS: &[ParamDesc] = &[
+    P_SPEED, P_ZOOM, p(2, "winding", 0.55), p(3, "scale", 0.5),
+];
+const ABRIKOSOV_PARAMS: &[ParamDesc] = &[
+    P_SPEED, P_ZOOM, p(3, "temp", 0.5), p(2, "B_field", 0.55),
+    p(6, "CdGM", 1.0), p(7, "phase_ring", 0.6), p(8, "material", 0.4), p(4, "hue", 0.0),
+];
+
+// ── physics continuum / fields (25..30) ───────────────────────────────────
+// 25 WAVEPACKET — Gaussian wavepacket dispersion.
 const WAVEPACKET_PARAMS: &[ParamDesc] = &[
-    P_SPEED,
-    ParamDesc::new(5, "zoom",    0.2, 5.0, 1.0),
-    ParamDesc::new(2, "k_mag",   0.0, 1.0, 0.55),
-    ParamDesc::new(3, "spread",  0.0, 1.0, 0.5),
+    P_SPEED, ParamDesc::new(5, "zoom", 0.2, 5.0, 1.0),
+    ParamDesc::new(2, "k_mag", 0.0, 1.0, 0.55),
+    ParamDesc::new(3, "spread", 0.0, 1.0, 0.5),
     ParamDesc::new(4, "k_angle", 0.0, 1.0, 0.0),
 ];
-
-// 41 DIPOLE_RAD — oscillating dipole radiation.
+// 26 DIPOLE_RAD — oscillating dipole radiation.
 const DIPOLE_PARAMS: &[ParamDesc] = &[
-    P_SPEED,
-    ParamDesc::new(5, "zoom",     0.2, 5.0, 1.0),
-    ParamDesc::new(2, "omega",    0.0, 1.0, 0.55),
+    P_SPEED, ParamDesc::new(5, "zoom", 0.2, 5.0, 1.0),
+    ParamDesc::new(2, "omega", 0.0, 1.0, 0.55),
     ParamDesc::new(3, "near_fld", 0.0, 1.0, 0.5),
-    ParamDesc::new(4, "hue",      0.0, 1.0, 0.0),
+    ParamDesc::new(4, "hue", 0.0, 1.0, 0.0),
 ];
-
-// 42 KARMAN — Kármán vortex street.
+// 27 KARMAN — Kármán vortex street.
 const KARMAN_PARAMS: &[ParamDesc] = &[
-    ParamDesc::new(1, "U_inf",    0.0, 2.0, 0.3),
+    ParamDesc::new(1, "U_inf", 0.0, 2.0, 0.3),
     ParamDesc::new(2, "core_rad", 0.0, 1.0, 0.55),
     ParamDesc::new(3, "Reynolds", 0.0, 1.0, 0.5),
-    ParamDesc::new(5, "scale",    0.2, 5.0, 1.0),
-    ParamDesc::new(4, "palette",  0.0, 1.0, 0.0),
+    ParamDesc::new(5, "scale", 0.2, 5.0, 1.0),
+    ParamDesc::new(4, "palette", 0.0, 1.0, 0.0),
 ];
-
-// 44 LENSING — gravitationally lensed accretion disk.
+// 29 LENSING — gravitationally lensed accretion disk.
 const LENSING_PARAMS: &[ParamDesc] = &[
-    ParamDesc::new(1, "orbit",     0.0, 2.0, 0.3),
-    ParamDesc::new(2, "cam_elev",  0.0, 1.0, 0.55),
+    ParamDesc::new(1, "orbit", 0.0, 2.0, 0.3),
+    ParamDesc::new(2, "cam_elev", 0.0, 1.0, 0.55),
     ParamDesc::new(3, "disk_emis", 0.0, 1.0, 0.5),
-    ParamDesc::new(5, "magnify",   0.2, 5.0, 1.0),
-    ParamDesc::new(4, "disk_hue",  0.0, 1.0, 0.0),
+    ParamDesc::new(5, "magnify", 0.2, 5.0, 1.0),
+    ParamDesc::new(4, "disk_hue", 0.0, 1.0, 0.0),
+];
+// 30 GRAV_WAVE — inspiral strain pattern.
+const GRAV_WAVE_PARAMS: &[ParamDesc] = &[
+    P_SPEED, ParamDesc::new(5, "zoom", 0.2, 5.0, 1.0),
+    ParamDesc::new(2, "freq", 0.0, 1.0, 0.55),
+    ParamDesc::new(3, "amp", 0.0, 1.0, 0.5),
+    ParamDesc::new(4, "polariz", 0.0, 1.0, 0.0),
 ];
 
-// 45 GRAV_WAVE — inspiral strain pattern.
-const GRAV_WAVE_PARAMS: &[ParamDesc] = &[
-    P_SPEED,
-    ParamDesc::new(5, "zoom",    0.2, 5.0, 1.0),
-    ParamDesc::new(2, "freq",    0.0, 1.0, 0.55),
-    ParamDesc::new(3, "amp",     0.0, 1.0, 0.5),
-    ParamDesc::new(4, "polariz", 0.0, 1.0, 0.0),
+// ── lattice walk + elastic / strain / spin (31..35) ───────────────────────
+const LATTICE_WALK_PARAMS: &[ParamDesc] = &[
+    P_KSCALE, P_SPEED, P_ZOOM,
+    p(2, "morph", 0.55), p(3, "bore", 0.5), p(4, "hue", 0.0),
+    P_W_LATTICE, P_W_MOTIF, P_W_BAND,
+];
+const ELASTIC_ANISO_PARAMS: &[ParamDesc] = &[
+    P_SPEED, P_ZOOM, p(2, "amplitude", 0.55), p(3, "isotropy", 0.5),
+];
+const ELASTIC_WAVE_PARAMS: &[ParamDesc] = &[
+    P_KSCALE, P_SPEED, P_ZOOM, p(2, "qT_mode", 0.55), p(3, "anisotropy", 0.5), p(4, "hue", 0.0),
+];
+const STRAIN_FIELD_PARAMS: &[ParamDesc] = &[
+    P_SPEED, P_ZOOM, p(2, "lock_strain", 0.55), p(3, "amount", 0.5), p(4, "hue", 0.0),
+];
+const SPIN_DENSITY_PARAMS: &[ParamDesc] = &[
+    P_KSCALE, P_SPEED, P_ZOOM, p(2, "order", 0.55), p(3, "moment", 0.5), p(4, "hue", 0.0),
 ];
 
 pub fn mode_params(mode: u32) -> &'static [ParamDesc] {
     match mode {
-        34 => PLASMON_PARAMS,
-        40 => WAVEPACKET_PARAMS,
-        41 => DIPOLE_PARAMS,
-        42 => KARMAN_PARAMS,
-        43 => LORENZ_PARAMS,
-        44 => LENSING_PARAMS,
-        45 => GRAV_WAVE_PARAMS,
+        0  => ISO_PARAMS,
+        1  => BZ_PARAMS,
+        2  => FERMI_PARAMS,
+        3  => DENSITY_PARAMS,
+        4  => NODAL_PARAMS,
+        5  => PHASE_PARAMS,
+        6  => STRIPES_PARAMS,
+        7  => WARP_PARAMS,
+        8  => NONEUC_PARAMS,
+        9  => MOIRE_PARAMS,
+        10 => WANNIER_PARAMS,
+        11 => MAGNETIC_PARAMS,
+        12 => KIKUCHI_PARAMS,
+        13 => DEFECT_PARAMS,
+        14 => BAND_SURFACE_PARAMS,
+        15 => SPIN_TEXTURE_PARAMS,
+        16 => CDW_PARAMS,
+        17 => QUASICRYSTAL_PARAMS,
+        18 => THERMAL_PARAMS,
+        19 => DOMAIN_WALL_PARAMS,
+        20 => BERRY_PARAMS,
+        21 => STM_PARAMS,
+        22 => VORTEX_KNOT_PARAMS,
+        23 => NEMATIC_PARAMS,
+        24 => ABRIKOSOV_PARAMS,
+        25 => WAVEPACKET_PARAMS,
+        26 => DIPOLE_PARAMS,
+        27 => KARMAN_PARAMS,
+        28 => LORENZ_PARAMS,
+        29 => LENSING_PARAMS,
+        30 => GRAV_WAVE_PARAMS,
+        31 => LATTICE_WALK_PARAMS,
+        32 => ELASTIC_ANISO_PARAMS,
+        33 => ELASTIC_WAVE_PARAMS,
+        34 => STRAIN_FIELD_PARAMS,
+        35 => SPIN_DENSITY_PARAMS,
         _  => CANONICAL,
     }
 }
@@ -207,18 +353,18 @@ impl ModeArea {
 impl ModeInfo {
     pub const fn area(&self) -> ModeArea {
         match self.idx {
-            0..=8 | 11 | 13 | 24 | 37 | 46 => ModeArea::Crystal,
-            9 | 10 | 14 | 18 => ModeArea::Reciprocal,
-            15 | 17 | 20..=22 | 28..=34 | 36 | 39 | 40 | 51 => ModeArea::Electronic,
-            12 | 16 | 19 | 23 | 25 | 26 | 35 | 38 | 47 | 48 | 49 | 50 => ModeArea::Materials,
-            27 | 42 | 43 => ModeArea::Classical,
-            41 | 44 | 45 => ModeArea::Fields,
+            0..=9 | 17 | 31 => ModeArea::Crystal,
+            12 => ModeArea::Reciprocal,
+            10 | 14 | 15 | 20 | 21 | 22 | 24 | 25 => ModeArea::Electronic,
+            11 | 13 | 16 | 18 | 19 | 23 | 32 | 33 | 34 | 35 => ModeArea::Materials,
+            27 | 28 => ModeArea::Classical,
+            26 | 29 | 30 => ModeArea::Fields,
             _ => ModeArea::Crystal,
         }
     }
 }
 
-pub const MODES: [ModeInfo; 52] = [
+pub const MODES: [ModeInfo; 36] = [
     ModeInfo {
         idx: 0, name: "3D ISO",
         tagline: "Ray-marched isosurface of the crystal-field scalar.",
@@ -297,38 +443,7 @@ pub const MODES: [ModeInfo; 52] = [
         notes: "The field bends rays toward its own gradient. field_mix controls the bend strength; w_band sets shimmer. Looks like the lattice through a heat haze.",
     },
     ModeInfo {
-        idx: 8, name: "LINKS",
-        tagline: "Hollow sphere chained by crystal-field-noised links (SDF).",
-        equations: &[
-            "sphere: ||r| − 0.65| − 0.04",
-            "link:  sd_link(r̂, …)",
-            "scene = smin(sphere, link, 0.18)",
-            "    + 0.10·f(p) near surface",
-        ],
-        notes: "GLKITTY-style sphere-trace. Crystal field noise perturbs the surface only near hit. Two-pass SDF: cheap geometric far, full noise near.",
-    },
-    ModeInfo {
-        idx: 9, name: "XRD",
-        tagline: "Simulated X-ray diffraction pattern (spots + powder rings).",
-        equations: &[
-            "Bragg: 2d sin θ = nλ",
-            "spot(uv,G) ∝ |F(G)|² · e^(−ε·z²)",
-            "        · e^(−|uv−s(G)|²/σ²)",
-            "powder:  ∑ exp(−(|uv|−|G|)²·k)",
-        ],
-        notes: "Spots ← projected G-vectors, Ewald-weighted. Rings ← powder average. iso_level sharpens spots (smaller σ).",
-    },
-    ModeInfo {
-        idx: 10, name: "RECIP",
-        tagline: "3D reciprocal-lattice point cloud.",
-        equations: &[
-            "G points: {n₁b₁ + n₂b₂ + n₃b₃}",
-            "radius ∝ |F(G)|, raycast spheres",
-        ],
-        notes: "Sphere-traced rendering of the loaded crystal's actual G-vectors. Spokes connect each G to Γ. Mouse-orbit; iso_level scales sphere size.",
-    },
-    ModeInfo {
-        idx: 11, name: "NONEUC",
+        idx: 8, name: "NONEUC",
         tagline: "Kleinian circle-inversion kaleidoscope.",
         equations: &[
             "inv(z; c, r) = c + r²(z−c)/|z−c|²",
@@ -338,17 +453,7 @@ pub const MODES: [ModeInfo; 52] = [
         notes: "Hyperbolic (non-Euclidean) tiling — circles inverted into themselves. Centres come from the first four G-vectors so different materials give different fundamental groups.",
     },
     ModeInfo {
-        idx: 12, name: "PHONON",
-        tagline: "Animated 5×5×5 atom lattice on one phonon eigenmode.",
-        equations: &[
-            "R'(t) = R + ê·A·cos(q·R − ω t)",
-            "ω(q) ≈ √(|q|+0.1) · speed · 1.5",
-            "ê = mix(transverse, longitudinal, field_mix)",
-        ],
-        notes: "Picks q from g_tex[iso_level·num_g]. field_mix slides between transverse (T) and longitudinal (L) polarisations. Acoustic-like dispersion only — not a real eigensolver.",
-    },
-    ModeInfo {
-        idx: 13, name: "MOIRE",
+        idx: 9, name: "MOIRE",
         tagline: "Twisted-bilayer interference of two crystal fields.",
         equations: &[
             "θ = field_mix · 30°",
@@ -358,17 +463,7 @@ pub const MODES: [ModeInfo; 52] = [
         notes: "Two copies of the lattice, one rotated by θ. Magic-angle moiré patterns and pinwheel ripples appear at small θ. iso_level sharpens contours.",
     },
     ModeInfo {
-        idx: 14, name: "EWALD",
-        tagline: "Ewald sphere sweeping the 3D reciprocal lattice.",
-        equations: &[
-            "|kᵢ + G| = |kᵢ|   (Laue condition)",
-            "shell centred at −kᵢ, radius |kᵢ|=1/λ",
-            "G flashes when on the shell",
-        ],
-        notes: "Geometric construction of Bragg diffraction. Mouse rotates the incident beam; iso_level scales |kᵢ| so you can pick which G's satisfy Laue.",
-    },
-    ModeInfo {
-        idx: 15, name: "WANNIER",
+        idx: 10, name: "WANNIER",
         tagline: "Localised Wannier orbital |ψ|² isosurface.",
         equations: &[
             "ψ(r) = e^(−0.6 r²) Σᵢ aᵢ e^(i Gᵢ·r + iφᵢ)",
@@ -378,7 +473,7 @@ pub const MODES: [ModeInfo; 52] = [
         notes: "A Gaussian envelope localises the inverse-FT into one orbital. field_mix translates the centre; lobes are coloured by sign(Re ψ) — classic chemistry-textbook two-tone.",
     },
     ModeInfo {
-        idx: 16, name: "MAGNETIC",
+        idx: 11, name: "MAGNETIC",
         tagline: "Skyrmion-lattice spin texture with oriented streaks.",
         equations: &[
             "n̂(r) = (nx, ny, nz)/|n|,",
@@ -388,17 +483,7 @@ pub const MODES: [ModeInfo; 52] = [
         notes: "Real-space 3D spin field. Red ↑ → blue ↓ polar dome; streaks aligned with in-plane direction; bright cores at |nz|→1. Type controlled by w_motif/w_lattice ratio.",
     },
     ModeInfo {
-        idx: 17, name: "DISPERSION",
-        tagline: "Band-structure plot ε(k) along Γ–X–M–Γ.",
-        equations: &[
-            "ε(K) = Σᵢ aᵢ cos(Gᵢ·K + φᵢ·u)",
-            "two bands: u = 0 and u = 1",
-            "x ↦ path param,  y ↦ energy",
-        ],
-        notes: "Tight-binding-style cosine sum on a piecewise-linear k-path. Sweeping highlight scans the path; tick marks at Γ/X/M/Γ. iso_level thins the lines.",
-    },
-    ModeInfo {
-        idx: 18, name: "KIKUCHI",
+        idx: 12, name: "KIKUCHI",
         tagline: "EBSD-style Kikuchi band pattern from G-vectors.",
         equations: &[
             "for each G: pair of lines",
@@ -408,7 +493,7 @@ pub const MODES: [ModeInfo; 52] = [
         notes: "Each G produces two parallel Kikuchi lines (excess/deficiency cone intersections with the detector). Crystal orientation maps onto pattern symmetry. iso_level sharpens.",
     },
     ModeInfo {
-        idx: 19, name: "DEFECT",
+        idx: 13, name: "DEFECT",
         tagline: "Vacancy probe + Friedel oscillations.",
         equations: &[
             "f(r) = f₀ − A·e^(−r²/σ²)",
@@ -418,7 +503,7 @@ pub const MODES: [ModeInfo; 52] = [
         notes: "Drag with the mouse — the cursor is a vacancy. Lattice depresses at the core; Friedel rings ring outward at 2k_F. Real, if highly stylised, condensed-matter physics.",
     },
     ModeInfo {
-        idx: 20, name: "BAND SURFACE",
+        idx: 14, name: "BAND SURFACE",
         tagline: "Two-band energy landscape with avoided crossings.",
         equations: &[
             "ε±(k) = ½(εₐ+ε_b) ± ½√((εₐ−ε_b)²+Δ²)",
@@ -428,7 +513,7 @@ pub const MODES: [ModeInfo; 52] = [
         notes: "Two bands with a controlled gap Δ. Saddle points, avoided crossings, and Fermi-level contours all visible. Cool→warm divergent palette around ε=0.",
     },
     ModeInfo {
-        idx: 21, name: "SPIN TEXTURE",
+        idx: 15, name: "SPIN TEXTURE",
         tagline: "Reciprocal-space spin field with Rashba winding.",
         equations: &[
             "winding n = 1 + ⌊4·field_mix⌋",
@@ -438,17 +523,7 @@ pub const MODES: [ModeInfo; 52] = [
         notes: "Each cell carries a director-dash aligned with the local in-plane spin. ±polarity coloured up/down (warm/cool). field_mix sets the topological winding number.",
     },
     ModeInfo {
-        idx: 22, name: "BZ PATH",
-        tagline: "Animated traversal of a high-symmetry k-path.",
-        equations: &[
-            "path: Γ → X → M → Γ  (k from g_tex)",
-            "probe at s(t) = fract(t · 0.155)",
-            "response = Σᵢ aᵢ cos(Gᵢ·k + φᵢ + t)",
-        ],
-        notes: "A moving probe walks the path; trailing afterimage, twin band plot beneath, comet+sparkle decoration. Educational + decorative.",
-    },
-    ModeInfo {
-        idx: 23, name: "CDW",
+        idx: 16, name: "CDW",
         tagline: "Charge-density wave with domains, slips, and vortices.",
         equations: &[
             "ρ(r) ∝ Σⱼ cos(kⱼ·r + Φ(r))",
@@ -458,7 +533,7 @@ pub const MODES: [ModeInfo; 52] = [
         notes: "Periodic stripes that lock onto reciprocal-lattice directions, with domain walls, phase slips, and ±1 vortex pairs. iso_level sharpens nodes; field_mix tilts the cross-stripe weight.",
     },
     ModeInfo {
-        idx: 24, name: "QUASICRYSTAL",
+        idx: 17, name: "QUASICRYSTAL",
         tagline: "Five/tenfold reciprocal interference (Penrose-like).",
         equations: &[
             "10 plane waves at angles 2π·i/10",
@@ -469,7 +544,7 @@ pub const MODES: [ModeInfo; 52] = [
         notes: "Non-periodic but quasiperiodic — true tenfold symmetry forbidden in crystals. Inner field shows Penrose-tile edges; outer panel shows the famous decagonal diffraction stars.",
     },
     ModeInfo {
-        idx: 25, name: "THERMAL",
+        idx: 18, name: "THERMAL",
         tagline: "Debye–Waller blurred lattice peaks + heat haze.",
         equations: &[
             "I(G) ∝ |F(G)|² · e^(−⟨u²⟩|G|²)",
@@ -479,7 +554,7 @@ pub const MODES: [ModeInfo; 52] = [
         notes: "Increases iso_level → hotter sample → peaks broaden and dim per Debye–Waller, plus a vector noise haze. Cool→warm tint follows T.",
     },
     ModeInfo {
-        idx: 26, name: "DOMAIN WALL",
+        idx: 19, name: "DOMAIN WALL",
         tagline: "Ferroic domains separated by moving phase walls.",
         equations: &[
             "wall(r,t) = sin(p·k₁+t) + ½ sin(p·k₂−t)",
@@ -489,17 +564,7 @@ pub const MODES: [ModeInfo; 52] = [
         notes: "Two-state order parameter, walls advect across the field. Inside-domain stripes track the local symmetry; bright walls flash on transit. iso_level thickens the walls.",
     },
     ModeInfo {
-        idx: 27, name: "FRACTURE",
-        tagline: "Strained lattice around an advancing crack tip.",
-        equations: &[
-            "strain  u ∝ (1/√r)·(cos θ/2, −sin θ/2)",
-            "    (mode-I K-field, leading order)",
-            "lattice = f(p + u(p − r_tip))",
-        ],
-        notes: "Classical linear-elastic K-field around a crack: 1/√r stress singularity, mode-I displacement angles. field_mix sweeps the tip position. Crack opens behind the tip; lattice stretches ahead.",
-    },
-    ModeInfo {
-        idx: 28, name: "BERRY",
+        idx: 20, name: "BERRY",
         tagline: "Berry curvature Ω(k) heatmap from a two-band model.",
         equations: &[
             "h(k) = (f, f₂, m + 0.3·f(1.5k))",
@@ -509,17 +574,7 @@ pub const MODES: [ModeInfo; 52] = [
         notes: "Diverging palette (blue/orange) around Ω=0. Dirac points light up where |h|→0; m = field_mix − ½ tunes the topological transition. Streamlines trace the in-plane (h₁,h₂) flow.",
     },
     ModeInfo {
-        idx: 29, name: "HOFSTADTER",
-        tagline: "Self-similar butterfly via continued-fraction recursion.",
-        equations: &[
-            "Harper-like: ε ≈ 2cos(k) + 2cos(k+2π p n)",
-            "p ← fract(1/p)   (continued fraction)",
-            "summed over 7 levels,  amp ← 0.72^level",
-        ],
-        notes: "Not a real Harper solver — a fractal-shaped proxy. x ↦ φ (flux per plaquette), y ↦ energy. Vertical lines mark φ = ½, ⅓, ¼, ⅕. field_mix re-scales the energy axis.",
-    },
-    ModeInfo {
-        idx: 30, name: "STM",
+        idx: 21, name: "STM",
         tagline: "Top-down STM topograph with QPI Friedel rings.",
         equations: &[
             "ρ(r) = |ψ|² + Σᵢ cos(2k_F|r−rᵢ|+φᵢ)·e^(−|r−rᵢ|)/|r−rᵢ|",
@@ -528,17 +583,7 @@ pub const MODES: [ModeInfo; 52] = [
         notes: "Five fixed impurities scatter quasiparticles into Friedel-ring QPI patterns. k_F = kscale·(3 + 4·field_mix); iso_level boosts QPI amplitude. Lambertian-shaded height map.",
     },
     ModeInfo {
-        idx: 31, name: "SPECTRAL",
-        tagline: "ARPES-style A(ω, k) Lorentzian-broadened bands.",
-        equations: &[
-            "A(ω, k) = (1/π) Σ_b  Σ_b / ((ω−ε_b)² + Σ_b²)",
-            "Σ(ω) = 0.04 + 0.30 ω²   (Fermi-liquid)",
-            "Σ ← Σ · (1 − 0.7·iso_level)",
-        ],
-        notes: "Three poles per k-point with weights (1.0, 0.7, 0.4). ω² scattering rate ⇒ sharper quasiparticles near E_F. iso_level → coherent quasiparticles. Navy→blue→warm-white ARPES palette.",
-    },
-    ModeInfo {
-        idx: 32, name: "VORTEX KNOT",
+        idx: 22, name: "VORTEX KNOT",
         tagline: "Luminous tube around the nodal line of a complex ψ(r).",
         equations: &[
             "ψ(r) = Σᵢ aᵢ e^(i Gᵢ·r + iφᵢ + i t·i)",
@@ -548,28 +593,7 @@ pub const MODES: [ModeInfo; 52] = [
         notes: "Zeros of a complex scalar in 3D form 1D lines — knotted in general. Hue around the tube ← arg(ψ); volumetric halo follows |ψ|²→0. iso_level thickens the tube.",
     },
     ModeInfo {
-        idx: 33, name: "BLOCH WAVE",
-        tagline: "Semiclassical wavepacket undergoing Bloch oscillations.",
-        equations: &[
-            "ε(k) = −2 cos(k)",
-            "x_c(t) = sin(F·t) / F",
-            "T_B = 2π / F   (period)",
-            "F = 0.4 + 1.2·field_mix",
-        ],
-        notes: "Space (x) along the horizontal, time downward — the packet oscillates instead of drifting because of the lattice. Gaussian envelope with phase fringes. field_mix sets the DC field, hence the period.",
-    },
-    ModeInfo {
-        idx: 34, name: "PLASMON",
-        tagline: "Lindhard particle–hole continuum + plasmon line.",
-        equations: &[
-            "continuum: q² − q ≤ ω ≤ q + q²",
-            "ω_p(q) = √(ω_p0² + α q²)",
-            "Lorentzian: γ/((ω−ω_p)² + γ²)",
-        ],
-        notes: "(q, ω) phase diagram. The bright yellow line is the collective plasmon; the cloud is single-particle excitations (Landau damping kicks in where they overlap). field_mix → ω_p0; iso_level → α dispersion.",
-    },
-    ModeInfo {
-        idx: 35, name: "NEMATIC",
+        idx: 23, name: "NEMATIC",
         tagline: "Liquid-crystal director field with ±½ disclinations.",
         equations: &[
             "2θ = atan2(f₂, f)",
@@ -579,7 +603,7 @@ pub const MODES: [ModeInfo; 52] = [
         notes: "Working with 2θ keeps the head–tail symmetry of a director. Cores at |order|→0 light up magenta; sign of the analytic Jacobian distinguishes +½ (warm) vs −½ (cool) defects.",
     },
     ModeInfo {
-        idx: 36, name: "ABRIKOSOV",
+        idx: 24, name: "ABRIKOSOV",
         tagline: "Type-II superconductor vortex lattice (crystal-derived).",
         equations: &[
             "|ψ|²(r) = 1 − Σ_K f(K) cos(K·r)",
@@ -590,41 +614,7 @@ pub const MODES: [ModeInfo; 52] = [
         notes: "Lattice SYMMETRY inherits from the loaded crystal (cubic→square, hex→triangular). iso_level → reduced temperature; field_mix → applied B; w_lattice → CdGM 6-fold-star strength; w_motif → phase-winding rainbow ring; w_band → material-fingerprint modulation.",
     },
     ModeInfo {
-        idx: 37, name: "CRYSTAL DIVE",
-        tagline: "Endless self-similar zoom via the lattice point group.",
-        equations: &[
-            "zoom_log = t · 0.16,",
-            "phase = fract(zoom_log)",
-            "view_A = sample(uv, 2^⌊zoom_log⌋,  φ_A)",
-            "view_B = sample(uv, 2·view_A,  φ_A + 2π/n)",
-            "n ∈ {2, 4, 6}  from |cos∠(G₁,G₂)|",
-        ],
-        notes: "Crystal periodicity + point-group rotation = seamless infinite zoom. Cubic → 4-fold, hex → 6-fold, oblique → 2-fold. w_motif overlays a counter-spiral; w_lattice tunnels the rim; w_band sparkles the centre.",
-    },
-    ModeInfo {
-        idx: 38, name: "NANO PHASE",
-        tagline: "Size-dependent melting of a nanocrystal with twin-plane coexistence.",
-        equations: &[
-            "Tm(R) = Tm_bulk · (1 − 2σ_sl / (ρ L R))",
-            "δ(T)  ∝ smoothstep(Tm − ΔT, Tm, T)   (liquid skin)",
-            "core: |ψ|² = Σᵢ aᵢ cos(Gᵢ·r + φᵢ),  twin: FCC ⇌ BCT",
-            "Debye–Waller:  ⟨I⟩ ∝ exp(−θ² · B_T)",
-        ],
-        notes: "iso_level is T/Tm_bulk — the particle melts from the outside in via a premelted surface shell, and smaller kscale (smaller R) drops Tm so tiny particles liquefy first. field_mix biases the sweeping martensitic twin boundary inside the solid core (austenite vs BCT-strained martensite); w_motif sharpens the habit plane, w_band sets liquid-shell turbulence, w_lattice the atomic-row contrast. Drag with the mouse to reposition the particle; near T → Tm watch the surface wobble (capillary waves) and shed vapour drops.",
-    },
-    ModeInfo {
-        idx: 39, name: "MAGNON",
-        tagline: "Spin-wave dispersion vs. Stoner particle–hole continuum.",
-        equations: &[
-            "ω_FM(q) = √(Δ² + (D q²)²)",
-            "ω_AFM(q) = √(Δ² + (c q)²)",
-            "Stoner: ω±(q) = D_S q² + Δ_ex ± v_F q",
-            "Δ = 0.05 + 0.7·iso_level",
-        ],
-        notes: "iso_level sets the anisotropy gap Δ at q=0; field_mix crossfades FM (small-q quadratic) into AFM (linear); kscale stiffens the dispersion / Fermi velocity. w_motif dials the violet Stoner particle–hole cloud; w_band controls Landau damping (line broadens inside the continuum and above 2Δ where magnon decay opens). color_shift hue-rotates the magnon line; crystal_color tints it.",
-    },
-    ModeInfo {
-        idx: 40, name: "WAVEPKT",
+        idx: 25, name: "WAVEPKT",
         tagline: "Free Gaussian wave packets: spreading, drifting, and interfering.",
         equations: &[
             "ψ(x,t) = (2π(σ₀² + iℏt/2m))^(−½) · exp[ik₀·(x−x₀) − iℏ|k₀|²t/2m]",
@@ -635,7 +625,7 @@ pub const MODES: [ModeInfo; 52] = [
         notes: "field_mix controls mean momentum |k₀| (slow drift → fast streaks); iso_level sets the initial width σ₀ — narrow packets spread visibly within seconds, the textbook minimum-uncertainty quench. color_shift adds a global phase and rotates k₀'s propagation axis; zoom rescales the visible window in ψ-units. Watch the bright Re(ψ)² fringe comb during the head-on collision (period ≈ 14 s) — those stripes are genuine quantum interference, not a texture; hold the mouse to relocate the launch points and throw packets at each other.",
     },
     ModeInfo {
-        idx: 41, name: "DIPOLE",
+        idx: 26, name: "DIPOLE",
         tagline: "Hertzian dipole radiation: near-field loops + far-field wavefronts with retarded phase.",
         equations: &[
             "E_θ ∝ sinθ · ω²/(c²r) · cos(ω(t−r/c))         (far,  1/r)",
@@ -646,7 +636,7 @@ pub const MODES: [ModeInfo; 52] = [
         notes: "field_mix sets the radiation angular frequency ω (controls wavelength on screen). iso_level fades in the near-field 1/r² and 1/r³ terms — at 0 you see clean far-field wavefronts, at 1 the swirling quasi-static loops near the source become visible. Watch the sin²θ donut envelope around r ≈ 2λ and the outgoing spherical phase fronts; the green arrow at origin is the instantaneous dipole moment p(t) = p₀ cos(ωt) ẑ.",
     },
     ModeInfo {
-        idx: 42, name: "KARMAN",
+        idx: 27, name: "KARMAN",
         tagline: "Counter-rotating vortices shed from a bluff body in the Kármán wake regime.",
         equations: &[
             "ω(r,t) = Γ / (π r_c²) · exp(−r² / r_c²)",
@@ -656,7 +646,7 @@ pub const MODES: [ModeInfo; 52] = [
         notes: "iso_level sets Reynolds number (60..300) — higher Re yields tighter cores and faster shedding; field_mix grows the initial vortex core radius (low Re → fat fuzzy vortices). speed acts as freestream U∞ (vortex drift rate downstream), zoom rescales the wake. Watch the staggered ±Γ pattern advect off the cylinder, the boundary-layer rim glow on its leading edge, and the streamline ribbons sweep around each core.",
     },
     ModeInfo {
-        idx: 43, name: "LORENZ",
+        idx: 28, name: "LORENZ",
         tagline: "Lorenz attractor with per-pixel RK4 + Lyapunov coloring.",
         equations: &[
             "ẋ = σ(y − x)",
@@ -666,7 +656,7 @@ pub const MODES: [ModeInfo; 52] = [
         notes: "field_mix sweeps ρ across the Hopf bifurcation (~24.74) — low values give regular spirals, high values give the full butterfly. iso_level controls the RK4 step length (shorter = finer trails, longer = wilder). zoom sets the phase-space window; hold the mouse for a probe spot. Watch the wings: bright regions = high local Lyapunov λ, sensitive to initial conditions; y₀ is perturbed by crystal_field so each loaded crystal stamps its signature onto the chaos.",
     },
     ModeInfo {
-        idx: 44, name: "LENSING",
+        idx: 29, name: "LENSING",
         tagline: "Schwarzschild black hole — shadow, photon ring, Doppler-beamed accretion disk.",
         equations: &[
             "ds² = −(1 − rₛ/r) c² dt² + (1 − rₛ/r)⁻¹ dr² + r² dΩ²",
@@ -676,7 +666,7 @@ pub const MODES: [ModeInfo; 52] = [
         notes: "field_mix raises the camera elevation (0 = edge-on disk, 1 = top-down). iso_level controls disk emissivity, color_shift rotates the disk hue, zoom is the camera FOV. Hold the mouse to orbit — sweep horizontally for azimuth, vertically for elevation. Watch the disk near-side pass in front of the black hole while the secondary image arcs over the top of the photon ring; the photon sphere sits at b = (3√3/2) rₛ.",
     },
     ModeInfo {
-        idx: 45, name: "GRAV WAVE",
+        idx: 30, name: "GRAV WAVE",
         tagline: "Binary-inspiral gravitational waves with interferometer fringes.",
         equations: &[
             "h_+(r,t) = A/r * cos(2(phi - theta) - omega r)",
@@ -687,7 +677,7 @@ pub const MODES: [ModeInfo; 52] = [
         notes: "A compact binary chirps from wide orbit to merger, sending quadrupole strain rings through a distorted test grid. The cross-shaped Michelson arms turn h+/hx into shifting interference fringes. field_mix raises chirp frequency, iso_level increases strain amplitude and ring sharpness, color_shift rotates the polarization basis, and zoom sets the detector window.",
     },
     ModeInfo {
-        idx: 46, name: "LATTICE WALK",
+        idx: 31, name: "LATTICE WALK",
         tagline: "First-person endless flight through the crystal isosurface tunnel.",
         equations: &[
             "pos(t) = (A sin(ω₁t), B cos(ω₂t), v t)   (helix path)",
@@ -697,7 +687,7 @@ pub const MODES: [ModeInfo; 52] = [
         notes: "The camera flies forward through the periodic crystal field, which repeats infinitely — same tunnel geometry, endlessly. iso_level opens/closes the tunnel bore (low = wide corridors, high = tight tubes). field_mix blends between the two field twins for tunnel topology variety. zoom is FOV (higher = telephoto, narrower). Mouse steers the gaze direction while the camera still flies straight.",
     },
     ModeInfo {
-        idx: 47, name: "ELASTIC ANISO",
+        idx: 32, name: "ELASTIC ANISO",
         tagline: "Directional Young's modulus polar surface derived from crystal G-vectors.",
         equations: &[
             "C(n̂) = Σᵢ aᵢ² (n̂·Ĝᵢ)⁴   (4th-rank projection)",
@@ -707,7 +697,7 @@ pub const MODES: [ModeInfo; 52] = [
         notes: "Each loaded crystal produces a distinct anisotropy shape: cubic → near-sphere with cubic-symmetric lobes; hexagonal → prolate/oblate blob. Mouse orbits. field_mix scales the surface amplitude; iso_level highlights the isotropic contour (Zener A = 1 ring). kscale modulates velocity range.",
     },
     ModeInfo {
-        idx: 48, name: "ELASTIC WAVE",
+        idx: 33, name: "ELASTIC WAVE",
         tagline: "Anisotropic acoustic wavefronts from a repeating impulse — qL and qT branches.",
         equations: &[
             "v_L(θ) ∝ √(Σ aᵢ² (n̂·Ĝᵢ)²)",
@@ -717,7 +707,7 @@ pub const MODES: [ModeInfo; 52] = [
         notes: "Warm rings = quasi-longitudinal (qL); cool rings = quasi-transverse (qT, toggled by field_mix). Crystal anisotropy deforms the circular wavefront into a crinkled shape; high |∂v/∂θ| directions produce bright caustic cusps (phonon focusing). The inner inset diagram shows the slowness surface (1/v vs θ). iso_level tints sector directions; kscale stiffens both branches.",
     },
     ModeInfo {
-        idx: 49, name: "STRAIN FIELD",
+        idx: 34, name: "STRAIN FIELD",
         tagline: "Crystal under biaxial strain — deformed lattice + piezoelectric polarization charge.",
         equations: &[
             "ε_xx = ε_yy = ε,  ε_zz = −2ν ε / (1−ν)   (Poisson, ν ≈ 0.28)",
@@ -727,7 +717,7 @@ pub const MODES: [ModeInfo; 52] = [
         notes: "Left panel shows the unstrained reference crystal field; right shows the deformed version. The interface glows with the piezoelectric polarization charge density (div P). Strain cycles sinusoidally unless field_mix is raised to lock it at maximum. iso_level sets the strain amplitude. A gauge bar at the bottom tracks the instantaneous strain.",
     },
     ModeInfo {
-        idx: 50, name: "SPIN DENSITY",
+        idx: 35, name: "SPIN DENSITY",
         tagline: "Real-space element-resolved magnetic moment map across a 2D supercell.",
         equations: &[
             "ρ_s(r) = Σ_i mᵢ · exp(−|r − Rᵢ|² / σ²)",
@@ -736,16 +726,7 @@ pub const MODES: [ModeInfo; 52] = [
         ],
         notes: "Red blobs = spin-up moments; blue = spin-down; dark = nonmagnetic sites. field_mix crossfades between ferromagnetic (all red), antiferromagnetic (checkerboard), and ferrimagnetic (alternating magnitudes). iso_level scales the moment magnitude. Mouse pans the supercell. Sublattice assignment uses the parity of the lattice site index so every loaded crystal has a natural two-sublattice decomposition.",
     },
-    ModeInfo {
-        idx: 51, name: "TAMM/SHOCKLEY",
-        tagline: "Surface state: evanescent wavefunction (left) + A(k∥,ω) Dirac cone (right).",
-        equations: &[
-            "ψ(k∥, z) = C · e^(−z/ξ) · cos(k_⊥ z + φ)",
-            "E(k∥) = ħ v_F |k∥| + E_D   (Dirac cone)",
-            "A(k,ω) = Γ / (π ((ω−E)² + Γ²))",
-        ],
-        notes: "Left panel: real-space cross-section of the evanescent surface state decaying into the crystal bulk (yellow = high density, dark = bulk). Right panel: ARPES-style spectral function A(k∥, ω) — the bright V-shaped line is the topological Dirac cone inside the projected bulk band gap (grey shadow). iso_level controls quasiparticle coherence (line sharpness); field_mix moves the Dirac point energy E_D; kscale sets the Fermi velocity. Green horizontal line = Fermi level; green/blue verticals = Γ point.",
-    },
+
 ];
 
 /// Static array of mode display names, derived from `MODES`. Kept as a `[&str;

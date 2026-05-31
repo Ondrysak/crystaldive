@@ -859,8 +859,8 @@ mod tests {
 
     #[test]
     fn mode_names_count_matches_dispatch() {
-        // Sanity: the mode name table must match the count rendered by the shader.
-        // 47 prior + VASP batch (ELASTIC ANISO, ELASTIC WAVE, STRAIN FIELD, SPIN DENSITY, TAMM/SHOCKLEY) = 52.
-        assert_eq!(MODE_NAMES.len(), 52);
+        // Sanity: the mode name table must match the count rendered by the shader
+        // (dispatch cases 0..35).
+        assert_eq!(MODE_NAMES.len(), 36);
     }
 }

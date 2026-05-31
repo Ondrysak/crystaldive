@@ -1596,13 +1596,20 @@ struct VOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> }
 pub const FEEDBACK_SHADER: &str = r#"
 const TAU: f32 = 6.28318530718;
 
+// Layout MUST match `FieldUniform` / the WGSL `FU` in prelude.wgsl exactly
+// (see field_and_feedback_fu_match_uniform_size test). The feedback pass only
+// reads fb_*/mouse/aspect/crystal_color, but the struct must mirror the whole
+// uploaded buffer or every field after the first mismatch is read at the wrong
+// offset (was the "feedback = blank screen" bug after the mp-bank refactor).
 struct FU {
-    time: f32, kscale: f32, speed: f32, field_mix: f32,
-    iso_level: f32, color_shift: f32, zoom: f32,
-    w_lattice: f32, w_motif: f32, w_band: f32,
-    mode: u32, num_g: u32,
+    mp: array<vec4<f32>, 4>,
+    time: f32,
+    mode: u32,
+    num_g: u32,
+    aspect: f32,
     crystal_color: vec4<f32>,
-    mouse: vec2<f32>, mouse_down: f32, aspect: f32,
+    mouse: vec2<f32>,
+    mouse_down: f32,
     fb_enabled: u32, fb_mirror: u32,
     fb_zoom: f32, fb_offset_x: f32, fb_offset_y: f32,
     fb_rotation: f32, fb_decay: f32, fb_color_shift: f32, fb_inject: f32,
@@ -1879,5 +1886,44 @@ mod blit_tests {
         assert!((srgb_encode(1.0) - 1.0).abs() < 1e-4);
         // Mid-gray reference: linear 0.5 → ~0.7354 sRGB (well-known value).
         assert!((srgb_encode(0.5) - 0.7354).abs() < 1e-3);
+    }
+}
+
+/// Every shader that binds the `FieldUniform` buffer declares its own WGSL `FU`
+/// struct. If any of those drift from the Rust layout, the GPU reads each field
+/// past the first mismatch at the wrong offset — which silently rendered the
+/// feedback pass as a blank screen after the `mp`-bank refactor. These tests
+/// pin all `FU` declarations to `size_of::<FieldUniform>()` with naga (no GPU).
+#[cfg(test)]
+mod uniform_layout_tests {
+    use super::FieldUniform;
+
+    /// Total byte span (incl. trailing padding) of the `struct FU` declared in
+    /// `wgsl`, as computed by naga's WGSL layout rules.
+    fn fu_struct_span(wgsl: &str) -> u32 {
+        let module = naga::front::wgsl::parse_str(wgsl)
+            .unwrap_or_else(|e| panic!("shader failed to parse:\n{}", e.emit_to_string(wgsl)));
+        for (_h, ty) in module.types.iter() {
+            if ty.name.as_deref() == Some("FU") {
+                if let naga::TypeInner::Struct { span, .. } = &ty.inner {
+                    return *span;
+                }
+            }
+        }
+        panic!("no `struct FU` found in shader");
+    }
+
+    #[test]
+    fn field_and_feedback_fu_match_uniform_size() {
+        let want = std::mem::size_of::<FieldUniform>() as u32;
+        assert_eq!(
+            fu_struct_span(crate::modes::FIELD_SHADER), want,
+            "FIELD_SHADER `FU` struct size != size_of::<FieldUniform>()"
+        );
+        assert_eq!(
+            fu_struct_span(super::FEEDBACK_SHADER), want,
+            "FEEDBACK_SHADER `FU` struct size != size_of::<FieldUniform>() — \
+             feedback pass would read fb_* at wrong offsets (blank-screen bug)"
+        );
     }
 }

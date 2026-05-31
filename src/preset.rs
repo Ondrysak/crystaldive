@@ -274,13 +274,13 @@ mod tests {
         // mode_bias: clamp step modes to this single mode (Some) to give a
         // preset a coherent visual identity. None = leave randomizer's choice.
         let bundles: &[(&str, &str, u32, u8, f32, Option<u32>)] = &[
-            ("slow_zen",        "Slow Zen",        0x0A11_CE01, 1, 5.0,  Some(20)),  // BAND SURFACE
+            ("slow_zen",        "Slow Zen",        0x0A11_CE01, 1, 5.0,  Some(14)),  // BAND SURFACE
             ("phase_drift",     "Phase Drift",     0xC0FFEE01, 3, 3.2,  Some(5)),    // PHASE
-            ("quantum_pulse",   "Quantum Pulse",   0xC0FFEE02, 5, 2.0,  Some(8)),    // LINKS
-            ("vortex_garden",   "Vortex Garden",   0xC0FFEE03, 5, 2.4,  Some(36)),   // ABRIKOSOV
+            ("quantum_pulse",   "Quantum Pulse",   0xC0FFEE02, 5, 2.0,  Some(22)),   // VORTEX KNOT
+            ("vortex_garden",   "Vortex Garden",   0xC0FFEE03, 5, 2.4,  Some(24)),   // ABRIKOSOV
             ("crystal_bloom",   "Crystal Bloom",   0xC0FFEE04, 6, 1.8,  Some(0)),    // 3D ISO
-            ("topological_run", "Topological Run", 0xC0FFEE05, 7, 1.4,  Some(28)),   // BERRY
-            ("strobe_lattice",  "Strobe Lattice",  0xC0FFEE06, 8, 0.9,  Some(29)),   // HOFSTADTER
+            ("topological_run", "Topological Run", 0xC0FFEE05, 7, 1.4,  Some(20)),   // BERRY
+            ("strobe_lattice",  "Strobe Lattice",  0xC0FFEE06, 8, 0.9,  Some(16)),   // CDW
             ("total_madness",   "Total Madness",   0xC0FFEE07, 9, 0.7,  None),
         ];
 
