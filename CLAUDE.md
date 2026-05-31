@@ -63,12 +63,16 @@ Each frame the App ticks:
 ## Build / test / render
 
 ```sh
-cargo test --bin crystal-viz                          # full suite (~92 tests)
+cargo test                                            # fast suite (lib+bin), naga-validates the shader, no GPU
+cargo test --bin crystal-viz                          # bin only (~92 tests)
+cargo test --release --test mode_perf -- --ignored    # GPU perf gate: renders every mode, fails >10× median
 cargo run --release                                   # native app
 pwsh scripts/build-web.ps1                            # wasm + single-html bundle
 target/release/crystal-viz --render PRESET.json \
   --out FRAMES_DIR --res 1280x720 --fps 30 --duration 10
 ```
+
+**For anything beyond a trivial change, follow the [`testing` skill](.claude/skills/testing/SKILL.md)** — it explains the three test layers and which to run for what. Key rule: after editing any `mode_*.wgsl`, run `cargo test --lib field_shader_parses_and_validates`. It parses the assembled `FIELD_SHADER` with naga (no GPU) and catches WGSL **reserved-keyword** identifiers (`target`, `patch`, `sample`, …) and type errors that otherwise only surface as a `create_shader_module` crash at app launch — `cargo test` passing is **not** sufficient proof a shader compiles without it.
 
 Deploy (human-approved, never pre-approve):
 ```sh
