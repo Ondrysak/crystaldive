@@ -27,18 +27,42 @@ use winit::platform::web::{EventLoopExtWebSys, WindowAttributesExtWebSys};
 
 // ── field parameters ──────────────────────────────────────────────────────
 
+/// Per-mode parameter bank: 16 generic float slots, reinterpreted per render
+/// mode. Slots 0..8 are the canonical crystal-field generator params (their
+/// indices below mirror the WGSL `MP_*` consts in `prelude.wgsl`); slots 9..15
+/// are free for each mode. The slot count must match `FieldUniform`'s 4×vec4
+/// pack and the WGSL `array<vec4<f32>, 4>`.
+pub const MP_SLOTS:        usize = 16;
+pub const MP_KSCALE:       usize = 0;
+pub const MP_SPEED:        usize = 1;
+pub const MP_FIELD_MIX:    usize = 2;
+pub const MP_ISO_LEVEL:    usize = 3;
+pub const MP_COLOR_SHIFT:  usize = 4;
+pub const MP_ZOOM:         usize = 5;
+pub const MP_W_LATTICE:    usize = 6;
+pub const MP_W_MOTIF:      usize = 7;
+pub const MP_W_BAND:       usize = 8;
+
+/// Default values for the canonical generator slots (0..8); free slots are 0.
+pub fn default_mp() -> [f32; MP_SLOTS] {
+    let mut m = [0.0f32; MP_SLOTS];
+    m[MP_KSCALE]      = 1.4;
+    m[MP_SPEED]       = 0.3;
+    m[MP_FIELD_MIX]   = 0.55;
+    m[MP_ISO_LEVEL]   = 0.5;
+    m[MP_COLOR_SHIFT] = 0.0;
+    m[MP_ZOOM]        = 1.0;
+    m[MP_W_LATTICE]   = 1.0;
+    m[MP_W_MOTIF]     = 0.6;
+    m[MP_W_BAND]      = 0.4;
+    m
+}
+
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct FieldParams {
     pub mode:           u32,
-    pub kscale:         f32,
-    pub speed:          f32,
-    pub field_mix:      f32,
-    pub iso_level:      f32,
-    pub color_shift:    f32,
-    pub zoom:           f32,
-    pub w_lattice:      f32,
-    pub w_motif:        f32,
-    pub w_band:         f32,
+    #[serde(default = "default_mp")]
+    pub mp:             [f32; MP_SLOTS],
     // feedback
     pub fb_enabled:     bool,
     pub fb_mirror:      u32,
@@ -59,9 +83,7 @@ pub struct FieldParams {
 impl Default for FieldParams {
     fn default() -> Self {
         Self {
-            mode: 4, kscale: 1.4, speed: 0.3, field_mix: 0.55,
-            iso_level: 0.5, color_shift: 0.0, zoom: 1.0,
-            w_lattice: 1.0, w_motif: 0.6, w_band: 0.4,
+            mode: 4, mp: default_mp(),
             fb_enabled: false, fb_mirror: 0,
             fb_zoom: 0.98, fb_offset_x: 0.0, fb_offset_y: 0.0,
             fb_rotation: 0.0, fb_decay: 0.85, fb_color_shift: 0.0, fb_inject: 1.0,
@@ -71,7 +93,7 @@ impl Default for FieldParams {
     }
 }
 
-use crystal_viz::modes::{ModeInfo, MODES, MODE_NAMES};
+use crystal_viz::modes::{mode_params, slot_range, ModeArea, ModeInfo, MODES, MODE_NAMES};
 
 // ── LFO ───────────────────────────────────────────────────────────────────
 
@@ -172,20 +194,36 @@ impl LfoEngine {
     }
 }
 
+fn lfo_mp_default() -> [LfoSrc; MP_SLOTS] { [LfoSrc::Off; MP_SLOTS] }
+
+/// Reset the active mode's declared slots to their per-mode default values.
+/// Called on a *manual* mode switch so a freshly-picked mode starts sensible;
+/// sequencer/preset mode changes carry their own `mp` and are not touched.
+fn apply_mode_defaults(fp: &mut FieldParams) {
+    for p in crystal_viz::modes::mode_params(fp.mode) {
+        fp.mp[p.slot] = p.default;
+    }
+}
+
+/// Seed a mode's *free* slots (9..15) with its declared defaults. The preset/
+/// random/tour generators only fill the canonical slots 0..8, so without this a
+/// mode that reads a bespoke free slot (e.g. Lorenz's sigma/rho) would see 0.
+/// Canonical slots are left untouched (the generator owns them).
+fn fill_free_slot_defaults(fp: &mut FieldParams) {
+    for p in crystal_viz::modes::mode_params(fp.mode) {
+        if p.slot >= 9 {
+            fp.mp[p.slot] = p.default;
+        }
+    }
+}
+
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct LfoParams {
     pub a: LfoEngine,
     pub b: LfoEngine,
-    // field params — each target picks LfoSrc::{Off, A, B}
-    pub kscale:         LfoSrc,
-    pub speed:          LfoSrc,
-    pub field_mix:      LfoSrc,
-    pub iso_level:      LfoSrc,
-    pub color_shift:    LfoSrc,
-    pub zoom:           LfoSrc,
-    pub w_lattice:      LfoSrc,
-    pub w_motif:        LfoSrc,
-    pub w_band:         LfoSrc,
+    // per-mode param bank — each slot picks LfoSrc::{Off, A, B}
+    #[serde(default = "lfo_mp_default")]
+    pub mp:             [LfoSrc; MP_SLOTS],
     // feedback params
     pub fb_zoom:        LfoSrc,
     pub fb_decay:       LfoSrc,
@@ -205,9 +243,7 @@ impl Default for LfoParams {
         Self {
             a: LfoEngine { rate: 0.20, depth: 0.30, wave: LfoWave::Sine,     phase: 0.0  },
             b: LfoEngine { rate: 0.07, depth: 0.20, wave: LfoWave::Triangle, phase: 0.25 },
-            kscale: LfoSrc::Off, speed: LfoSrc::Off, field_mix: LfoSrc::Off,
-            iso_level: LfoSrc::Off, color_shift: LfoSrc::Off, zoom: LfoSrc::Off,
-            w_lattice: LfoSrc::Off, w_motif: LfoSrc::Off, w_band: LfoSrc::Off,
+            mp: lfo_mp_default(),
             fb_zoom: LfoSrc::Off, fb_decay: LfoSrc::Off, fb_offset_x: LfoSrc::Off,
             fb_offset_y: LfoSrc::Off, fb_rotation: LfoSrc::Off,
             fb_color_shift: LfoSrc::Off, fb_saturation: LfoSrc::Off,
@@ -258,16 +294,8 @@ impl MicSrc {
 
 #[derive(Clone)]
 pub struct MicParams {
-    // field params
-    pub kscale:         MicSrc,
-    pub speed:          MicSrc,
-    pub field_mix:      MicSrc,
-    pub iso_level:      MicSrc,
-    pub color_shift:    MicSrc,
-    pub zoom:           MicSrc,
-    pub w_lattice:      MicSrc,
-    pub w_motif:        MicSrc,
-    pub w_band:         MicSrc,
+    // per-mode param bank — each slot picks a MicSrc band
+    pub mp:             [MicSrc; MP_SLOTS],
     // feedback params
     pub fb_zoom:        MicSrc,
     pub fb_decay:       MicSrc,
@@ -286,9 +314,7 @@ pub struct MicParams {
 impl Default for MicParams {
     fn default() -> Self {
         Self {
-            kscale: MicSrc::Off, speed: MicSrc::Off, field_mix: MicSrc::Off,
-            iso_level: MicSrc::Off, color_shift: MicSrc::Off, zoom: MicSrc::Off,
-            w_lattice: MicSrc::Off, w_motif: MicSrc::Off, w_band: MicSrc::Off,
+            mp: [MicSrc::Off; MP_SLOTS],
             fb_zoom: MicSrc::Off, fb_decay: MicSrc::Off, fb_offset_x: MicSrc::Off,
             fb_offset_y: MicSrc::Off, fb_rotation: MicSrc::Off, fb_color_shift: MicSrc::Off,
             fb_saturation: MicSrc::Off, fb_brightness: MicSrc::Off,
@@ -461,23 +487,24 @@ impl SeqPlayMode {
 
 fn lerp_fp(a: &FieldParams, b: &FieldParams, t: f32) -> FieldParams {
     let l = |x: f32, y: f32| x + (y - x) * t;
-    let d = b.color_shift - a.color_shift;
+    let d = b.mp[MP_COLOR_SHIFT] - a.mp[MP_COLOR_SHIFT];
     let cs_delta = if d > 0.5 { d - 1.0 } else if d < -0.5 { d + 1.0 } else { d };
     // Discrete fields snap to `b` immediately at t=0 (Digitakt-style trig: when
     // the sequencer advances to step N, that step's mode/mirror/blend is what
     // we see for the whole step duration — no half-step desync against the
     // visual highlight). Continuous fields still glide smoothly across the step.
+    let mut mp = [0.0f32; MP_SLOTS];
+    for i in 0..MP_SLOTS {
+        mp[i] = if i == MP_COLOR_SHIFT {
+            // Hue wraps on the unit circle — interpolate the shortest arc.
+            (a.mp[MP_COLOR_SHIFT] + cs_delta * t).rem_euclid(1.0)
+        } else {
+            l(a.mp[i], b.mp[i])
+        };
+    }
     FieldParams {
         mode:           b.mode,
-        kscale:         l(a.kscale,    b.kscale),
-        speed:          l(a.speed,     b.speed),
-        field_mix:      l(a.field_mix, b.field_mix),
-        iso_level:      l(a.iso_level, b.iso_level),
-        color_shift:    (a.color_shift + cs_delta * t).rem_euclid(1.0),
-        zoom:           l(a.zoom,      b.zoom),
-        w_lattice:      l(a.w_lattice, b.w_lattice),
-        w_motif:        l(a.w_motif,   b.w_motif),
-        w_band:         l(a.w_band,    b.w_band),
+        mp,
         fb_enabled:     b.fb_enabled,
         fb_mirror:      b.fb_mirror,
         fb_zoom:        l(a.fb_zoom,        b.fb_zoom),
@@ -495,13 +522,16 @@ fn lerp_fp(a: &FieldParams, b: &FieldParams, t: f32) -> FieldParams {
     }
 }
 
-// Compact builder used by presets
+// Compact builder used by presets. The 9 positional args map to the canonical
+// generator slots (0..8); free slots (9..15) stay at their defaults.
 fn sp(mode: u32, ks: f32, sp: f32, fm: f32, il: f32, cs: f32, zm: f32, wl: f32, wm: f32, wb: f32) -> SeqStep {
-    SeqStep::new(FieldParams {
-        mode, kscale: ks, speed: sp, field_mix: fm, iso_level: il,
-        color_shift: cs, zoom: zm, w_lattice: wl, w_motif: wm, w_band: wb,
-        ..FieldParams::default()
-    })
+    let mut mp = default_mp();
+    mp[MP_KSCALE] = ks; mp[MP_SPEED] = sp; mp[MP_FIELD_MIX] = fm; mp[MP_ISO_LEVEL] = il;
+    mp[MP_COLOR_SHIFT] = cs; mp[MP_ZOOM] = zm;
+    mp[MP_W_LATTICE] = wl; mp[MP_W_MOTIF] = wm; mp[MP_W_BAND] = wb;
+    let mut fp = FieldParams { mode, mp, ..FieldParams::default() };
+    fill_free_slot_defaults(&mut fp);
+    SeqStep::new(fp)
 }
 
 fn seq_preset_phase_space() -> Vec<SeqStep> { vec![
@@ -541,19 +571,19 @@ fn seq_preset_chromatic() -> Vec<SeqStep> {
     let modes: [u32; 16] = [22, 32, 28, 35, 15, 3, 0, 8, 13, 24, 34, 18, 5, 21, 29, 11];
     modes.iter().enumerate().map(|(i, &mode)| {
         let phi = i as f32 / 16.0;
-        SeqStep::new(FieldParams {
-            mode,
-            kscale:      1.0 + 1.2 * (phi * TAU).sin().abs(),
-            speed:       0.2 + 0.6 * (phi * TAU * 0.7).cos().abs(),
-            field_mix:   0.3 + 0.5 * (phi * TAU * 1.3).sin().abs(),
-            iso_level:   0.3 + 0.4 * (phi * TAU * 0.5).cos().abs(),
-            color_shift: phi,
-            zoom:        0.8 + 0.6 * (phi * TAU * 1.1).sin().abs(),
-            w_lattice:   0.5 + 1.2 * (phi * TAU).cos().abs(),
-            w_motif:     0.3 + 1.0 * (phi * TAU * 1.7).sin().abs(),
-            w_band:      0.4 + 1.2 * (phi * TAU * 0.9).cos().abs(),
-            ..FieldParams::default()
-        })
+        let mut mp = default_mp();
+        mp[MP_KSCALE]      = 1.0 + 1.2 * (phi * TAU).sin().abs();
+        mp[MP_SPEED]       = 0.2 + 0.6 * (phi * TAU * 0.7).cos().abs();
+        mp[MP_FIELD_MIX]   = 0.3 + 0.5 * (phi * TAU * 1.3).sin().abs();
+        mp[MP_ISO_LEVEL]   = 0.3 + 0.4 * (phi * TAU * 0.5).cos().abs();
+        mp[MP_COLOR_SHIFT] = phi;
+        mp[MP_ZOOM]        = 0.8 + 0.6 * (phi * TAU * 1.1).sin().abs();
+        mp[MP_W_LATTICE]   = 0.5 + 1.2 * (phi * TAU).cos().abs();
+        mp[MP_W_MOTIF]     = 0.3 + 1.0 * (phi * TAU * 1.7).sin().abs();
+        mp[MP_W_BAND]      = 0.4 + 1.2 * (phi * TAU * 0.9).cos().abs();
+        let mut fp = FieldParams { mode, mp, ..FieldParams::default() };
+        fill_free_slot_defaults(&mut fp);
+        SeqStep::new(fp)
     }).collect()
 }
 
@@ -737,6 +767,11 @@ impl Sequencer {
         self.steps.push(SeqStep::new(params));
         Some(self.steps.len() - 1)
     }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn total_dur_mul(&self) -> f32 {
+        self.steps.iter().map(|s| s.dur_mul.max(1e-6)).sum::<f32>().max(1e-6)
+    }
 }
 
 fn mode_color(mode: u32) -> egui::Color32 {
@@ -772,17 +807,19 @@ pub fn randomize_fp(seed: f32) -> FieldParams {
         else if mirror_roll < 0.82 { 6 }
         else if mirror_roll < 0.90 { 7 }
         else { 9 };
+    let mut mp = default_mp();
+    mp[MP_KSCALE]      = 0.3 + r(2.0) * 3.5;
+    mp[MP_SPEED]       = r(3.0) * 1.6;
+    mp[MP_FIELD_MIX]   = r(4.0);
+    mp[MP_ISO_LEVEL]   = 0.05 + r(5.0) * 0.9;
+    mp[MP_COLOR_SHIFT] = r(6.0);
+    mp[MP_ZOOM]        = 0.4 + r(7.0) * 1.9;
+    mp[MP_W_LATTICE]   = r(8.0) * 2.0;
+    mp[MP_W_MOTIF]     = r(9.0) * 2.0;
+    mp[MP_W_BAND]      = r(10.0) * 2.0;
     FieldParams {
         mode:           ((r(1.0) * MODE_NAMES.len() as f32) as u32).min(MODE_NAMES.len() as u32 - 1),
-        kscale:         0.3 + r(2.0) * 3.5,
-        speed:          r(3.0) * 1.6,
-        field_mix:      r(4.0),
-        iso_level:      0.05 + r(5.0) * 0.9,
-        color_shift:    r(6.0),
-        zoom:           0.4 + r(7.0) * 1.9,
-        w_lattice:      r(8.0) * 2.0,
-        w_motif:        r(9.0) * 2.0,
-        w_band:         r(10.0) * 2.0,
+        mp,
         fb_enabled:     fb_on,
         fb_mirror,
         fb_zoom:        0.93 + r(13.0) * 0.09,
@@ -846,25 +883,25 @@ pub fn tour_lfo_preset_for_level(level: TripLevel) -> LfoParams {
     };
     let l = level.get();
     if l >= 1 {
-        p.color_shift    = LfoSrc::A;
+        p.mp[MP_COLOR_SHIFT] = LfoSrc::A;
         p.fb_color_shift = LfoSrc::B;
     }
     if l >= 2 {
-        p.field_mix = LfoSrc::A;
+        p.mp[MP_FIELD_MIX] = LfoSrc::A;
         p.fb_zoom   = LfoSrc::B;
     }
     if l >= 3 {
-        p.iso_level     = LfoSrc::A;
+        p.mp[MP_ISO_LEVEL] = LfoSrc::A;
         p.fb_fold_angle = LfoSrc::B;
         p.fb_saturation = LfoSrc::A;
     }
     if l >= 4 {
-        p.kscale      = LfoSrc::A;
-        p.speed       = LfoSrc::A;
-        p.zoom        = LfoSrc::A;
-        p.w_lattice   = LfoSrc::A;
-        p.w_motif     = LfoSrc::A;
-        p.w_band      = LfoSrc::A;
+        p.mp[MP_KSCALE]    = LfoSrc::A;
+        p.mp[MP_SPEED]     = LfoSrc::A;
+        p.mp[MP_ZOOM]      = LfoSrc::A;
+        p.mp[MP_W_LATTICE] = LfoSrc::A;
+        p.mp[MP_W_MOTIF]   = LfoSrc::A;
+        p.mp[MP_W_BAND]    = LfoSrc::A;
         p.fb_rotation = LfoSrc::B;
     }
     if l >= 5 {
@@ -888,12 +925,13 @@ fn tour_lfo_preset() -> LfoParams {
 }
 
 fn tour_lfo_preset_fb_heavy() -> LfoParams {
+    let mut mp = lfo_mp_default();
+    mp[MP_SPEED]       = LfoSrc::A;
+    mp[MP_COLOR_SHIFT] = LfoSrc::A;
     LfoParams {
         a: LfoEngine { rate: 0.07, depth: 0.25, wave: LfoWave::Sine,     phase: 0.0  },
         b: LfoEngine { rate: 0.21, depth: 0.18, wave: LfoWave::Triangle, phase: 0.5  },
-        kscale: LfoSrc::Off, speed: LfoSrc::A, field_mix: LfoSrc::Off, iso_level: LfoSrc::Off,
-        color_shift: LfoSrc::A, zoom: LfoSrc::Off,
-        w_lattice: LfoSrc::Off, w_motif: LfoSrc::Off, w_band: LfoSrc::Off,
+        mp,
         fb_zoom: LfoSrc::A, fb_decay: LfoSrc::B, fb_color_shift: LfoSrc::A,
         fb_saturation: LfoSrc::A, fb_brightness: LfoSrc::B,
         fb_rotation: LfoSrc::A, fb_offset_x: LfoSrc::B, fb_offset_y: LfoSrc::B,
@@ -986,17 +1024,19 @@ fn tour_random_field_params(t: f32, crystal_idx: usize, level: TripLevel) -> Fie
         else if mirror_roll < 0.78 { 6 }
         else if mirror_roll < 0.88 { 7 }
         else { 9 };
+    let mut mp = default_mp();
+    mp[MP_KSCALE]      = (morph(3.0, 0.25, 3.8) + burst * 0.55).clamp(0.1, 5.0);
+    mp[MP_SPEED]       = (morph(4.0, 0.05, 1.75) + burst * 0.25).clamp(0.0, 2.0);
+    mp[MP_FIELD_MIX]   = morph(5.0, 0.0, 1.0).clamp(0.0, 1.0);
+    mp[MP_ISO_LEVEL]   = morph(6.0, 0.05, 0.96).clamp(0.0, 1.0);
+    mp[MP_COLOR_SHIFT] = (morph(7.0, 0.0, 1.0) + t * 0.025).rem_euclid(1.0);
+    mp[MP_ZOOM]        = (morph(8.0, 0.35, 2.15) + burst * 0.25).clamp(0.2, 5.0);
+    mp[MP_W_LATTICE]   = morph(9.0, 0.0, 2.0).clamp(0.0, 2.0);
+    mp[MP_W_MOTIF]     = morph(10.0, 0.0, 2.0).clamp(0.0, 2.0);
+    mp[MP_W_BAND]      = morph(11.0, 0.0, 2.0).clamp(0.0, 2.0);
     FieldParams {
         mode: mode.min((MODE_NAMES.len() - 1) as u32),
-        kscale:      (morph(3.0, 0.25, 3.8) + burst * 0.55).clamp(0.1, 5.0),
-        speed:       (morph(4.0, 0.05, 1.75) + burst * 0.25).clamp(0.0, 2.0),
-        field_mix:   morph(5.0, 0.0, 1.0).clamp(0.0, 1.0),
-        iso_level:   morph(6.0, 0.05, 0.96).clamp(0.0, 1.0),
-        color_shift: (morph(7.0, 0.0, 1.0) + t * 0.025).rem_euclid(1.0),
-        zoom:        (morph(8.0, 0.35, 2.15) + burst * 0.25).clamp(0.2, 5.0),
-        w_lattice:   morph(9.0, 0.0, 2.0).clamp(0.0, 2.0),
-        w_motif:     morph(10.0, 0.0, 2.0).clamp(0.0, 2.0),
-        w_band:      morph(11.0, 0.0, 2.0).clamp(0.0, 2.0),
+        mp,
         fb_enabled:  fb_on,
         fb_mirror,
         fb_zoom:        morph(12.0, 0.93, 1.02),
@@ -1043,17 +1083,19 @@ fn tour_field_params(t: f32, crystal_idx: usize, style: TourStyle, level: TripLe
     // only (no scene rotation), so the user sees a single mode per crystal. As
     // level rises, the scene index folds back in to swap modes every scene_len.
     let mode_scene = if level.get() < 2 { 0 } else { scene };
+    let mut mp = default_mp();
+    mp[MP_KSCALE]      = (1.05 + 0.72 * (TAU * drift).sin().abs() + 0.45 * snap).clamp(0.1, 5.0);
+    mp[MP_SPEED]       = (0.22 + 0.82 * punch + 0.18 * (TAU * (drift * 0.37)).sin().abs()).clamp(0.0, 2.0);
+    mp[MP_FIELD_MIX]   = (0.50 + 0.38 * (TAU * (local + drift * 0.11)).sin()).clamp(0.0, 1.0);
+    mp[MP_ISO_LEVEL]   = (0.42 + 0.36 * (TAU * (local * 0.5 + drift * 0.19)).cos()).clamp(0.0, 1.0);
+    mp[MP_COLOR_SHIFT] = (drift * 0.22 + 0.08 * (TAU * local).sin()).rem_euclid(1.0);
+    mp[MP_ZOOM]        = (0.78 + 0.36 * (TAU * (local * 0.75)).sin().abs() + 0.22 * snap).clamp(0.2, 5.0);
+    mp[MP_W_LATTICE]   = (0.75 + 0.65 * (TAU * (local + 0.10)).sin().abs()).clamp(0.0, 2.0);
+    mp[MP_W_MOTIF]     = (0.38 + 0.92 * (TAU * (local * 0.7 + 0.35)).sin().abs()).clamp(0.0, 2.0);
+    mp[MP_W_BAND]      = (0.48 + 1.05 * (TAU * (local * 1.2 + drift * 0.07)).cos().abs()).clamp(0.0, 2.0);
     FieldParams {
         mode: TOUR_MODES[(mode_scene + crystal_idx) % TOUR_MODES.len()],
-        kscale:      (1.05 + 0.72 * (TAU * drift).sin().abs() + 0.45 * snap).clamp(0.1, 5.0),
-        speed:       (0.22 + 0.82 * punch + 0.18 * (TAU * (drift * 0.37)).sin().abs()).clamp(0.0, 2.0),
-        field_mix:   (0.50 + 0.38 * (TAU * (local + drift * 0.11)).sin()).clamp(0.0, 1.0),
-        iso_level:   (0.42 + 0.36 * (TAU * (local * 0.5 + drift * 0.19)).cos()).clamp(0.0, 1.0),
-        color_shift: (drift * 0.22 + 0.08 * (TAU * local).sin()).rem_euclid(1.0),
-        zoom:        (0.78 + 0.36 * (TAU * (local * 0.75)).sin().abs() + 0.22 * snap).clamp(0.2, 5.0),
-        w_lattice:   (0.75 + 0.65 * (TAU * (local + 0.10)).sin().abs()).clamp(0.0, 2.0),
-        w_motif:     (0.38 + 0.92 * (TAU * (local * 0.7 + 0.35)).sin().abs()).clamp(0.0, 2.0),
-        w_band:      (0.48 + 1.05 * (TAU * (local * 1.2 + drift * 0.07)).cos().abs()).clamp(0.0, 2.0),
+        mp,
         fb_enabled:  fb_on,
         fb_mirror,
         fb_zoom:        (0.96 + 0.04 * (TAU * (local * 0.3 + drift * 0.07)).sin()).clamp(0.90, 1.10),
@@ -1097,17 +1139,17 @@ fn apply_modulation(
             ($val + lfo_d + mic_d).clamp($min as f32, $max as f32)
         }};
     }
+    // Per-mode param bank: each slot's clamp range comes from the active mode's
+    // metadata (so LFO/mic depth scales to that knob's real span); undeclared
+    // slots fall back to a canonical/wide range.
+    let mut mp = [0.0f32; MP_SLOTS];
+    for i in 0..MP_SLOTS {
+        let (lo, hi) = slot_range(fp.mode, i);
+        mp[i] = modulate!(fp.mp[i], lfo.mp[i], mic.mp[i], lo, hi);
+    }
     FieldParams {
         mode:           fp.mode,
-        kscale:         modulate!(fp.kscale,      lfo.kscale,      mic.kscale,      0.1, 5.0),
-        speed:          modulate!(fp.speed,       lfo.speed,       mic.speed,       0.0, 2.0),
-        field_mix:      modulate!(fp.field_mix,   lfo.field_mix,   mic.field_mix,   0.0, 1.0),
-        iso_level:      modulate!(fp.iso_level,   lfo.iso_level,   mic.iso_level,   0.0, 1.0),
-        color_shift:    modulate!(fp.color_shift, lfo.color_shift, mic.color_shift, 0.0, 1.0),
-        zoom:           modulate!(fp.zoom,        lfo.zoom,        mic.zoom,        0.2, 5.0),
-        w_lattice:      modulate!(fp.w_lattice,   lfo.w_lattice,   mic.w_lattice,   0.0, 2.0),
-        w_motif:        modulate!(fp.w_motif,     lfo.w_motif,     mic.w_motif,     0.0, 2.0),
-        w_band:         modulate!(fp.w_band,      lfo.w_band,      mic.w_band,      0.0, 2.0),
+        mp,
         // feedback params — modulated when fb_enabled
         fb_enabled:     fp.fb_enabled,
         fb_mirror:      fp.fb_mirror,
@@ -1236,6 +1278,7 @@ struct UiReq {
     preset_random:        bool,
     preset_show_json:     bool,
     preset_copy_json:     bool,
+    preset_generate_loop: bool,
     preset_apply_json:    Option<String>,
     #[cfg(not(target_arch = "wasm32"))]
     preset_save_path:     Option<String>,
@@ -1278,6 +1321,7 @@ struct App {
     fb_auto:      bool,
     show_keymap:  bool,
     show_mode_info: bool,
+    mode_area: ModeArea,
     // Preset editor modal
     preset_editor_open: bool,
     preset_editor_text: String,
@@ -1319,6 +1363,7 @@ impl App {
             fb_auto: false,
             show_keymap: false,
             show_mode_info: false,
+            mode_area: MODES[FieldParams::default().mode as usize].area(),
             preset_editor_open: false,
             preset_editor_text: String::new(),
             preset_status: String::new(),
@@ -1487,10 +1532,10 @@ impl ApplicationHandler<UserEvent> for App {
                         self.show_keymap = !self.show_keymap;
                     }
                     PhysicalKey::Code(KeyCode::BracketRight) => {
-                        self.field_params.color_shift = (self.field_params.color_shift + 0.05) % 1.0;
+                        self.field_params.mp[MP_COLOR_SHIFT] = (self.field_params.mp[MP_COLOR_SHIFT] + 0.05) % 1.0;
                     }
                     PhysicalKey::Code(KeyCode::BracketLeft) => {
-                        self.field_params.color_shift = (self.field_params.color_shift - 0.05).rem_euclid(1.0);
+                        self.field_params.mp[MP_COLOR_SHIFT] = (self.field_params.mp[MP_COLOR_SHIFT] - 0.05).rem_euclid(1.0);
                     }
                     _ => {}
                 }
@@ -1527,7 +1572,7 @@ impl ApplicationHandler<UserEvent> for App {
                 match render_mode {
                     RenderMode::Atoms => gpu.zoom(d),
                     RenderMode::Field => {
-                        self.field_params.zoom = (self.field_params.zoom + d * 0.15).clamp(0.2, 5.0);
+                        self.field_params.mp[MP_ZOOM] = (self.field_params.mp[MP_ZOOM] + d * 0.15).clamp(0.2, 5.0);
                     }
                 }
             }
@@ -1605,6 +1650,9 @@ impl ApplicationHandler<UserEvent> for App {
                 let cur_fb_auto       = self.fb_auto;
                 let cur_show_keymap   = self.show_keymap;
                 let cur_show_mode_info = self.show_mode_info;
+                let mut cur_mode_area = self.mode_area;
+                #[cfg(not(target_arch = "wasm32"))]
+                let cur_surface_size = gpu.size;
                 let cur_crystal_idx   = self.tour.crystal_idx;
                 let cur_trip_level    = self.trip_level;
                 let tour_fp = if self.tour.active {
@@ -1619,6 +1667,10 @@ impl ApplicationHandler<UserEvent> for App {
                     .map(|fp| fp.mode)
                     .unwrap_or(self.field_params.mode) as usize;
                 let cur_mode_name     = MODE_NAMES[cur_mode_idx];
+                let live_mode_area    = MODES[cur_mode_idx].area();
+                if live_mode_area != cur_mode_area {
+                    cur_mode_area = live_mode_area;
+                }
                 let cur_crystal_name  = self.all_crystals[cur_crystal_idx].name;
                 let cur_sys_name      = self.all_crystals[cur_crystal_idx].system.name();
                 let cur_kpt_label: String = gpu.kpath.as_ref()
@@ -1678,22 +1730,14 @@ impl ApplicationHandler<UserEvent> for App {
                 // freely mutate fp.* without conflicting with the match arm below.
                 let cdef = self.all_crystals[cur_crystal_idx];
                 let field_params_uniform = FieldUniform {
+                    mp:             renderer::pack_mp(&fp_eff.mp),
                     time:           t,
-                    kscale:         fp_eff.kscale,
-                    speed:          fp_eff.speed,
-                    field_mix:      fp_eff.field_mix,
-                    iso_level:      fp_eff.iso_level,
-                    color_shift:    fp_eff.color_shift,
-                    zoom:           fp_eff.zoom,
-                    w_lattice:      fp_eff.w_lattice,
-                    w_motif:        fp_eff.w_motif,
-                    w_band:         fp_eff.w_band,
                     mode:           fp_eff.mode,
                     num_g:          gpu.gpu_field.count as u32,
+                    aspect:         gpu.size.width as f32 / gpu.size.height.max(1) as f32,
                     crystal_color:  [cdef.color[0], cdef.color[1], cdef.color[2], 0.0],
                     mouse:          self.mouse_norm,
                     mouse_down:     if self.mouse_btn_down { 1.0 } else { 0.0 },
-                    aspect:         gpu.size.width as f32 / gpu.size.height.max(1) as f32,
                     fb_enabled:     if fp_eff.fb_enabled { 1 } else { 0 },
                     fb_mirror:      fp_eff.fb_mirror,
                     fb_zoom:        fp_eff.fb_zoom,
@@ -1708,7 +1752,7 @@ impl ApplicationHandler<UserEvent> for App {
                     fb_brightness:  fp_eff.fb_brightness,
                     fb_blend_mode:  fp_eff.fb_blend_mode,
                     fb_motion_blur: fp_eff.fb_motion_blur,
-                    _pad:           [0.0; 2],
+                    _pad:           [0.0; 3],
                 };
 
                 // Snapshot search string
@@ -1832,7 +1876,7 @@ impl ApplicationHandler<UserEvent> for App {
                                 // Defined here in the side-panel scope so sibling CollapsingHeader
                                 // closures (Field, Feedback) can both reach it.
                                 macro_rules! sld {
-                                    ($ui:expr, $label:literal, $val:expr, $eff:expr,
+                                    ($ui:expr, $label:expr, $val:expr, $eff:expr,
                                      $lfo_src:expr, $mic_src:expr, $min:expr, $max:expr) => {
                                         $ui.horizontal(|ui| {
                                             // [~/A/B] LFO source — cycles Off→A→B→Off
@@ -1907,6 +1951,29 @@ impl ApplicationHandler<UserEvent> for App {
                                     .color(egui::Color32::from_rgb(180, 200, 200)))
                                     .id_source("sec_field").default_open(true)
                                     .show(ui, |ui| {
+                                        let mode_before = fp.mode;
+                                        ui.horizontal_wrapped(|ui| {
+                                            for area in ModeArea::ALL {
+                                                let selected = cur_mode_area == area;
+                                                let color = if selected {
+                                                    egui::Color32::from_rgb(255, 220, 120)
+                                                } else {
+                                                    egui::Color32::from_rgb(150, 155, 180)
+                                                };
+                                                if ui.selectable_label(
+                                                    selected,
+                                                    egui::RichText::new(area.label()).small().color(color),
+                                                ).on_hover_text(area.title()).clicked() {
+                                                    cur_mode_area = area;
+                                                    if MODES[fp.mode as usize].area() != area {
+                                                        if let Some(mode) = MODES.iter().find(|m| m.area() == area) {
+                                                            fp.mode = mode.idx as u32;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        });
+                                        ui.add_space(2.0);
                                         // Compact mode picker: ComboBox + arrow buttons
                                         ui.horizontal(|ui| {
                                             ui.label(egui::RichText::new("mode").small().monospace());
@@ -1914,16 +1981,28 @@ impl ApplicationHandler<UserEvent> for App {
                                                 .selected_text(MODE_NAMES[fp.mode as usize])
                                                 .width(160.0)
                                                 .show_ui(ui, |ui| {
-                                                    for (i, name) in MODE_NAMES.iter().enumerate() {
-                                                        ui.selectable_value(&mut fp.mode, i as u32, *name);
+                                                    ui.label(egui::RichText::new(cur_mode_area.title())
+                                                        .small().color(egui::Color32::from_gray(150)));
+                                                    ui.separator();
+                                                    for mode in MODES.iter().filter(|m| m.area() == cur_mode_area) {
+                                                        ui.selectable_value(&mut fp.mode, mode.idx as u32, mode.name);
                                                     }
                                                 });
-                                            if ui.small_button("◀").clicked() {
-                                                let n = MODE_NAMES.len() as u32;
-                                                fp.mode = (fp.mode + n - 1) % n;
+                                            let area_modes: Vec<u32> = MODES.iter()
+                                                .filter(|m| m.area() == cur_mode_area)
+                                                .map(|m| m.idx as u32)
+                                                .collect();
+                                            if ui.small_button("◀").clicked() && !area_modes.is_empty() {
+                                                let pos = area_modes.iter()
+                                                    .position(|&mode| mode == fp.mode)
+                                                    .unwrap_or(0);
+                                                fp.mode = area_modes[(pos + area_modes.len() - 1) % area_modes.len()];
                                             }
-                                            if ui.small_button("▶").clicked() {
-                                                fp.mode = (fp.mode + 1) % MODE_NAMES.len() as u32;
+                                            if ui.small_button("▶").clicked() && !area_modes.is_empty() {
+                                                let pos = area_modes.iter()
+                                                    .position(|&mode| mode == fp.mode)
+                                                    .unwrap_or(0);
+                                                fp.mode = area_modes[(pos + 1) % area_modes.len()];
                                             }
                                             let info_btn = egui::Button::new(
                                                 egui::RichText::new("ⓘ").color(
@@ -1941,16 +2020,20 @@ impl ApplicationHandler<UserEvent> for App {
                                                 req.mode_info_toggle = true;
                                             }
                                         });
+                                        // A manual mode switch loads the new mode's slot defaults.
+                                        if fp.mode != mode_before {
+                                            apply_mode_defaults(&mut fp);
+                                        }
                                         ui.add_space(2.0);
-                                sld!(ui, "kscale   ", &mut fp.kscale,      fp_eff.kscale,      &mut lfo.kscale,      &mut mic.kscale,      0.1_f32, 5.0_f32);
-                                sld!(ui, "speed    ", &mut fp.speed,       fp_eff.speed,       &mut lfo.speed,       &mut mic.speed,       0.0_f32, 2.0_f32);
-                                sld!(ui, "field_mix", &mut fp.field_mix,   fp_eff.field_mix,   &mut lfo.field_mix,   &mut mic.field_mix,   0.0_f32, 1.0_f32);
-                                sld!(ui, "iso_level", &mut fp.iso_level,   fp_eff.iso_level,   &mut lfo.iso_level,   &mut mic.iso_level,   0.0_f32, 1.0_f32);
-                                sld!(ui, "color_sft", &mut fp.color_shift, fp_eff.color_shift, &mut lfo.color_shift, &mut mic.color_shift, 0.0_f32, 1.0_f32);
-                                sld!(ui, "zoom     ", &mut fp.zoom,        fp_eff.zoom,        &mut lfo.zoom,        &mut mic.zoom,        0.2_f32, 5.0_f32);
-                                sld!(ui, "w_lattice", &mut fp.w_lattice,   fp_eff.w_lattice,   &mut lfo.w_lattice,   &mut mic.w_lattice,   0.0_f32, 2.0_f32);
-                                sld!(ui, "w_motif  ", &mut fp.w_motif,     fp_eff.w_motif,     &mut lfo.w_motif,     &mut mic.w_motif,     0.0_f32, 2.0_f32);
-                                sld!(ui, "w_band   ", &mut fp.w_band,      fp_eff.w_band,      &mut lfo.w_band,      &mut mic.w_band,      0.0_f32, 2.0_f32);
+                                // Per-mode tailored sliders: one named slider per slot the
+                                // active mode declares (see modes::mode_params).
+                                for p in mode_params(fp.mode) {
+                                    let s = p.slot;
+                                    sld!(ui, format!("{:<9}", p.name),
+                                        &mut fp.mp[s], fp_eff.mp[s],
+                                        &mut lfo.mp[s], &mut mic.mp[s],
+                                        p.min, p.max);
+                                }
                                     }); // end Field collapsible
 
                                 // ── FEEDBACK / SELF-SIMILARITY ────────────────────────────
@@ -2005,9 +2088,8 @@ impl ApplicationHandler<UserEvent> for App {
                                     .show(ui, |ui| {
                                         // Compact two-column LFO row.
                                         // Each column shows: wave button, rate / depth / phase sliders.
-                                        let lfo_col = |ui: &mut egui::Ui, name: &str, color: egui::Color32, eng: &mut LfoEngine| {
+                                        let lfo_row = |ui: &mut egui::Ui, name: &str, color: egui::Color32, eng: &mut LfoEngine| {
                                             ui.vertical(|ui| {
-                                                ui.set_min_width(130.0);
                                                 ui.horizontal(|ui| {
                                                     ui.label(egui::RichText::new(name).strong().color(color));
                                                     if ui.small_button(eng.wave.label()).clicked() {
@@ -2016,24 +2098,31 @@ impl ApplicationHandler<UserEvent> for App {
                                                 });
                                                 ui.horizontal(|ui| {
                                                     ui.label(egui::RichText::new("r").small().monospace());
-                                                    ui.add(egui::Slider::new(&mut eng.rate, 0.01..=4.0)
-                                                        .show_value(true).suffix(" Hz"));
+                                                    ui.add_sized(
+                                                        [ui.available_width(), 18.0],
+                                                        egui::Slider::new(&mut eng.rate, 0.01..=4.0)
+                                                            .show_value(true).suffix(" Hz"),
+                                                    );
                                                 });
                                                 ui.horizontal(|ui| {
                                                     ui.label(egui::RichText::new("d").small().monospace());
-                                                    ui.add(egui::Slider::new(&mut eng.depth, 0.0..=1.0).show_value(false));
+                                                    ui.add_sized(
+                                                        [ui.available_width(), 18.0],
+                                                        egui::Slider::new(&mut eng.depth, 0.0..=1.0).show_value(false),
+                                                    );
                                                 });
                                                 ui.horizontal(|ui| {
                                                     ui.label(egui::RichText::new("φ").small().monospace());
-                                                    ui.add(egui::Slider::new(&mut eng.phase, 0.0..=1.0).show_value(false));
+                                                    ui.add_sized(
+                                                        [ui.available_width(), 18.0],
+                                                        egui::Slider::new(&mut eng.phase, 0.0..=1.0).show_value(false),
+                                                    );
                                                 });
                                             });
                                         };
-                                        ui.horizontal(|ui| {
-                                            lfo_col(ui, "LFO A", egui::Color32::from_rgb(80, 220, 120), &mut lfo.a);
-                                            ui.separator();
-                                            lfo_col(ui, "LFO B", egui::Color32::from_rgb(120, 180, 255), &mut lfo.b);
-                                        });
+                                        lfo_row(ui, "LFO A", egui::Color32::from_rgb(80, 220, 120), &mut lfo.a);
+                                        ui.add_space(4.0);
+                                        lfo_row(ui, "LFO B", egui::Color32::from_rgb(120, 180, 255), &mut lfo.b);
 
                                         ui.add_space(4.0);
 
@@ -2167,23 +2256,22 @@ impl ApplicationHandler<UserEvent> for App {
                                                 });
                                             }
                                         }
-                                        // Two columns to keep the editor short.
+                                        // Two columns of this step's mode-tailored params.
+                                        let eparams = mode_params(ep.mode);
+                                        let half = eparams.len().div_ceil(2);
                                         ui.horizontal(|ui| {
                                             ui.vertical(|ui| {
                                                 ui.set_min_width(220.0);
-                                                esl!(ui, "kscale   ", &mut ep.kscale,      0.1_f32, 5.0_f32);
-                                                esl!(ui, "speed    ", &mut ep.speed,       0.0_f32, 2.0_f32);
-                                                esl!(ui, "field_mix", &mut ep.field_mix,   0.0_f32, 1.0_f32);
-                                                esl!(ui, "iso_level", &mut ep.iso_level,   0.0_f32, 1.0_f32);
-                                                esl!(ui, "color_sft", &mut ep.color_shift, 0.0_f32, 1.0_f32);
+                                                for p in &eparams[..half] {
+                                                    esl!(ui, format!("{:<9}", p.name), &mut ep.mp[p.slot], p.min, p.max);
+                                                }
                                             });
                                             ui.separator();
                                             ui.vertical(|ui| {
                                                 ui.set_min_width(220.0);
-                                                esl!(ui, "zoom     ", &mut ep.zoom,        0.2_f32, 5.0_f32);
-                                                esl!(ui, "w_lattice", &mut ep.w_lattice,   0.0_f32, 2.0_f32);
-                                                esl!(ui, "w_motif  ", &mut ep.w_motif,     0.0_f32, 2.0_f32);
-                                                esl!(ui, "w_band   ", &mut ep.w_band,      0.0_f32, 2.0_f32);
+                                                for p in &eparams[half..] {
+                                                    esl!(ui, format!("{:<9}", p.name), &mut ep.mp[p.slot], p.min, p.max);
+                                                }
                                             });
                                         });
 
@@ -2300,6 +2388,12 @@ impl ApplicationHandler<UserEvent> for App {
                                 if ui.small_button("{ } JSON")
                                     .on_hover_text("Open the preset JSON editor").clicked() {
                                     req.preset_show_json = true;
+                                }
+                                if ui.add(egui::Button::new(
+                                    egui::RichText::new("LOOP")
+                                        .color(egui::Color32::from_rgb(140, 220, 255))
+                                )).on_hover_text("Render a seamless ping-pong loop from the current preset").clicked() {
+                                    req.preset_generate_loop = true;
                                 }
                             });
 
@@ -2586,6 +2680,7 @@ impl ApplicationHandler<UserEvent> for App {
                 self.lfo                = lfo;
                 self.mic_params         = mic;
                 self.search_str         = search;
+                self.mode_area          = cur_mode_area;
                 self.preset_editor_text = preset_editor_text;
                 #[cfg(not(target_arch = "wasm32"))]
                 { self.preset_path_input = preset_path_input; }
@@ -2755,6 +2850,23 @@ impl ApplicationHandler<UserEvent> for App {
                     self.preset_status = "Preset JSON ready in the editor — Ctrl-C to copy".to_string();
                     self.preset_editor_open = true;
                 }
+                if req.preset_generate_loop {
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        self.preset_status = "Loop rendering needs the desktop/local binary so it can write PNG frames.".to_string();
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        match spawn_loop_render(&self.sequencer, &self.lfo, self.trip_level, cur_surface_size.width, cur_surface_size.height) {
+                            Ok(path) => {
+                                self.preset_status = format!("Loop render started: {}", path.display());
+                            }
+                            Err(e) => {
+                                self.preset_status = format!("Loop render failed: {e}");
+                            }
+                        }
+                    }
+                }
                 if let Some(json) = req.preset_apply_json {
                     match preset::Preset::from_json(&json) {
                         Ok(p) => {
@@ -2878,6 +2990,52 @@ fn chrono_stamp() -> String {
     format!("{secs}")
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn spawn_loop_render(
+    seq: &Sequencer,
+    lfo: &LfoParams,
+    level: TripLevel,
+    width: u32,
+    height: u32,
+) -> Result<std::path::PathBuf, String> {
+    let stamp = chrono_stamp();
+    let root = std::path::PathBuf::from("loops").join(format!("loop-{stamp}"));
+    let frames = root.join("frames");
+    std::fs::create_dir_all(&frames)
+        .map_err(|e| format!("create {}: {e}", frames.display()))?;
+
+    let full_duration = 8.0_f32;
+    let half_duration = full_duration * 0.5;
+    let mut p = preset::Preset::from_state("current-loop", seq, lfo, level);
+    p.play_mode = SeqPlayMode::Forward;
+    p.step_dur = half_duration / seq.total_dur_mul();
+    for step in &mut p.steps {
+        step.muted = false;
+        step.prob = 1.0;
+    }
+
+    let preset_path = root.join("current-loop.preset.json");
+    std::fs::write(&preset_path, p.to_pretty_json())
+        .map_err(|e| format!("write {}: {e}", preset_path.display()))?;
+
+    let exe = std::env::current_exe().map_err(|e| format!("current exe: {e}"))?;
+    let even = |v: u32, min: u32| (v.max(min) & !1).max(min);
+    let res = format!("{}x{}", even(width, 320), even(height, 180));
+    let child = std::process::Command::new(exe)
+        .arg("--render").arg(&preset_path)
+        .arg("--out").arg(&frames)
+        .arg("--res").arg(res)
+        .arg("--fps").arg("60")
+        .arg("--duration").arg(format!("{full_duration:.3}"))
+        .arg("--pingpong-loop")
+        .arg("--encode")
+        .spawn()
+        .map_err(|e| format!("spawn renderer: {e}"))?;
+
+    log::info!("Started loop renderer pid {} -> {}", child.id(), frames.display());
+    Ok(root)
+}
+
 fn default_crystal() -> Crystal {
     all_crystals()[0].to_crystal()
 }
@@ -2956,6 +3114,8 @@ fn run_render_cli(args: &[String]) -> Result<(), String> {
         .map_err(|e| format!("--bpm not a number: {e}"))?;
     let bars = flag(args, "--bars").map(|s| s.parse::<f32>()).transpose()
         .map_err(|e| format!("--bars not a number: {e}"))?;
+    let pingpong_loop = args.iter().any(|a| a == "--pingpong-loop");
+    let encode = args.iter().any(|a| a == "--encode");
     // --bpm + --bars together override --duration and trigger loop-snap.
     let duration: f32 = match (bpm, bars) {
         (Some(b), Some(n)) if b > 0.0 && n > 0.0 => n * 4.0 * 60.0 / b,
@@ -2963,6 +3123,13 @@ fn run_render_cli(args: &[String]) -> Result<(), String> {
                 .parse().map_err(|e| format!("--duration not a number: {e}"))?,
     };
     let loop_snap = bpm.is_some() && bars.is_some();
+    let final_frames = (duration * fps as f32).round().max(2.0) as u32;
+    let render_duration = if pingpong_loop {
+        let forward_frames = final_frames / 2 + 1;
+        forward_frames as f32 / fps as f32
+    } else {
+        duration
+    };
 
     let (width, height): (u32, u32) = res.split_once('x')
         .and_then(|(w, h)| Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?)))
@@ -3037,10 +3204,103 @@ fn run_render_cli(args: &[String]) -> Result<(), String> {
     };
 
     let opts = bench::ClipOpts {
-        width, height, fps, duration, start,
+        width, height, fps, duration: render_duration, start,
         out_dir: std::path::PathBuf::from(out_dir),
     };
-    bench::render_clip(opts, &crystal, eval)
+    let out_path = opts.out_dir.clone();
+    bench::render_clip(opts, &crystal, eval)?;
+    if pingpong_loop {
+        mirror_pingpong_frames(&out_path, final_frames)?;
+        eprintln!(
+            "Ping-pong loop completed: {} frames. The final frame mirrors back to frame_000000 for a clean loop.",
+            final_frames,
+        );
+    }
+    if encode {
+        encode_frame_sequence(&out_path, fps)?;
+    }
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn mirror_pingpong_frames(out_dir: &std::path::Path, final_frames: u32) -> Result<(), String> {
+    let forward_frames = final_frames / 2 + 1;
+    if forward_frames < 2 {
+        return Err("ping-pong loop needs at least two forward frames".to_string());
+    }
+    for dst in forward_frames..final_frames {
+        let mirror_offset = dst - forward_frames + 1;
+        let src = forward_frames.saturating_sub(1 + mirror_offset);
+        let src_path = out_dir.join(format!("frame_{src:06}.png"));
+        let dst_path = out_dir.join(format!("frame_{dst:06}.png"));
+        std::fs::copy(&src_path, &dst_path)
+            .map_err(|e| format!("mirror {} -> {}: {e}", src_path.display(), dst_path.display()))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn encode_frame_sequence(out_dir: &std::path::Path, fps: u32) -> Result<(), String> {
+    let output = out_dir.parent()
+        .unwrap_or(out_dir)
+        .join("loop.mp4");
+    let input = out_dir.join("frame_%06d.png");
+    let status = std::process::Command::new("ffmpeg")
+        .arg("-y")
+        .arg("-loglevel").arg("error")
+        .arg("-framerate").arg(fps.to_string())
+        .arg("-i").arg(&input)
+        .arg("-c:v").arg("libx264")
+        .arg("-vf").arg("scale=trunc(iw/2)*2:trunc(ih/2)*2")
+        .arg("-pix_fmt").arg("yuv420p")
+        .arg("-crf").arg("18")
+        .arg("-preset").arg("slow")
+        .arg("-movflags").arg("+faststart")
+        .arg(&output)
+        .status();
+
+    match status {
+        Ok(s) if s.success() => {
+            eprintln!("Encoded loop video: {}", output.display());
+            write_loop_preview(&output)?;
+            Ok(())
+        }
+        Ok(s) => {
+            eprintln!("ffmpeg exited with status {s}; PNG frames remain at {}", out_dir.display());
+            Ok(())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("ffmpeg not found; PNG frames remain at {}", out_dir.display());
+            Ok(())
+        }
+        Err(e) => Err(format!("ffmpeg: {e}")),
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn write_loop_preview(video_path: &std::path::Path) -> Result<(), String> {
+    let dir = video_path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let file = video_path.file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| format!("bad video path: {}", video_path.display()))?;
+    let html = format!(
+        r#"<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>CrystalDive Loop Preview</title>
+<style>
+  html, body {{ margin: 0; height: 100%; background: #05050a; }}
+  body {{ display: grid; place-items: center; }}
+  video {{ max-width: 100vw; max-height: 100vh; background: #000; }}
+</style>
+<video src="{file}" autoplay loop muted controls playsinline></video>
+"#
+    );
+    let preview = dir.join("loop-preview.html");
+    std::fs::write(&preview, html)
+        .map_err(|e| format!("write {}: {e}", preview.display()))?;
+    eprintln!("Loop preview page: {}", preview.display());
+    Ok(())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -3052,13 +3312,12 @@ fn crystal_color(_c: &Crystal) -> [f32; 4] {
 #[cfg(not(target_arch = "wasm32"))]
 fn field_params_to_uniform(fp: &FieldParams, t: f32, aspect: f32, crystal_color: &[f32; 4]) -> FieldUniform {
     FieldUniform {
-        time: t, kscale: fp.kscale, speed: fp.speed,
-        field_mix: fp.field_mix, iso_level: fp.iso_level,
-        color_shift: fp.color_shift, zoom: fp.zoom,
-        w_lattice: fp.w_lattice, w_motif: fp.w_motif, w_band: fp.w_band,
+        mp: renderer::pack_mp(&fp.mp),
+        time: t,
         mode: fp.mode, num_g: 0,        // num_g is populated by GpuField at upload — keep 0 here; the shader uses textureLoad with bounds-check loops
+        aspect,
         crystal_color: *crystal_color,
-        mouse: [0.5, 0.5], mouse_down: 0.0, aspect,
+        mouse: [0.5, 0.5], mouse_down: 0.0,
         fb_enabled: 0, fb_mirror: 0,
         fb_zoom: fp.fb_zoom, fb_offset_x: fp.fb_offset_x, fb_offset_y: fp.fb_offset_y,
         fb_rotation: fp.fb_rotation, fb_decay: fp.fb_decay,
@@ -3066,7 +3325,7 @@ fn field_params_to_uniform(fp: &FieldParams, t: f32, aspect: f32, crystal_color:
         fb_fold_angle: fp.fb_fold_angle, fb_saturation: fp.fb_saturation,
         fb_brightness: fp.fb_brightness, fb_blend_mode: fp.fb_blend_mode,
         fb_motion_blur: fp.fb_motion_blur,
-        _pad: [0.0; 2],
+        _pad: [0.0; 3],
     }
 }
 
@@ -3092,17 +3351,11 @@ mod seq_tests {
     use super::*;
 
     fn make_seq(n: usize) -> Sequencer {
-        let steps = (0..n).map(|i| SeqStep::new(FieldParams {
-            mode: i as u32 % MODE_NAMES.len() as u32,
-            kscale: 1.0 + i as f32 * 0.1,
-            speed: 0.5,
-            field_mix: i as f32 / n as f32,
-            iso_level: 0.5,
-            color_shift: i as f32 / n as f32,
-            zoom: 1.0,
-            w_lattice: 1.0, w_motif: 0.5, w_band: 0.5,
-            ..FieldParams::default()
-        })).collect::<Vec<_>>();
+        let steps = (0..n).map(|i| sp(
+            i as u32 % MODE_NAMES.len() as u32,
+            1.0 + i as f32 * 0.1, 0.5, i as f32 / n as f32, 0.5,
+            i as f32 / n as f32, 1.0, 1.0, 0.5, 0.5,
+        )).collect::<Vec<_>>();
         let from_params = steps[0].params.clone();
         Sequencer {
             active: true, manual: true,
@@ -3208,7 +3461,7 @@ mod seq_tests {
         // After manual_step: from=steps[0], cur=1, timer=0 → lerp at t=0 = from
         seq.manual_step(1);
         let p = seq.current_params();
-        assert!((p.kscale - seq.from_params.kscale).abs() < 1e-5,
+        assert!((p.mp[crate::MP_KSCALE] - seq.from_params.mp[crate::MP_KSCALE]).abs() < 1e-5,
             "at t=0 current_params should equal from_params");
     }
 
@@ -3254,7 +3507,7 @@ mod seq_tests {
         seq.step_timer = seq.step_dur; // t=1
         let p = seq.current_params();
         let target = &seq.steps[seq.cur].params;
-        assert!((p.kscale - target.kscale).abs() < 1e-5,
+        assert!((p.mp[crate::MP_KSCALE] - target.mp[crate::MP_KSCALE]).abs() < 1e-5,
             "at t=1 current_params should equal target step params");
     }
 
@@ -3369,7 +3622,7 @@ mod seq_tests {
         seq.step_timer = seq.step_dur * 0.5;
         let p = seq.current_params();
         // SNAP returns from until t >= 1.0
-        assert!((p.kscale - seq.from_params.kscale).abs() < 1e-5,
+        assert!((p.mp[crate::MP_KSCALE] - seq.from_params.mp[crate::MP_KSCALE]).abs() < 1e-5,
             "snap override at t=0.5 should output from_params");
     }
 
@@ -3380,8 +3633,8 @@ mod seq_tests {
         seq.manual_step(1);
         seq.step_timer = seq.step_dur * 0.5;
         let p = seq.current_params();
-        let expected = (seq.from_params.kscale + seq.steps[seq.cur].params.kscale) * 0.5;
-        assert!((p.kscale - expected).abs() < 1e-5,
+        let expected = (seq.from_params.mp[crate::MP_KSCALE] + seq.steps[seq.cur].params.mp[crate::MP_KSCALE]) * 0.5;
+        assert!((p.mp[crate::MP_KSCALE] - expected).abs() < 1e-5,
             "linear at t=0.5 should be exact midpoint");
     }
 
@@ -3507,11 +3760,11 @@ mod seq_tests {
     fn capture_appends_step() {
         let mut seq = make_seq(3);
         let mut p = FieldParams::default();
-        p.kscale = 7.7;
+        p.mp[crate::MP_KSCALE] = 7.7;
         let idx = seq.capture(p).expect("capture should fit");
         assert_eq!(idx, 3);
         assert_eq!(seq.steps.len(), 4);
-        assert!((seq.steps[3].params.kscale - 7.7).abs() < 1e-5);
+        assert!((seq.steps[3].params.mp[crate::MP_KSCALE] - 7.7).abs() < 1e-5);
         // captured step defaults: not muted, dur_mul=1, prob=1
         assert_eq!(seq.steps[3].muted, false);
         assert!((seq.steps[3].dur_mul - 1.0).abs() < 1e-5);
@@ -3588,10 +3841,9 @@ mod routing_tests {
         let mic = MicParams::default();
         let bands = audio::AudioBands::default();
         // Crank everything: route all targets to LFO A, huge depth, square wave (±1).
+        lfo.mp = [LfoSrc::A; MP_SLOTS];
         for src in [
-            &mut lfo.kscale, &mut lfo.speed, &mut lfo.field_mix, &mut lfo.iso_level,
-            &mut lfo.color_shift, &mut lfo.zoom, &mut lfo.w_lattice, &mut lfo.w_motif,
-            &mut lfo.w_band, &mut lfo.fb_zoom, &mut lfo.fb_decay, &mut lfo.fb_offset_x,
+            &mut lfo.fb_zoom, &mut lfo.fb_decay, &mut lfo.fb_offset_x,
             &mut lfo.fb_offset_y, &mut lfo.fb_rotation, &mut lfo.fb_color_shift,
             &mut lfo.fb_saturation, &mut lfo.fb_brightness, &mut lfo.fb_inject,
             &mut lfo.fb_fold_angle, &mut lfo.fb_motion_blur,
@@ -3610,15 +3862,15 @@ mod routing_tests {
             assert!(v >= lo - 1e-4 && v <= hi + 1e-4, "{label}={v} outside [{lo},{hi}]");
         };
         for eff in [&eff_pos, &eff_neg] {
-            check("kscale", eff.kscale, 0.1, 5.0);
-            check("speed", eff.speed, 0.0, 2.0);
-            check("field_mix", eff.field_mix, 0.0, 1.0);
-            check("iso_level", eff.iso_level, 0.0, 1.0);
-            check("color_shift", eff.color_shift, 0.0, 1.0);
-            check("zoom", eff.zoom, 0.2, 5.0);
-            check("w_lattice", eff.w_lattice, 0.0, 2.0);
-            check("w_motif",   eff.w_motif,   0.0, 2.0);
-            check("w_band",    eff.w_band,    0.0, 2.0);
+            check("kscale", eff.mp[crate::MP_KSCALE], 0.1, 5.0);
+            check("speed", eff.mp[crate::MP_SPEED], 0.0, 2.0);
+            check("field_mix", eff.mp[crate::MP_FIELD_MIX], 0.0, 1.0);
+            check("iso_level", eff.mp[crate::MP_ISO_LEVEL], 0.0, 1.0);
+            check("color_shift", eff.mp[crate::MP_COLOR_SHIFT], 0.0, 1.0);
+            check("zoom", eff.mp[crate::MP_ZOOM], 0.2, 5.0);
+            check("w_lattice", eff.mp[crate::MP_W_LATTICE], 0.0, 2.0);
+            check("w_motif",   eff.mp[crate::MP_W_MOTIF],   0.0, 2.0);
+            check("w_band",    eff.mp[crate::MP_W_BAND],    0.0, 2.0);
             check("fb_zoom",        eff.fb_zoom,        0.90, 1.10);
             check("fb_decay",       eff.fb_decay,       0.30, 0.99);
             check("fb_offset_x",    eff.fb_offset_x,   -0.10, 0.10);
@@ -3636,26 +3888,27 @@ mod routing_tests {
     // apply_modulation with all-off LFO and Off mic must pass fp through unchanged.
     #[test]
     fn apply_modulation_passes_through_when_off() {
-        let fp = FieldParams {
-            kscale: 1.7, speed: 0.42, field_mix: 0.6,
-            iso_level: 0.31, color_shift: 0.77,
-            ..FieldParams::default()
-        };
+        let mut fp = FieldParams::default();
+        fp.mp[crate::MP_KSCALE]      = 1.7;
+        fp.mp[crate::MP_SPEED]       = 0.42;
+        fp.mp[crate::MP_FIELD_MIX]   = 0.6;
+        fp.mp[crate::MP_ISO_LEVEL]   = 0.31;
+        fp.mp[crate::MP_COLOR_SHIFT] = 0.77;
         let lfo = LfoParams::default();
         let mic = MicParams::default();
         let bands = audio::AudioBands::default();
         let eff = apply_modulation(&fp, &lfo, &mic, &bands, 1.23);
-        assert!(approx_eq(eff.kscale, fp.kscale, 1e-5));
-        assert!(approx_eq(eff.speed,  fp.speed,  1e-5));
-        assert!(approx_eq(eff.field_mix, fp.field_mix, 1e-5));
-        assert!(approx_eq(eff.color_shift, fp.color_shift, 1e-5));
+        assert!(approx_eq(eff.mp[crate::MP_KSCALE], fp.mp[crate::MP_KSCALE], 1e-5));
+        assert!(approx_eq(eff.mp[crate::MP_SPEED],  fp.mp[crate::MP_SPEED],  1e-5));
+        assert!(approx_eq(eff.mp[crate::MP_FIELD_MIX], fp.mp[crate::MP_FIELD_MIX], 1e-5));
+        assert!(approx_eq(eff.mp[crate::MP_COLOR_SHIFT], fp.mp[crate::MP_COLOR_SHIFT], 1e-5));
     }
 
     // lerp_fp must wrap color_shift via the *short* arc (hue is circular).
     #[test]
     fn lerp_fp_color_shift_takes_short_arc_forward() {
-        let mut a = FieldParams::default(); a.color_shift = 0.9;
-        let mut b = FieldParams::default(); b.color_shift = 0.1;
+        let mut a = FieldParams::default(); a.mp[crate::MP_COLOR_SHIFT] = 0.9;
+        let mut b = FieldParams::default(); b.mp[crate::MP_COLOR_SHIFT] = 0.1;
         // Short path: 0.9 → 1.0/0.0 → 0.1 (forward through hue wheel).
         // At t=0.25 the unwrapped delta is (b - a) - 1.0 = -0.8, so
         // result = 0.9 + 0.25*(-0.8 + 1.0) = 0.9 + 0.05 = 0.95... wait the implementation
@@ -3666,31 +3919,31 @@ mod routing_tests {
         // And at t=0.75: 0.9 + 0.2*0.75 = 1.05 → rem_euclid → 0.05.
         let r25 = lerp_fp(&a, &b, 0.25);
         let r75 = lerp_fp(&a, &b, 0.75);
-        assert!(approx_eq(r25.color_shift, 0.95, 1e-4),
-            "forward wrap @t=0.25 should be ~0.95, got {}", r25.color_shift);
-        assert!(approx_eq(r75.color_shift, 0.05, 1e-4),
-            "forward wrap @t=0.75 should be ~0.05, got {}", r75.color_shift);
+        assert!(approx_eq(r25.mp[crate::MP_COLOR_SHIFT], 0.95, 1e-4),
+            "forward wrap @t=0.25 should be ~0.95, got {}", r25.mp[crate::MP_COLOR_SHIFT]);
+        assert!(approx_eq(r75.mp[crate::MP_COLOR_SHIFT], 0.05, 1e-4),
+            "forward wrap @t=0.75 should be ~0.05, got {}", r75.mp[crate::MP_COLOR_SHIFT]);
     }
 
     #[test]
     fn lerp_fp_color_shift_no_wrap_for_short_delta() {
-        let mut a = FieldParams::default(); a.color_shift = 0.2;
-        let mut b = FieldParams::default(); b.color_shift = 0.4;
+        let mut a = FieldParams::default(); a.mp[crate::MP_COLOR_SHIFT] = 0.2;
+        let mut b = FieldParams::default(); b.mp[crate::MP_COLOR_SHIFT] = 0.4;
         let r = lerp_fp(&a, &b, 0.5);
         // Plain linear mid: 0.3
-        assert!(approx_eq(r.color_shift, 0.3, 1e-5));
+        assert!(approx_eq(r.mp[crate::MP_COLOR_SHIFT], 0.3, 1e-5));
     }
 
     #[test]
     fn lerp_fp_endpoints() {
-        let mut a = FieldParams::default(); a.kscale = 1.0; a.zoom = 0.5;
-        let mut b = FieldParams::default(); b.kscale = 5.0; b.zoom = 2.0;
+        let mut a = FieldParams::default(); a.mp[crate::MP_KSCALE] = 1.0; a.mp[crate::MP_ZOOM] = 0.5;
+        let mut b = FieldParams::default(); b.mp[crate::MP_KSCALE] = 5.0; b.mp[crate::MP_ZOOM] = 2.0;
         let r0 = lerp_fp(&a, &b, 0.0);
         let r1 = lerp_fp(&a, &b, 1.0);
-        assert!(approx_eq(r0.kscale, 1.0, 1e-5));
-        assert!(approx_eq(r0.zoom,   0.5, 1e-5));
-        assert!(approx_eq(r1.kscale, 5.0, 1e-5));
-        assert!(approx_eq(r1.zoom,   2.0, 1e-5));
+        assert!(approx_eq(r0.mp[crate::MP_KSCALE], 1.0, 1e-5));
+        assert!(approx_eq(r0.mp[crate::MP_ZOOM],   0.5, 1e-5));
+        assert!(approx_eq(r1.mp[crate::MP_KSCALE], 5.0, 1e-5));
+        assert!(approx_eq(r1.mp[crate::MP_ZOOM],   2.0, 1e-5));
     }
 
     #[test]
@@ -3715,25 +3968,19 @@ mod routing_tests {
     // fb_auto_params must override every fb_* field of base, and only those.
     #[test]
     fn fb_auto_overrides_only_fb_fields() {
-        let base = FieldParams {
-            mode: 5, kscale: 2.5, speed: 0.7, field_mix: 0.6,
-            iso_level: 0.4, color_shift: 0.3, zoom: 1.5,
-            w_lattice: 1.7, w_motif: 0.9, w_band: 0.6,
-            fb_enabled: false, fb_mirror: 0, fb_blend_mode: 0,
-            ..FieldParams::default()
-        };
+        let base = sp(5, 2.5, 0.7, 0.6, 0.4, 0.3, 1.5, 1.7, 0.9, 0.6).params.clone();
         let auto = fb_auto_params(3.7, &base);
         // Non-feedback fields preserved exactly:
         assert_eq!(auto.mode, base.mode);
-        assert!(approx_eq(auto.kscale,    base.kscale,    1e-5));
-        assert!(approx_eq(auto.speed,     base.speed,     1e-5));
-        assert!(approx_eq(auto.field_mix, base.field_mix, 1e-5));
-        assert!(approx_eq(auto.iso_level, base.iso_level, 1e-5));
-        assert!(approx_eq(auto.color_shift, base.color_shift, 1e-5));
-        assert!(approx_eq(auto.zoom,      base.zoom,      1e-5));
-        assert!(approx_eq(auto.w_lattice, base.w_lattice, 1e-5));
-        assert!(approx_eq(auto.w_motif,   base.w_motif,   1e-5));
-        assert!(approx_eq(auto.w_band,    base.w_band,    1e-5));
+        assert!(approx_eq(auto.mp[crate::MP_KSCALE],    base.mp[crate::MP_KSCALE],    1e-5));
+        assert!(approx_eq(auto.mp[crate::MP_SPEED],     base.mp[crate::MP_SPEED],     1e-5));
+        assert!(approx_eq(auto.mp[crate::MP_FIELD_MIX], base.mp[crate::MP_FIELD_MIX], 1e-5));
+        assert!(approx_eq(auto.mp[crate::MP_ISO_LEVEL], base.mp[crate::MP_ISO_LEVEL], 1e-5));
+        assert!(approx_eq(auto.mp[crate::MP_COLOR_SHIFT], base.mp[crate::MP_COLOR_SHIFT], 1e-5));
+        assert!(approx_eq(auto.mp[crate::MP_ZOOM],      base.mp[crate::MP_ZOOM],      1e-5));
+        assert!(approx_eq(auto.mp[crate::MP_W_LATTICE], base.mp[crate::MP_W_LATTICE], 1e-5));
+        assert!(approx_eq(auto.mp[crate::MP_W_MOTIF],   base.mp[crate::MP_W_MOTIF],   1e-5));
+        assert!(approx_eq(auto.mp[crate::MP_W_BAND],    base.mp[crate::MP_W_BAND],    1e-5));
         // Feedback always enabled in auto mode:
         assert!(auto.fb_enabled, "fb_auto must force fb_enabled");
         // fb_* must stay in valid UI ranges (smoke-check a few)
@@ -3801,26 +4048,27 @@ mod routing_tests {
         // LFO A: square at +1 → bumps kscale upward; LFO B: square at -1 → pulls speed down.
         lfo.a = LfoEngine { rate: 0.5, depth: 1.0, wave: LfoWave::Square, phase: 0.0 };
         lfo.b = LfoEngine { rate: 0.5, depth: 1.0, wave: LfoWave::Square, phase: 0.5 };
-        lfo.kscale = LfoSrc::A;
-        lfo.speed  = LfoSrc::B;
+        lfo.mp[crate::MP_KSCALE] = LfoSrc::A;
+        lfo.mp[crate::MP_SPEED]  = LfoSrc::B;
         let eff = apply_modulation(&fp, &lfo, &mic, &bands, 0.0);
         // A at t=0 → +1. B at t=0 with phase 0.5 → -1.
         // kscale base 1.4 + 1.0*range(4.9) clamped to 5.0
-        assert!(eff.kscale > 4.5, "LFO A (square +1) should pull kscale to max; got {}", eff.kscale);
+        assert!(eff.mp[crate::MP_KSCALE] > 4.5, "LFO A (square +1) should pull kscale to max; got {}", eff.mp[crate::MP_KSCALE]);
         // speed base 0.3 − range(2.0) → clamped to 0.0
-        assert!(eff.speed < 0.05, "LFO B (square -1) should pull speed to min; got {}", eff.speed);
+        assert!(eff.mp[crate::MP_SPEED] < 0.05, "LFO B (square -1) should pull speed to min; got {}", eff.mp[crate::MP_SPEED]);
     }
 
     #[test]
     fn apply_modulation_off_src_does_not_modulate() {
-        let fp = FieldParams { kscale: 2.0, ..FieldParams::default() };
+        let mut fp = FieldParams::default();
+        fp.mp[crate::MP_KSCALE] = 2.0;
         let mic = MicParams::default();
         let bands = audio::AudioBands::default();
         let mut lfo = LfoParams::default();
         lfo.a.depth = 1.0; lfo.a.wave = LfoWave::Square; lfo.a.phase = 0.0;
-        lfo.kscale = LfoSrc::Off; // explicitly off
+        lfo.mp[crate::MP_KSCALE] = LfoSrc::Off; // explicitly off
         let eff = apply_modulation(&fp, &lfo, &mic, &bands, 0.0);
-        assert!((eff.kscale - 2.0).abs() < 1e-5,
+        assert!((eff.mp[crate::MP_KSCALE] - 2.0).abs() < 1e-5,
             "LfoSrc::Off must not change the param");
     }
 
@@ -3831,7 +4079,7 @@ mod routing_tests {
         assert!(p.a.depth > 0.0 && p.a.rate > 0.0);
         assert!(p.b.depth > 0.0 && p.b.rate > 0.0);
         // At least one target routed to A and one to B
-        let any_a = [p.kscale, p.fb_saturation, p.color_shift].into_iter().any(|s| s == LfoSrc::A);
+        let any_a = [p.mp[crate::MP_KSCALE], p.fb_saturation, p.mp[crate::MP_COLOR_SHIFT]].into_iter().any(|s| s == LfoSrc::A);
         let any_b = [p.fb_zoom, p.fb_color_shift, p.fb_fold_angle].into_iter().any(|s| s == LfoSrc::B);
         assert!(any_a && any_b,
             "tour_lfo_preset should route some targets to A and some to B");
@@ -3852,8 +4100,8 @@ mod routing_tests {
     // Number of LFO targets routed in a preset (anything not Off).
     fn routed_count(p: &LfoParams) -> usize {
         let targets = [
-            p.kscale, p.speed, p.field_mix, p.iso_level, p.color_shift, p.zoom,
-            p.w_lattice, p.w_motif, p.w_band,
+            p.mp[crate::MP_KSCALE], p.mp[crate::MP_SPEED], p.mp[crate::MP_FIELD_MIX], p.mp[crate::MP_ISO_LEVEL], p.mp[crate::MP_COLOR_SHIFT], p.mp[crate::MP_ZOOM],
+            p.mp[crate::MP_W_LATTICE], p.mp[crate::MP_W_MOTIF], p.mp[crate::MP_W_BAND],
             p.fb_zoom, p.fb_decay, p.fb_offset_x, p.fb_offset_y, p.fb_rotation,
             p.fb_color_shift, p.fb_saturation, p.fb_brightness, p.fb_inject,
             p.fb_fold_angle, p.fb_motion_blur,

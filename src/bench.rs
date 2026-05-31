@@ -36,25 +36,19 @@ impl Default for BenchOpts {
     }
 }
 
+// Mirror of `renderer::FieldUniform` — layout must match the WGSL `FU` struct.
+// `mp` is the 16-slot per-mode param bank, vec4-packed (std140 stride).
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 struct FieldUniform {
+    mp:             [[f32; 4]; 4],
     time:           f32,
-    kscale:         f32,
-    speed:          f32,
-    field_mix:      f32,
-    iso_level:      f32,
-    color_shift:    f32,
-    zoom:           f32,
-    w_lattice:      f32,
-    w_motif:        f32,
-    w_band:         f32,
     mode:           u32,
     num_g:          u32,
+    aspect:         f32,
     crystal_color:  [f32; 4],
     mouse:          [f32; 2],
     mouse_down:     f32,
-    aspect:         f32,
     fb_enabled:     u32,
     fb_mirror:      u32,
     fb_zoom:        f32,
@@ -69,23 +63,30 @@ struct FieldUniform {
     fb_brightness:  f32,
     fb_blend_mode:  u32,
     fb_motion_blur: f32,
-    _pad:           [f32; 2],
+    _pad:           [f32; 3],
 }
 
 fn default_uniform(mode: u32, time: f32, aspect: f32) -> FieldUniform {
+    // Canonical generator defaults in slots 0..8 (kscale, speed, field_mix,
+    // iso_level, color_shift, zoom, w_lattice, w_motif, w_band); rest 0.
     FieldUniform {
-        time, kscale: 1.4, speed: 0.3, field_mix: 0.55,
-        iso_level: 0.5, color_shift: 0.0, zoom: 1.0,
-        w_lattice: 1.0, w_motif: 0.6, w_band: 0.4,
+        mp: [
+            [1.4, 0.3, 0.55, 0.5],
+            [0.0, 1.0, 1.0, 0.6],
+            [0.4, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0],
+        ],
+        time,
         mode, num_g: 0,
+        aspect,
         crystal_color: [0.5, 0.7, 1.0, 0.0],
-        mouse: [0.5, 0.5], mouse_down: 0.0, aspect,
+        mouse: [0.5, 0.5], mouse_down: 0.0,
         fb_enabled: 0, fb_mirror: 0,
         fb_zoom: 1.0, fb_offset_x: 0.0, fb_offset_y: 0.0,
         fb_rotation: 0.0, fb_decay: 0.85, fb_color_shift: 0.0, fb_inject: 1.0,
         fb_fold_angle: 0.0, fb_saturation: 1.0, fb_brightness: 1.0, fb_blend_mode: 0,
         fb_motion_blur: 0.0,
-        _pad: [0.0; 2],
+        _pad: [0.0; 3],
     }
 }
 

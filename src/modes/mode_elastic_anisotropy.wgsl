@@ -33,7 +33,7 @@ fn eaniso_stiffness(n: vec3<f32>) -> f32 {
 // direction n̂, then r_surface = stiffness(n̂).  We sphere-march: shrink step
 // when r_ray > r_surf to locate the crossing.
 fn eaniso_march(ro: vec3<f32>, rd: vec3<f32>) -> vec4<f32> {
-    let scale = 0.55 + 0.55 * u.field_mix;
+    let scale = 0.55 + 0.55 * mp(MP_FIELD_MIX);
     // Stiffness(n̂) ≤ 1, so the whole surface fits in a sphere of radius `scale`.
     // Analytically clip the ray to that bounding sphere and only march the
     // segment inside — background rays (screen corners) cost ~nothing.
@@ -82,7 +82,7 @@ fn eaniso_march(ro: vec3<f32>, rd: vec3<f32>) -> vec4<f32> {
 }
 
 fn render_elastic_anisotropy(uv: vec2<f32>) -> vec3<f32> {
-    let t = u.time * u.speed;
+    let t = u.time * mp(MP_SPEED);
 
     var az = t * 0.22;
     var el = 0.30;
@@ -92,7 +92,7 @@ fn render_elastic_anisotropy(uv: vec2<f32>) -> vec3<f32> {
     }
 
     // Camera
-    let cam_dist = 2.8 / max(u.zoom, 0.1);
+    let cam_dist = 2.8 / max(mp(MP_ZOOM), 0.1);
     let cam_raw = vec3<f32>(0.0, 0.0, cam_dist);
     let cam = eaniso_rot(cam_raw, az, el);
     let look_at = vec3<f32>(0.0);
@@ -119,10 +119,10 @@ fn render_elastic_anisotropy(uv: vec2<f32>) -> vec3<f32> {
     let spec = pow(max(dot(reflect(-light, norm), -rd), 0.0), 24.0);
 
     // Stiffness → hue: soft = cool blue, stiff = warm amber
-    let iso_val = u.iso_level;
+    let iso_val = mp(MP_ISO_LEVEL);
     // isotropic reference at C_iso ≈ 1/8 (uniform distribution of (n̂·Ĝ)⁴)
     let c_ref = 0.125;
-    let aniso_ratio = clamp(stiff / (c_ref * (0.55 + 0.55 * u.field_mix) + 1e-6), 0.0, 3.0);
+    let aniso_ratio = clamp(stiff / (c_ref * (0.55 + 0.55 * mp(MP_FIELD_MIX)) + 1e-6), 0.0, 3.0);
 
     let base_warm = u.crystal_color.xyz;
     let col_soft = vec3<f32>(0.18, 0.42, 0.90);

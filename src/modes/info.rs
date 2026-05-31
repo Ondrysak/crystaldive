@@ -16,6 +16,151 @@ pub struct ModeInfo {
     pub notes: &'static str,
 }
 
+// ── Per-mode parameter bank metadata ─────────────────────────────────────
+//
+// Each mode declares which of the 16 generic `mp` slots it exposes, with a
+// human label, range, and default. The egui panel renders one named slider per
+// declared `ParamDesc` of the active mode (instead of a fixed global list), and
+// `slot_range` feeds the LFO/mic modulator the right span per slot. Slot indices
+// mirror the WGSL `MP_*` consts in `prelude.wgsl`.
+
+/// One slider in a mode's tailored parameter panel.
+#[derive(Clone, Copy, Debug)]
+pub struct ParamDesc {
+    pub slot:    usize,
+    pub name:    &'static str,
+    pub min:     f32,
+    pub max:     f32,
+    pub default: f32,
+}
+
+impl ParamDesc {
+    pub const fn new(slot: usize, name: &'static str, min: f32, max: f32, default: f32) -> Self {
+        Self { slot, name, min, max, default }
+    }
+}
+
+// Canonical crystal-field generator slots (0..8). Modes that drive
+// `crystal_field`/`sdf` reuse these so the generator keeps working; they may be
+// relabelled per mode but must stay on their slot. Ranges/defaults match the
+// pre-bank global params exactly (behaviour-preserving).
+pub const P_KSCALE:      ParamDesc = ParamDesc::new(0, "kscale",    0.1, 5.0, 1.4);
+pub const P_SPEED:       ParamDesc = ParamDesc::new(1, "speed",     0.0, 2.0, 0.3);
+pub const P_FIELD_MIX:   ParamDesc = ParamDesc::new(2, "field_mix", 0.0, 1.0, 0.55);
+pub const P_ISO_LEVEL:   ParamDesc = ParamDesc::new(3, "iso_level", 0.0, 1.0, 0.5);
+pub const P_COLOR_SHIFT: ParamDesc = ParamDesc::new(4, "color_sft", 0.0, 1.0, 0.0);
+pub const P_ZOOM:        ParamDesc = ParamDesc::new(5, "zoom",      0.2, 5.0, 1.0);
+pub const P_W_LATTICE:   ParamDesc = ParamDesc::new(6, "w_lattice", 0.0, 2.0, 1.0);
+pub const P_W_MOTIF:     ParamDesc = ParamDesc::new(7, "w_motif",   0.0, 2.0, 0.6);
+pub const P_W_BAND:      ParamDesc = ParamDesc::new(8, "w_band",    0.0, 2.0, 0.4);
+
+/// The full canonical 9-slot set — the default panel for any mode that hasn't
+/// been given a tailored list yet.
+pub const CANONICAL: &[ParamDesc] = &[
+    P_KSCALE, P_SPEED, P_FIELD_MIX, P_ISO_LEVEL, P_COLOR_SHIFT,
+    P_ZOOM, P_W_LATTICE, P_W_MOTIF, P_W_BAND,
+];
+
+/// Tailored parameter panel for `mode`. Modes with a bespoke list (see the
+/// `match`) get mode-specific labels/ranges and extra free slots (9..15);
+/// everything else falls back to the canonical 9.
+// 43 LORENZ — chaotic attractor; sigma/rho/beta/dt are now direct knobs
+// (free slots 9..12) instead of hardcoded constants. window = zoom slot.
+const LORENZ_PARAMS: &[ParamDesc] = &[
+    P_SPEED,
+    ParamDesc::new(5,  "window", 0.2,  5.0,  1.0),
+    P_COLOR_SHIFT,
+    ParamDesc::new(9,  "sigma",  4.0,  18.0, 10.0),
+    ParamDesc::new(10, "rho",    14.0, 40.0, 28.0),
+    ParamDesc::new(11, "beta",   1.0,  5.0,  2.6667),
+    ParamDesc::new(12, "dt",     0.002, 0.012, 0.006),
+];
+
+// Relabel-only panels: these modes reuse the canonical slots (same ranges and
+// defaults) but the generic names ("field_mix", "iso_level", …) are misleading
+// for what the knob does, so each gets physics-meaningful labels. No shader or
+// preset changes — purely a clearer UI.
+
+// 34 PLASMON — loss-function map ω(q).
+const PLASMON_PARAMS: &[ParamDesc] = &[
+    P_SPEED,
+    ParamDesc::new(5, "w_scale",  0.2, 5.0, 1.0),
+    ParamDesc::new(2, "omega_p",  0.0, 1.0, 0.55),
+    ParamDesc::new(3, "damping",  0.0, 1.0, 0.5),
+    ParamDesc::new(4, "hue",      0.0, 1.0, 0.0),
+];
+
+// 40 WAVEPACKET — Gaussian wavepacket dispersion.
+const WAVEPACKET_PARAMS: &[ParamDesc] = &[
+    P_SPEED,
+    ParamDesc::new(5, "zoom",    0.2, 5.0, 1.0),
+    ParamDesc::new(2, "k_mag",   0.0, 1.0, 0.55),
+    ParamDesc::new(3, "spread",  0.0, 1.0, 0.5),
+    ParamDesc::new(4, "k_angle", 0.0, 1.0, 0.0),
+];
+
+// 41 DIPOLE_RAD — oscillating dipole radiation.
+const DIPOLE_PARAMS: &[ParamDesc] = &[
+    P_SPEED,
+    ParamDesc::new(5, "zoom",     0.2, 5.0, 1.0),
+    ParamDesc::new(2, "omega",    0.0, 1.0, 0.55),
+    ParamDesc::new(3, "near_fld", 0.0, 1.0, 0.5),
+    ParamDesc::new(4, "hue",      0.0, 1.0, 0.0),
+];
+
+// 42 KARMAN — Kármán vortex street.
+const KARMAN_PARAMS: &[ParamDesc] = &[
+    ParamDesc::new(1, "U_inf",    0.0, 2.0, 0.3),
+    ParamDesc::new(2, "core_rad", 0.0, 1.0, 0.55),
+    ParamDesc::new(3, "Reynolds", 0.0, 1.0, 0.5),
+    ParamDesc::new(5, "scale",    0.2, 5.0, 1.0),
+    ParamDesc::new(4, "palette",  0.0, 1.0, 0.0),
+];
+
+// 44 LENSING — gravitationally lensed accretion disk.
+const LENSING_PARAMS: &[ParamDesc] = &[
+    ParamDesc::new(1, "orbit",     0.0, 2.0, 0.3),
+    ParamDesc::new(2, "cam_elev",  0.0, 1.0, 0.55),
+    ParamDesc::new(3, "disk_emis", 0.0, 1.0, 0.5),
+    ParamDesc::new(5, "magnify",   0.2, 5.0, 1.0),
+    ParamDesc::new(4, "disk_hue",  0.0, 1.0, 0.0),
+];
+
+// 45 GRAV_WAVE — inspiral strain pattern.
+const GRAV_WAVE_PARAMS: &[ParamDesc] = &[
+    P_SPEED,
+    ParamDesc::new(5, "zoom",    0.2, 5.0, 1.0),
+    ParamDesc::new(2, "freq",    0.0, 1.0, 0.55),
+    ParamDesc::new(3, "amp",     0.0, 1.0, 0.5),
+    ParamDesc::new(4, "polariz", 0.0, 1.0, 0.0),
+];
+
+pub fn mode_params(mode: u32) -> &'static [ParamDesc] {
+    match mode {
+        34 => PLASMON_PARAMS,
+        40 => WAVEPACKET_PARAMS,
+        41 => DIPOLE_PARAMS,
+        42 => KARMAN_PARAMS,
+        43 => LORENZ_PARAMS,
+        44 => LENSING_PARAMS,
+        45 => GRAV_WAVE_PARAMS,
+        _  => CANONICAL,
+    }
+}
+
+/// Clamp range for `slot` under `mode`: the declared range if the mode exposes
+/// that slot, else the canonical range for slots 0..8, else a wide default.
+pub fn slot_range(mode: u32, slot: usize) -> (f32, f32) {
+    if let Some(p) = mode_params(mode).iter().find(|p| p.slot == slot) {
+        return (p.min, p.max);
+    }
+    if slot < CANONICAL.len() {
+        let c = CANONICAL[slot];
+        return (c.min, c.max);
+    }
+    (0.0, 5.0)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ModeArea {
     Crystal,
@@ -633,6 +778,27 @@ mod tests {
     fn names_match_modes() {
         for (i, m) in MODES.iter().enumerate() {
             assert_eq!(MODE_NAMES[i], m.name);
+        }
+    }
+
+    /// Every mode's declared params must fit the 16-slot bank, have sane ranges,
+    /// and not declare the same slot twice.
+    #[test]
+    fn mode_params_are_well_formed() {
+        for m in MODES.iter() {
+            let ps = mode_params(m.idx as u32);
+            let mut seen = [false; 16];
+            for p in ps {
+                assert!(p.slot < 16, "{}: slot {} >= 16", m.name, p.slot);
+                assert!(p.min <= p.max, "{}: {} min>max", m.name, p.name);
+                assert!(
+                    p.default >= p.min && p.default <= p.max,
+                    "{}: {} default {} out of [{}, {}]",
+                    m.name, p.name, p.default, p.min, p.max
+                );
+                assert!(!seen[p.slot], "{}: slot {} declared twice", m.name, p.slot);
+                seen[p.slot] = true;
+            }
         }
     }
 }

@@ -14,16 +14,16 @@ fn domain_wall_palette(x: f32, wall: f32) -> vec3<f32> {
 }
 
 fn render_domain_wall(uv: vec2<f32>) -> vec3<f32> {
-    let t = u.time * u.speed * 0.45;
-    let p = uv * (2.4 / max(u.zoom, 0.08));
+    let t = u.time * mp(MP_SPEED) * 0.45;
+    let p = uv * (2.4 / max(mp(MP_ZOOM), 0.08));
     let wall_field =
-        sin(p.x * (1.15 + u.field_mix) + sin(p.y * 1.7 + t) * 0.7 + t) +
+        sin(p.x * (1.15 + mp(MP_FIELD_MIX)) + sin(p.y * 1.7 + t) * 0.7 + t) +
         0.55 * sin(dot(p, vec2<f32>(-0.8, 1.25)) * 1.5 - t * 0.7);
     let domain = smoothstep(-0.09, 0.09, wall_field);
-    let wall = 1.0 - smoothstep(0.0, 0.18 + 0.10 * u.iso_level, abs(wall_field));
+    let wall = 1.0 - smoothstep(0.0, 0.18 + 0.10 * mp(MP_ISO_LEVEL), abs(wall_field));
 
-    let pa = domain_wall_rot(p, 0.33 + u.color_shift * TAU * 0.20);
-    let pb = domain_wall_rot(p, -0.55 - u.color_shift * TAU * 0.15);
+    let pa = domain_wall_rot(p, 0.33 + mp(MP_COLOR_SHIFT) * TAU * 0.20);
+    let pb = domain_wall_rot(p, -0.55 - mp(MP_COLOR_SHIFT) * TAU * 0.15);
     let fa = crystal_field(vec3<f32>(pa, t * 0.18));
     let fb = cf2(vec3<f32>(pb + vec2<f32>(0.35, -0.2), -t * 0.12));
     let order = mix(fa, fb, domain);

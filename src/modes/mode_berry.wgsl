@@ -13,7 +13,7 @@ fn berry_hue_shift(c: vec3<f32>, h: f32) -> vec3<f32> {
 fn berry_h(k: vec2<f32>) -> vec3<f32> {
     let h1 = crystal_field(vec3<f32>(k, 0.0));
     let h2 = cf2(vec3<f32>(k, 0.0));
-    let h3 = u.field_mix * 2.0 - 1.0
+    let h3 = mp(MP_FIELD_MIX) * 2.0 - 1.0
            + 0.3 * crystal_field(vec3<f32>(k * 1.5, 0.7));
     return vec3<f32>(h1, h2, h3);
 }
@@ -38,10 +38,10 @@ fn berry_omega(k: vec2<f32>, d0: vec3<f32>) -> f32 {
 }
 
 fn render_berry(uv: vec2<f32>) -> vec3<f32> {
-    let t = u.time * u.speed;
+    let t = u.time * mp(MP_SPEED);
 
     // Map screen → 2D Brillouin-zone coordinate.
-    let k = uv * 2.0 / max(u.zoom, 0.05);
+    let k = uv * 2.0 / max(mp(MP_ZOOM), 0.05);
 
     // Sample the Hamiltonian and its curvature; reuse d0 inside berry_omega.
     let h_vec = berry_h(k);
@@ -52,8 +52,8 @@ fn render_berry(uv: vec2<f32>) -> vec3<f32> {
     // Divergent palette around 0: blue for negative Ω, orange for positive.
     let neg_col = vec3<f32>(0.05, 0.55, 0.95);
     let pos_col = vec3<f32>(1.00, 0.55, 0.10);
-    let pal_neg = berry_hue_shift(neg_col, u.color_shift);
-    let pal_pos = berry_hue_shift(pos_col, u.color_shift);
+    let pal_neg = berry_hue_shift(neg_col, mp(MP_COLOR_SHIFT));
+    let pal_pos = berry_hue_shift(pos_col, mp(MP_COLOR_SHIFT));
 
     let sat   = tanh(abs(omega) * 3.0);
     let sgn   = step(0.0, omega);                  // 1 if Ω ≥ 0
@@ -71,9 +71,9 @@ fn render_berry(uv: vec2<f32>) -> vec3<f32> {
     let in_plane_len = sqrt(h_vec.x * h_vec.x + h_vec.y * h_vec.y);
     let theta = atan2(h_vec.y, h_vec.x);
     let s     = uv.x * cos(theta) + uv.y * sin(theta);
-    let freq  = 30.0 + 90.0 * u.iso_level;          // higher iso → thinner streaks
+    let freq  = 30.0 + 90.0 * mp(MP_ISO_LEVEL);          // higher iso → thinner streaks
     let stream = 0.5 + 0.5 * sin(s * freq + t * 0.6);
-    let sharp  = 0.50 + 0.30 * u.iso_level;         // sharpness ramp
+    let sharp  = 0.50 + 0.30 * mp(MP_ISO_LEVEL);         // sharpness ramp
     let dash   = smoothstep(sharp, sharp + 0.18, stream);
 
     // Streak color flips with local heatmap brightness so streamlines stay readable.

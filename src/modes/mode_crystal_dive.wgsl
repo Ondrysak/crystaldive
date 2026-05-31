@@ -93,7 +93,7 @@ fn crystal_dive_sample(uv: vec2<f32>, scale: f32, rot: f32, t: f32) -> vec3<f32>
 }
 
 fn render_crystal_dive(uv: vec2<f32>) -> vec3<f32> {
-    let t = u.time * u.speed;
+    let t = u.time * mp(MP_SPEED);
 
     // Crystal-derived spiral geometry.
     let cb     = crystal_dive_basis();
@@ -120,7 +120,7 @@ fn render_crystal_dive(uv: vec2<f32>) -> vec3<f32> {
     // Two crossfading sample scales — scale_a halves over the octave so view_A
     // zooms IN, and the next-octave view_B (already half-scale lower) fades in
     // to take over. The fade is gaussian-ish via smooth_ph.
-    let base_scale = 2.4 / max(u.zoom, 0.08);
+    let base_scale = 2.4 / max(mp(MP_ZOOM), 0.08);
     let scale_a = base_scale / exp2(level);
     let scale_b = scale_a * 0.5;
 
@@ -132,7 +132,7 @@ fn render_crystal_dive(uv: vec2<f32>) -> vec3<f32> {
     // ── Outer counter-spiral (w_motif): a second, opposite-handed dive at a
     //    different phase. Lets you stack two infinite zooms — when both are
     //    cranked, the screen feels like two crystals nested inside each other.
-    let motif_w = clamp(u.w_motif, 0.0, 1.0);
+    let motif_w = clamp(mp(MP_W_MOTIF), 0.0, 1.0);
     if (motif_w > 0.001) {
         let scale_c = base_scale / exp2(level + 0.5);
         let counter = crystal_dive_sample(uv, scale_c, -rot_cont * 0.7, t * 1.31);
@@ -142,7 +142,7 @@ fn render_crystal_dive(uv: vec2<f32>) -> vec3<f32> {
     // ── Phase-singularity sparkle (w_band): pull the centre toward the
     //    crystal accent colour weighted by 1/r², so each zoom centre lights
     //    up briefly. Reads as the camera "punching through" a unit cell.
-    let band_w = clamp(u.w_band, 0.0, 1.0);
+    let band_w = clamp(mp(MP_W_BAND), 0.0, 1.0);
     if (band_w > 0.001) {
         let r2     = dot(uv, uv);
         let glow   = exp(-r2 * 8.0) * (1.0 - smooth_ph) * band_w;
@@ -151,26 +151,26 @@ fn render_crystal_dive(uv: vec2<f32>) -> vec3<f32> {
 
     // ── Tunnel vignette (w_lattice): darkens the rim, focusing attention on
     //    the dive. Magnitude rises with w_lattice; 0 means flat field.
-    let tunnel_w = clamp(u.w_lattice, 0.0, 1.0);
+    let tunnel_w = clamp(mp(MP_W_LATTICE), 0.0, 1.0);
     let r        = length(uv);
     col          = col * mix(1.0, 1.0 - 0.55 * smoothstep(0.0, 1.4, r), tunnel_w);
 
     // ── Contrast / saturation lift driven by iso_level — makes the field
     //    snap rather than smear, useful when the sequencer crossfades.
-    let lift = 0.6 + 0.9 * clamp(u.iso_level, 0.0, 1.0);
+    let lift = 0.6 + 0.9 * clamp(mp(MP_ISO_LEVEL), 0.0, 1.0);
     col      = pow(max(col, vec3<f32>(0.0)), vec3<f32>(1.0 / lift));
 
     // ── Hue rotation by color_shift — keeps every mode reactable from the
     //    sequencer / LFO routing for color_shift.
     let kvec  = vec3<f32>(0.57735, 0.57735, 0.57735);
-    let cs    = cos(u.color_shift * TAU);
-    let sn    = sin(u.color_shift * TAU);
+    let cs    = cos(mp(MP_COLOR_SHIFT) * TAU);
+    let sn    = sin(mp(MP_COLOR_SHIFT) * TAU);
     col       = col * cs + cross(kvec, col) * sn + kvec * dot(kvec, col) * (1.0 - cs);
 
     // ── field_mix: blend the colour with a desaturated version. At
     //    field_mix=0 we get the original; at 1, a near-monochrome dive.
     let mono  = vec3<f32>(dot(col, vec3<f32>(0.30, 0.59, 0.11)));
-    col       = mix(col, mono, clamp(u.field_mix - 0.5, 0.0, 0.5));
+    col       = mix(col, mono, clamp(mp(MP_FIELD_MIX) - 0.5, 0.0, 0.5));
 
     return col;
 }

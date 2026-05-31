@@ -29,10 +29,10 @@ fn cdw_hash(p: vec2<f32>) -> f32 {
 }
 
 fn cdw_domain(p: vec2<f32>) -> f32 {
-    let slow = 0.55 + 0.45 * u.field_mix;
+    let slow = 0.55 + 0.45 * mp(MP_FIELD_MIX);
     let a = sin(p.x * (1.3 + slow) + 0.7 * sin(p.y * 1.1));
     let b = sin(dot(p, vec2<f32>(-0.8, 1.15)) * (1.0 + slow) + 1.7);
-    let c = 0.35 * sin(crystal_field(vec3<f32>(p * 0.22, u.time * u.speed * 0.025)));
+    let c = 0.35 * sin(crystal_field(vec3<f32>(p * 0.22, u.time * mp(MP_SPEED) * 0.025)));
     return a + 0.75 * b + c;
 }
 
@@ -43,20 +43,20 @@ fn cdw_vortex_phase(p: vec2<f32>, center: vec2<f32>, charge: f32) -> f32 {
 }
 
 fn cdw_palette(x: f32) -> vec3<f32> {
-    let h = fract(x + u.color_shift);
+    let h = fract(x + mp(MP_COLOR_SHIFT));
     let pal = 0.54 + 0.46 * cos(TAU * (h + vec3<f32>(0.0, 0.31, 0.64)));
     return mix(pal, u.crystal_color.xyz, 0.34);
 }
 
 fn render_cdw(uv: vec2<f32>) -> vec3<f32> {
-    let scale = (5.2 + 4.0 * u.kscale) / max(u.zoom, 0.2);
-    let t = u.time * u.speed;
+    let scale = (5.2 + 4.0 * mp(MP_KSCALE)) / max(mp(MP_ZOOM), 0.2);
+    let t = u.time * mp(MP_SPEED);
     let p = uv * scale;
 
     let g0 = cdw_gdir(0, vec2<f32>(1.0, 0.0));
     let g1_raw = cdw_gdir(1, vec2<f32>(0.0, 1.0));
     let g1 = cdw_safe_dir(g1_raw - g0 * dot(g1_raw, g0), vec2<f32>(-g0.y, g0.x));
-    let g2 = cdw_safe_dir(g0 + g1 * (0.65 + 0.35 * u.field_mix), normalize(vec2<f32>(1.0, 1.0)));
+    let g2 = cdw_safe_dir(g0 + g1 * (0.65 + 0.35 * mp(MP_FIELD_MIX)), normalize(vec2<f32>(1.0, 1.0)));
 
     let domain_raw = cdw_domain(p * 0.36);
     let domain_sign = sign(domain_raw + 1e-4);
@@ -68,18 +68,18 @@ fn render_cdw(uv: vec2<f32>) -> vec3<f32> {
     let slip_b = smoothstep(-0.16, 0.16, slip_line_b) - 0.5;
 
     let drift = t * 0.08;
-    let phase_bias = TAU * (0.08 * u.iso_level + 0.04 * sin(t * 0.17));
+    let phase_bias = TAU * (0.08 * mp(MP_ISO_LEVEL) + 0.04 * sin(t * 0.17));
     var phase = phase_bias;
-    phase += domain_sign * (0.75 + 1.35 * u.field_mix);
-    phase += (slip_a - 0.65 * slip_b) * TAU * (0.28 + 0.42 * u.iso_level);
+    phase += domain_sign * (0.75 + 1.35 * mp(MP_FIELD_MIX));
+    phase += (slip_a - 0.65 * slip_b) * TAU * (0.28 + 0.42 * mp(MP_ISO_LEVEL));
     phase += cdw_vortex_phase(p, vec2<f32>(-2.1, 1.0) + 0.25 * vec2<f32>(sin(drift), cos(drift * 1.3)), 1.0);
     phase += cdw_vortex_phase(p, vec2<f32>(1.7, -0.8) + 0.20 * vec2<f32>(cos(drift * 0.7), sin(drift)), -1.0);
     phase += 0.18 * cf2(vec3<f32>(p * 0.18, t * 0.035));
 
-    let k = 2.8 + 4.2 * u.kscale;
+    let k = 2.8 + 4.2 * mp(MP_KSCALE);
     let primary = sin(dot(p, g0) * k + phase);
     let harmonic = sin(dot(p, g0) * k * 2.0 + phase * 1.9) * 0.28;
-    let cross = sin(dot(p, g1) * k * (0.72 + 0.22 * u.field_mix) - phase * 0.65) * 0.33;
+    let cross = sin(dot(p, g1) * k * (0.72 + 0.22 * mp(MP_FIELD_MIX)) - phase * 0.65) * 0.33;
     let lock = sin(dot(p, g2) * k * 0.54 + phase * 0.35) * 0.18;
     let density = primary + harmonic + cross + lock;
 
@@ -99,7 +99,7 @@ fn render_cdw(uv: vec2<f32>) -> vec3<f32> {
     var col = bg;
     col = mix(col, cold, trough * 0.70);
     col = mix(col, warm * (0.65 + 0.60 * stripe), stripe);
-    col += node * vec3<f32>(0.95, 0.88, 0.62) * (0.45 + 0.75 * u.iso_level);
+    col += node * vec3<f32>(0.95, 0.88, 0.62) * (0.45 + 0.75 * mp(MP_ISO_LEVEL));
     col += wall * mix(vec3<f32>(0.15, 0.65, 0.95), u.crystal_color.xyz, 0.35) * 0.85;
     col += (smoothstep(0.19, 0.0, abs(slip_line_a)) + smoothstep(0.17, 0.0, abs(slip_line_b)))
          * vec3<f32>(1.00, 0.82, 0.44) * 0.35;

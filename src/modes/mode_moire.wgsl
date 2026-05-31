@@ -1,11 +1,11 @@
 // ── Mode 14: MOIRE — twisted-bilayer interference of two crystal fields ──
 fn render_moire(uv: vec2<f32>) -> vec3<f32> {
-    let t      = u.time * u.speed * 0.1;
-    let theta  = u.field_mix * 0.524;          // 0..30°
+    let t      = u.time * mp(MP_SPEED) * 0.1;
+    let theta  = mp(MP_FIELD_MIX) * 0.524;          // 0..30°
     let ca     = cos(theta);
     let sa     = sin(theta);
 
-    let s      = 2.5 / u.zoom;
+    let s      = 2.5 / mp(MP_ZOOM);
     let p1     = vec3<f32>(uv * s, t);
     let uv_r   = vec2<f32>(uv.x*ca - uv.y*sa, uv.x*sa + uv.y*ca);
     let p2     = vec3<f32>(uv_r * s, t);
@@ -18,10 +18,10 @@ fn render_moire(uv: vec2<f32>) -> vec3<f32> {
     let m_diff = f1 - f2_rot;
 
     // Sharpness of contour lines from iso_level (smaller = sharper)
-    let line_w = mix(0.05, 0.008, clamp(u.iso_level, 0.0, 1.0));
+    let line_w = mix(0.05, 0.008, clamp(mp(MP_ISO_LEVEL), 0.0, 1.0));
 
     // Hue from sum, drifting slowly
-    let hue   = fract(m_sum * 0.45 + u.color_shift + u.time*u.speed*0.03);
+    let hue   = fract(m_sum * 0.45 + mp(MP_COLOR_SHIFT) + u.time*mp(MP_SPEED)*0.03);
     var pal   = 0.5 + 0.5*cos(TAU*(hue + vec3<f32>(0.0, 0.333, 0.667)));
 
     // Dark background, slight crystal-color tint
@@ -39,7 +39,7 @@ fn render_moire(uv: vec2<f32>) -> vec3<f32> {
     col += smoothstep(line_w, 0.0, abs(m_sum)) * vec3<f32>(1.0, 0.92, 0.55) * 1.6;
 
     // Bright lines near product extrema — shifts of |m_prod| against iso_level
-    let prod_iso = u.iso_level * 0.45 + 0.05;
+    let prod_iso = mp(MP_ISO_LEVEL) * 0.45 + 0.05;
     col += smoothstep(line_w*1.2, 0.0, abs(abs(m_prod) - prod_iso))
          * mix(vec3<f32>(1.0, 1.0, 0.85), u.crystal_color.xyz, 0.55) * 1.4;
 

@@ -9,21 +9,21 @@ fn render_phonon(uv: vec2<f32>) -> vec3<f32> {
     let t = u.time;
 
     // ── Camera (orbit) ────────────────────────────────────────────────────
-    var az = t * u.speed * 0.18;
+    var az = t * mp(MP_SPEED) * 0.18;
     var el = 0.35;
     if u.mouse_down >= 0.5 {
         az = u.mouse.x * TAU;
         el = (u.mouse.y - 0.5) * 2.5;
     }
-    let cp  = vec3<f32>(sin(az)*cos(el), sin(el), cos(az)*cos(el)) * (5.0 / u.zoom);
+    let cp  = vec3<f32>(sin(az)*cos(el), sin(el), cos(az)*cos(el)) * (5.0 / mp(MP_ZOOM));
     let fwd = normalize(-cp);
     let rgt = normalize(cross(vec3<f32>(0.0, 1.0, 0.0), fwd));
     let up  = cross(fwd, rgt);
     let rd  = normalize(fwd + uv.x*rgt + uv.y*up);
 
     // ── Pick q vector from g_block ───────────────────────────────────────
-    let q_idx = clamp(i32(u.iso_level * f32(u.num_g)), 0, i32(u.num_g) - 1);
-    let q     = g_block.gamp[q_idx].xyz * u.kscale;
+    let q_idx = clamp(i32(mp(MP_ISO_LEVEL) * f32(u.num_g)), 0, i32(u.num_g) - 1);
+    let q     = g_block.gamp[q_idx].xyz * mp(MP_KSCALE);
 
     // ── Eigenvector ê (mix transverse → longitudinal) ────────────────────
     let q_len = max(length(q), 1e-5);
@@ -34,11 +34,11 @@ fn render_phonon(uv: vec2<f32>) -> vec3<f32> {
     } else {
         t_hat = normalize(cross(q_hat, vec3<f32>(0.0, 1.0, 0.0)));
     }
-    let e_hat = normalize(mix(t_hat, q_hat, u.field_mix));
+    let e_hat = normalize(mix(t_hat, q_hat, mp(MP_FIELD_MIX)));
 
     // ── Acoustic-like dispersion ─────────────────────────────────────────
-    let omega = sqrt(length(q) + 0.1) * u.speed * 1.5;
-    let amp_A = 0.18 + 0.12 * u.iso_level;
+    let omega = sqrt(length(q) + 0.1) * mp(MP_SPEED) * 1.5;
+    let amp_A = 0.18 + 0.12 * mp(MP_ISO_LEVEL);
     let sphere_r = 0.18;
 
     let light = normalize(vec3<f32>(1.6, 2.2, 1.4));
@@ -74,7 +74,7 @@ fn render_phonon(uv: vec2<f32>) -> vec3<f32> {
                 let nm = normalize(p - R_t);
 
                 // Color by phase → hue cycle
-                let hue  = fract(phs / TAU + u.color_shift);
+                let hue  = fract(phs / TAU + mp(MP_COLOR_SHIFT));
                 var surf = 0.5 + 0.5 * cos(TAU * (hue + vec3<f32>(0.0, 0.333, 0.667)));
                 surf = mix(surf, u.crystal_color.xyz, 0.28);
 
@@ -106,7 +106,7 @@ fn render_phonon(uv: vec2<f32>) -> vec3<f32> {
                 let cl    = cp + rd * proj;
                 let dist2 = dot(R_t - cl, R_t - cl);
 
-                let hue  = fract(phs / TAU + u.color_shift);
+                let hue  = fract(phs / TAU + mp(MP_COLOR_SHIFT));
                 var hcol = 0.5 + 0.5 * cos(TAU * (hue + vec3<f32>(0.0, 0.333, 0.667)));
                 hcol = mix(hcol, u.crystal_color.xyz, 0.45);
 

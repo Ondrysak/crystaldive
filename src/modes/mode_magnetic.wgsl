@@ -12,8 +12,8 @@ fn magnetic_spin(p: vec3<f32>) -> vec3<f32> {
 }
 
 fn render_magnetic(uv: vec2<f32>) -> vec3<f32> {
-    let t = u.time * u.speed * 0.1;
-    let p = vec3<f32>(uv * 2.5 / u.zoom, t);
+    let t = u.time * mp(MP_SPEED) * 0.1;
+    let p = vec3<f32>(uv * 2.5 / mp(MP_ZOOM), t);
 
     // Raw spin components (use undiff field for nx/ny so we keep the gradient field for the streak modulation).
     let nx_raw = crystal_field(p);
@@ -27,7 +27,7 @@ fn render_magnetic(uv: vec2<f32>) -> vec3<f32> {
     let nz = nz_raw / raw_len;
 
     // Hedgehog vs Bloch rotation in the (nx, ny) plane.
-    let phi_rot = atan2(u.w_motif, u.w_lattice + 1e-3);
+    let phi_rot = atan2(mp(MP_W_MOTIF), mp(MP_W_LATTICE) + 1e-3);
     let cph = cos(phi_rot);
     let sph = sin(phi_rot);
     let nx_r = nx * cph - ny * sph;
@@ -48,7 +48,7 @@ fn render_magnetic(uv: vec2<f32>) -> vec3<f32> {
     let in_plane_len = sqrt(nx_r * nx_r + ny_r * ny_r);
     let theta_p = atan2(ny_r, nx_r);
     let s       = uv.x * cos(theta_p) + uv.y * sin(theta_p);
-    let streak  = 0.5 + 0.5 * sin(s * (40.0 + 60.0 * u.iso_level));
+    let streak  = 0.5 + 0.5 * sin(s * (40.0 + 60.0 * mp(MP_ISO_LEVEL)));
     let dash    = smoothstep(0.55, 0.75, streak);
 
     // Brightness signal of the dome to flip streak contrast (dark on light, light on dark).

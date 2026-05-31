@@ -38,15 +38,15 @@ fn sdens_density(p: vec2<f32>, t: f32, fm_weight: f32, afm_weight: f32, ferri_we
         g1 = g1 / g1_len;
     }
     // Real-space lattice spacing ~ 2π/|G|
-    let a0 = TAU / max(g0_len * u.kscale, 0.1);
-    let a1 = TAU / max(g1_len * u.kscale, 0.1);
+    let a0 = TAU / max(g0_len * mp(MP_KSCALE), 0.1);
+    let a1 = TAU / max(g1_len * mp(MP_KSCALE), 0.1);
 
     // Basis vectors
     let b0 = vec2<f32>(-g0.y, g0.x) * a0;
     let b1 = vec2<f32>(-g1.y, g1.x) * a1;
 
     let sigma = min(a0, a1) * 0.25;
-    let m_max = u.iso_level * 2.0 + 0.3;
+    let m_max = mp(MP_ISO_LEVEL) * 2.0 + 0.3;
 
     var density = 0.0;
     let half = 6;
@@ -73,8 +73,8 @@ fn sdens_density(p: vec2<f32>, t: f32, fm_weight: f32, afm_weight: f32, ferri_we
 }
 
 fn render_spin_density(uv: vec2<f32>) -> vec3<f32> {
-    let t = u.time * u.speed * 0.5;
-    let zoom = max(u.zoom, 0.05);
+    let t = u.time * mp(MP_SPEED) * 0.5;
+    let zoom = max(mp(MP_ZOOM), 0.05);
 
     var pan = vec2<f32>(0.0);
     if u.mouse_down >= 0.5 {
@@ -84,10 +84,10 @@ fn render_spin_density(uv: vec2<f32>) -> vec3<f32> {
 
     // field_mix encodes ordering type
     // 0..0.33 → FM, 0.33..0.67 → crossfade to AFM, 0.67..1 → ferrimagnetic
-    let fm_w  = clamp(1.0 - u.field_mix * 3.0, 0.0, 1.0);
-    let afm_w = clamp(1.0 - abs(u.field_mix - 0.5) * 6.0, 0.0, 1.0)
-              + clamp((u.field_mix - 0.33) * 3.0, 0.0, 1.0) * clamp((0.67 - u.field_mix) * 3.0, 0.0, 1.0);
-    let ferri_w = clamp((u.field_mix - 0.67) * 3.0, 0.0, 1.0);
+    let fm_w  = clamp(1.0 - mp(MP_FIELD_MIX) * 3.0, 0.0, 1.0);
+    let afm_w = clamp(1.0 - abs(mp(MP_FIELD_MIX) - 0.5) * 6.0, 0.0, 1.0)
+              + clamp((mp(MP_FIELD_MIX) - 0.33) * 3.0, 0.0, 1.0) * clamp((0.67 - mp(MP_FIELD_MIX)) * 3.0, 0.0, 1.0);
+    let ferri_w = clamp((mp(MP_FIELD_MIX) - 0.67) * 3.0, 0.0, 1.0);
 
     let density = sdens_density(p, t, fm_w, afm_w, ferri_w);
 
@@ -111,8 +111,8 @@ fn render_spin_density(uv: vec2<f32>) -> vec3<f32> {
 
     // color_shift hue-rotates the palette
     let k = vec3<f32>(0.57735);
-    let cs = cos(u.color_shift * TAU);
-    let sn = sin(u.color_shift * TAU);
+    let cs = cos(mp(MP_COLOR_SHIFT) * TAU);
+    let sn = sin(mp(MP_COLOR_SHIFT) * TAU);
     col = col * cs + cross(k, col) * sn + k * dot(k, col) * (1.0 - cs);
 
     // Lattice grid overlay (faint)
@@ -120,7 +120,7 @@ fn render_spin_density(uv: vec2<f32>) -> vec3<f32> {
     var grid = 0.0;
     for (var i = 0; i < ng; i++) {
         let ga = g_block.gamp[i];
-        let g = ga.xy * u.kscale;
+        let g = ga.xy * mp(MP_KSCALE);
         grid += ga.w * exp(-8.0 * abs(sin(dot(g, p))));
     }
     col += vec3<f32>(0.08) * clamp(grid * 0.05, 0.0, 0.25);

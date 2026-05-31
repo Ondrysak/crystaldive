@@ -71,18 +71,18 @@ fn wavepacket_phase_color(phi: f32) -> vec3<f32> {
 }
 
 fn render_wavepacket(uv: vec2<f32>) -> vec3<f32> {
-    let t = u.time * u.speed;
+    let t = u.time * mp(MP_SPEED);
 
     // Spatial window in psi-units.
-    let zoom = max(u.zoom, 0.05);
+    let zoom = max(mp(MP_ZOOM), 0.05);
     let p    = uv * (4.0 / zoom);
 
     // Initial width sigma0 -- small => narrow packet, broadens quickly.
-    let sigma0 = mix(0.35, 1.4, clamp(u.iso_level, 0.0, 1.0));
+    let sigma0 = mix(0.35, 1.4, clamp(mp(MP_ISO_LEVEL), 0.0, 1.0));
 
     // Mean momentum k0 -- magnitude from field_mix, direction precesses in time.
-    let kmag   = mix(0.5, 3.8, clamp(u.field_mix, 0.0, 1.0));
-    let kangle = t * 0.15 + u.color_shift * TAU;
+    let kmag   = mix(0.5, 3.8, clamp(mp(MP_FIELD_MIX), 0.0, 1.0));
+    let kangle = t * 0.15 + mp(MP_COLOR_SHIFT) * TAU;
     let k0     = vec2<f32>(cos(kangle), sin(kangle)) * kmag;
 
     // Cycle effective propagation time so packets recur; triangle in t, period ~14 s.
@@ -111,7 +111,7 @@ fn render_wavepacket(uv: vec2<f32>) -> vec3<f32> {
 
     var pcol = wavepacket_phase_color(phase);
     pcol = mix(pcol, pcol * u.crystal_color.xyz, 0.20);
-    pcol = wavepacket_hue_shift(pcol, u.color_shift);
+    pcol = wavepacket_hue_shift(pcol, mp(MP_COLOR_SHIFT));
 
     col += pcol * (prob * 2.5);
 

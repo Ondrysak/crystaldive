@@ -23,8 +23,8 @@ fn stm_density(r: vec2<f32>) -> f32 {
     let psi_imag = cf2(vec3<f32>(r, 0.0));
     let rho_base = psi_real * psi_real + psi_imag * psi_imag;
 
-    let kF = u.kscale * (3.0 + u.field_mix * 4.0);
-    let qpi_amp = 0.18 * (0.6 + 1.4 * u.iso_level);
+    let kF = mp(MP_KSCALE) * (3.0 + mp(MP_FIELD_MIX) * 4.0);
+    let qpi_amp = 0.18 * (0.6 + 1.4 * mp(MP_ISO_LEVEL));
 
     var qpi = 0.0;
     for (var i = 0; i < 5; i++) {
@@ -59,8 +59,8 @@ fn stm_density_val_grad(r: vec2<f32>) -> vec3<f32> {
     var d_rho_dx  = 2.0 * (f1 * vg1.y + f2 * vg2.y * 1.37);
     var d_rho_dy  = 2.0 * (f1 * vg1.z + f2 * vg2.z * 1.37);
 
-    let kF      = u.kscale * (3.0 + u.field_mix * 4.0);
-    let qpi_amp = 0.18 * (0.6 + 1.4 * u.iso_level);
+    let kF      = mp(MP_KSCALE) * (3.0 + mp(MP_FIELD_MIX) * 4.0);
+    let qpi_amp = 0.18 * (0.6 + 1.4 * mp(MP_ISO_LEVEL));
 
     var qpi = 0.0;
     for (var i = 0; i < 5; i++) {
@@ -90,7 +90,7 @@ fn stm_density_val_grad(r: vec2<f32>) -> vec3<f32> {
     return vec3<f32>(rho_base + qpi, d_rho_dx, d_rho_dy);
 }
 
-// Hue rotation around the luma axis — driven by u.color_shift.
+// Hue rotation around the luma axis — driven by mp(MP_COLOR_SHIFT).
 fn stm_hue_rotate(c: vec3<f32>, h: f32) -> vec3<f32> {
     let k = vec3<f32>(0.57735, 0.57735, 0.57735);
     let cs = cos(h);
@@ -99,7 +99,7 @@ fn stm_hue_rotate(c: vec3<f32>, h: f32) -> vec3<f32> {
 }
 
 fn render_stm(uv: vec2<f32>) -> vec3<f32> {
-    let r = uv * 3.0 / u.zoom;
+    let r = uv * 3.0 / mp(MP_ZOOM);
 
     // Analytical gradient replaces 4 finite-difference stm_z calls (saves 8 crystal_field evals).
     let rho_vg = stm_density_val_grad(r);
@@ -120,7 +120,7 @@ fn render_stm(uv: vec2<f32>) -> vec3<f32> {
                       vec3<f32>(0.95, 0.65, 0.30),
                       smoothstep(0.0, 1.5, z_tip));
     // color_shift hue-rotates the palette.
-    palette = stm_hue_rotate(palette, u.color_shift * TAU);
+    palette = stm_hue_rotate(palette, mp(MP_COLOR_SHIFT) * TAU);
 
     var stm_col = mix(palette, u.crystal_color.xyz, 0.20) * (0.35 + 0.85 * diff);
 

@@ -31,11 +31,11 @@ fn spectral_path_K(k_param: f32) -> vec3<f32> {
     if (u.num_g >= 2u) {
         let g0 = g_block.gamp[0].xyz;
         let g1 = g_block.gamp[1].xyz;
-        K1 = g0 * u.kscale * 0.5;
-        K2 = (g0 + g1) * u.kscale * 0.5;
+        K1 = g0 * mp(MP_KSCALE) * 0.5;
+        K2 = (g0 + g1) * mp(MP_KSCALE) * 0.5;
     } else {
-        K1 = vec3<f32>(0.5, 0.0, 0.0) * u.kscale;
-        K2 = vec3<f32>(0.5, 0.5, 0.0) * u.kscale;
+        K1 = vec3<f32>(0.5, 0.0, 0.0) * mp(MP_KSCALE);
+        K2 = vec3<f32>(0.5, 0.5, 0.0) * mp(MP_KSCALE);
     }
     let K0 = vec3<f32>(0.0);
     let K3 = vec3<f32>(0.0);
@@ -66,11 +66,11 @@ fn spectral_palette(t: f32) -> vec3<f32> {
 }
 
 fn render_spectral(uv: vec2<f32>) -> vec3<f32> {
-    let t = u.time * u.speed;
+    let t = u.time * mp(MP_SPEED);
 
     // Screen mapping: x → k path parameter, y → binding energy ω.
     let k_param = clamp((uv.x / max(u.aspect, 0.0001)) * 0.5 + 0.5, 0.0, 1.0);
-    let omega   = uv.y * 2.0 / max(u.zoom, 0.05);
+    let omega   = uv.y * 2.0 / max(mp(MP_ZOOM), 0.05);
 
     // k-space sample point on Γ→X→M→Γ.
     let K = spectral_path_K(k_param);
@@ -89,7 +89,7 @@ fn render_spectral(uv: vec2<f32>) -> vec3<f32> {
 
     // Self-energy: Fermi-liquid-like ω² scattering. iso_level → coherent qp.
     var sigma = 0.04 + 0.30 * omega * omega;
-    sigma *= (1.0 - 0.7 * u.iso_level);
+    sigma *= (1.0 - 0.7 * mp(MP_ISO_LEVEL));
 
     // A(ω, k) = sum of broadened poles with descending spectral weight.
     let A = spectral_lorentz(omega, e1, sigma, 1.0)
@@ -103,7 +103,7 @@ fn render_spectral(uv: vec2<f32>) -> vec3<f32> {
     var col = spectral_palette(intensity);
 
     // Apply color_shift as a hue rotation of the warm/cool axis.
-    col = spectral_hue_shift(col, u.color_shift);
+    col = spectral_hue_shift(col, mp(MP_COLOR_SHIFT));
 
     // Tint slightly toward the crystal accent colour.
     col = mix(col, col * u.crystal_color.xyz, 0.18);

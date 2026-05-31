@@ -18,13 +18,13 @@ fn bz_path_segment_distance(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> vec2<f3
 }
 
 fn bz_path_k_point(s: f32) -> vec3<f32> {
-    var kx = vec3<f32>(0.55, 0.0, 0.0) * u.kscale;
-    var km = vec3<f32>(0.55, 0.55, 0.0) * u.kscale;
+    var kx = vec3<f32>(0.55, 0.0, 0.0) * mp(MP_KSCALE);
+    var km = vec3<f32>(0.55, 0.55, 0.0) * mp(MP_KSCALE);
     if (u.num_g >= 2u) {
         let g0 = g_block.gamp[0].xyz;
         let g1 = g_block.gamp[1].xyz;
-        kx = g0 * u.kscale * 0.5;
-        km = (g0 + g1) * u.kscale * 0.5;
+        kx = g0 * mp(MP_KSCALE) * 0.5;
+        km = (g0 + g1) * mp(MP_KSCALE) * 0.5;
     }
 
     if (s < 0.3333333) {
@@ -82,9 +82,9 @@ fn bz_path_response(k: vec3<f32>, phase: f32) -> f32 {
     for (var i = 0; i < ng_bzp; i++) {
         let ga = g_block.gamp[i];
         let ph = g_block.phases[i].x;
-        let g = ga.xyz * u.kscale;
+        let g = ga.xyz * mp(MP_KSCALE);
         let amp = ga.w;
-        let band = dot(g, k) * (0.35 + 0.45 * u.w_band);
+        let band = dot(g, k) * (0.35 + 0.45 * mp(MP_W_BAND));
         v += amp * cos(band + ph + phase * (1.0 + f32(i) * 0.013));
         norm += amp;
     }
@@ -124,13 +124,13 @@ fn bz_path_sd_circle(p: vec2<f32>, r: f32) -> f32 {
 }
 
 fn render_bz_path(uv: vec2<f32>) -> vec3<f32> {
-    let t = u.time * u.speed;
+    let t = u.time * mp(MP_SPEED);
     let aspect = max(u.aspect, 0.0001);
-    let p = vec2<f32>(uv.x / aspect, uv.y) * (1.08 / max(u.zoom, 0.2));
+    let p = vec2<f32>(uv.x / aspect, uv.y) * (1.08 / max(mp(MP_ZOOM), 0.2));
 
-    let accent = bz_path_hue_shift(max(u.crystal_color.xyz, vec3<f32>(0.08)), u.color_shift);
-    let gold = bz_path_hue_shift(vec3<f32>(1.0, 0.73, 0.28), u.color_shift * 0.45);
-    let cyan = bz_path_hue_shift(vec3<f32>(0.25, 0.92, 1.0), u.color_shift * 0.3 + 0.08);
+    let accent = bz_path_hue_shift(max(u.crystal_color.xyz, vec3<f32>(0.08)), mp(MP_COLOR_SHIFT));
+    let gold = bz_path_hue_shift(vec3<f32>(1.0, 0.73, 0.28), mp(MP_COLOR_SHIFT) * 0.45);
+    let cyan = bz_path_hue_shift(vec3<f32>(0.25, 0.92, 1.0), mp(MP_COLOR_SHIFT) * 0.3 + 0.08);
 
     let radial = dot(p, p);
     var col = vec3<f32>(0.003, 0.005, 0.012);
@@ -140,7 +140,7 @@ fn render_bz_path(uv: vec2<f32>) -> vec3<f32> {
     let q = bz_path_rot(scene_angle) * p;
     let parallax = vec2<f32>(0.11 * sin(t * 0.19), 0.07 * cos(t * 0.27));
 
-    let grid_scale = 6.5 + u.iso_level * 9.5;
+    let grid_scale = 6.5 + mp(MP_ISO_LEVEL) * 9.5;
     let lattice_a = q + parallax;
     let grid_x = abs(sin((lattice_a.x + lattice_a.y * 0.32) * grid_scale + t * 0.45));
     let grid_y = abs(sin((lattice_a.y - lattice_a.x * 0.28) * grid_scale - t * 0.32));
@@ -174,9 +174,9 @@ fn render_bz_path(uv: vec2<f32>) -> vec3<f32> {
     let k = bz_path_k_point(near.y);
     let response = bz_path_response(k, t * 0.75);
     let response2 = bz_path_response(k + vec3<f32>(0.21, 0.13, 0.08), t * -0.42);
-    let mixed_response = mix(response, response2, u.field_mix);
+    let mixed_response = mix(response, response2, mp(MP_FIELD_MIX));
 
-    let path_core_w = mix(0.020, 0.008, clamp(u.iso_level, 0.0, 1.0));
+    let path_core_w = mix(0.020, 0.008, clamp(mp(MP_ISO_LEVEL), 0.0, 1.0));
     let path_core = smoothstep(path_core_w, 0.0, near.x);
     let path_halo = exp(-(near.x * near.x) / 0.014);
     let traveling_s = fract(t * 0.155 + 0.025 * sin(t * 0.57));
@@ -228,7 +228,7 @@ fn render_bz_path(uv: vec2<f32>) -> vec3<f32> {
     let band_b = 0.12 + e1 * 0.16 - 0.030 * cos(TAU * (band_x * 2.0 + t * 0.11));
     let band_c = 0.26 + (e0 - e1) * 0.12 + 0.024 * sin(TAU * (band_x * 5.0 + t * 0.13));
     let band_d = -0.20 + (e0 + e1) * 0.08 - 0.020 * cos(TAU * (band_x * 4.0 - t * 0.20));
-    let band_w = mix(0.015, 0.006, clamp(u.iso_level, 0.0, 1.0));
+    let band_w = mix(0.015, 0.006, clamp(mp(MP_ISO_LEVEL), 0.0, 1.0));
     let band_pulse = exp(-min(abs(band_x - traveling_s), 1.0 - abs(band_x - traveling_s)) * 12.0);
     let line_a = smoothstep(band_w, 0.0, abs(band_y - band_a));
     let line_b = smoothstep(band_w, 0.0, abs(band_y - band_b));

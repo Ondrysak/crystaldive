@@ -54,31 +54,31 @@ fn nano_phase_fbm(p: vec2<f32>) -> f32 {
 
 // Soft palette: cold→warm interpolation, hue-rotated by color_shift.
 fn nano_phase_palette(x: f32) -> vec3<f32> {
-    let h = fract(u.color_shift + 0.0);
+    let h = fract(mp(MP_COLOR_SHIFT) + 0.0);
     let cold = 0.5 + 0.5 * cos(TAU * (h + vec3<f32>(0.62, 0.70, 0.85)));
     let warm = 0.5 + 0.5 * cos(TAU * (h + vec3<f32>(0.02, 0.18, 0.40)));
     return mix(cold, warm, clamp(x, 0.0, 1.0));
 }
 
 fn render_nano_phase(uv: vec2<f32>) -> vec3<f32> {
-    let t      = u.time * u.speed;
+    let t      = u.time * mp(MP_SPEED);
     // ── Geometry: particle radius R from kscale, centre from mouse drag.
     //   View-space coordinates so we have headroom for evaporated drops outside R.
-    let p = uv * (2.0 / max(u.zoom, 0.08));
+    let p = uv * (2.0 / max(mp(MP_ZOOM), 0.08));
     var centre = vec2<f32>(0.0, 0.0);
     if u.mouse_down >= 0.5 {
         // Mouse is in [0,1]² — map into the same view-space as p.
         centre = vec2<f32>(
-            (u.mouse.x - 0.5) * 2.0 * u.aspect * (2.0 / max(u.zoom, 0.08)),
-            (0.5 - u.mouse.y) * 2.0 * (2.0 / max(u.zoom, 0.08)),
+            (u.mouse.x - 0.5) * 2.0 * u.aspect * (2.0 / max(mp(MP_ZOOM), 0.08)),
+            (0.5 - u.mouse.y) * 2.0 * (2.0 / max(mp(MP_ZOOM), 0.08)),
         );
     }
-    let R = clamp(0.55 + 0.55 * u.kscale, 0.30, 1.40);
+    let R = clamp(0.55 + 0.55 * mp(MP_KSCALE), 0.30, 1.40);
 
     // ── Size-dependent melting point (Gibbs–Thomson). Smaller R → lower Tm.
     //   Tm_eff in [0..1] of the bulk; map iso_level so small particles melt early.
     let tm_eff = clamp(1.0 - 0.32 / max(R, 0.18), 0.30, 1.00);
-    let temp   = clamp(u.iso_level, 0.0, 1.0);
+    let temp   = clamp(mp(MP_ISO_LEVEL), 0.0, 1.0);
     // Reduced temperature relative to *this* particle's Tm:
     let theta  = clamp(temp / max(tm_eff, 0.05), 0.0, 1.30);
 
@@ -100,9 +100,9 @@ fn render_nano_phase(uv: vec2<f32>) -> vec3<f32> {
     // ── Crystalline core: crystal_field on local coords, scaled so a few unit
     //   cells span the core. Twin/martensitic habit plane sweeps through.
     let twin_dir = vec2<f32>(cos(0.55 + t * 0.18), sin(0.55 + t * 0.18));
-    let twin_pos = (u.field_mix - 0.5) * 1.6 * R + 0.25 * R * sin(t * 0.27);
+    let twin_pos = (mp(MP_FIELD_MIX) - 0.5) * 1.6 * R + 0.25 * R * sin(t * 0.27);
     let twin_s   = dot(d_local, twin_dir) - twin_pos;
-    let twin_w   = 0.04 + 0.18 * (1.0 - clamp(u.w_motif, 0.0, 1.0));  // wall thickness
+    let twin_w   = 0.04 + 0.18 * (1.0 - clamp(mp(MP_W_MOTIF), 0.0, 1.0));  // wall thickness
     let twin_mix = smoothstep(-twin_w, twin_w, twin_s);               // 0=austenite, 1=martensite
     let twin_wall = exp(-(twin_s * twin_s) / (twin_w * twin_w * 0.6));
     // Two sublattices: rotate the same crystal field by different angles to fake
@@ -125,7 +125,7 @@ fn render_nano_phase(uv: vec2<f32>) -> vec3<f32> {
     let shell_q = d_local * 3.2 + vec2<f32>(t * 0.7, -t * 0.5);
     let shell_n = nano_phase_fbm(shell_q);
     let shell_swirl = 0.5 + 0.5 * sin(cf2(vec3<f32>(d_local * 1.6, t * 0.3)) * 2.0 + shell_n * 4.0);
-    let shell_amp   = mix(0.5, 1.0, clamp(u.w_band, 0.0, 1.0));
+    let shell_amp   = mix(0.5, 1.0, clamp(mp(MP_W_BAND), 0.0, 1.0));
     let shell_val   = shell_swirl * shell_amp;
 
     // ── Vapour: drops of liquid evaporated into vacuum once T > Tm. We render
@@ -146,9 +146,9 @@ fn render_nano_phase(uv: vec2<f32>) -> vec3<f32> {
     let core_cold = mix(accent * 0.55, accent * 1.30, core_pattern);
     let core_warm = vec3<f32>(1.40, 0.85, 0.35);
     let core_col  = mix(core_cold, mix(core_cold, core_warm, 0.45), smoothstep(0.6, 0.99, theta))
-                  * (0.6 + 0.6 * clamp(u.w_lattice, 0.0, 1.0));
+                  * (0.6 + 0.6 * clamp(mp(MP_W_LATTICE), 0.0, 1.0));
     // Habit plane: bright thin band that flashes at the boundary.
-    let habit_col = vec3<f32>(1.20, 1.05, 0.60) * twin_wall * 0.55 * clamp(u.w_motif, 0.0, 1.0);
+    let habit_col = vec3<f32>(1.20, 1.05, 0.60) * twin_wall * 0.55 * clamp(mp(MP_W_MOTIF), 0.0, 1.0);
     // Shell: silvery hot liquid skin.
     let shell_col = nano_phase_palette(shell_val) * (0.55 + 0.55 * shell_val)
                   + vec3<f32>(1.10, 0.55, 0.25) * shell_val * 0.45 * smoothstep(0.4, 1.0, theta);

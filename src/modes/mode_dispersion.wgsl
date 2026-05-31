@@ -29,11 +29,11 @@ fn dispersion_path_K(k_param: f32) -> vec3<f32> {
     if (u.num_g >= 2u) {
         let g0 = g_block.gamp[0].xyz;
         let g1 = g_block.gamp[1].xyz;
-        K1 = g0 * u.kscale * 0.5;
-        K2 = (g0 + g1) * u.kscale * 0.5;
+        K1 = g0 * mp(MP_KSCALE) * 0.5;
+        K2 = (g0 + g1) * mp(MP_KSCALE) * 0.5;
     } else {
-        K1 = vec3<f32>(0.5, 0.0, 0.0) * u.kscale;
-        K2 = vec3<f32>(0.5, 0.5, 0.0) * u.kscale;
+        K1 = vec3<f32>(0.5, 0.0, 0.0) * mp(MP_KSCALE);
+        K2 = vec3<f32>(0.5, 0.5, 0.0) * mp(MP_KSCALE);
     }
     let K0 = vec3<f32>(0.0);
     let K3 = vec3<f32>(0.0);
@@ -48,18 +48,18 @@ fn dispersion_path_K(k_param: f32) -> vec3<f32> {
 }
 
 fn render_dispersion(uv: vec2<f32>) -> vec3<f32> {
-    let t = u.time * u.speed;
+    let t = u.time * mp(MP_SPEED);
 
     // Map screen coords -> path parameter and energy axis.
     let k_param  = clamp((uv.x / max(u.aspect, 0.0001)) * 0.5 + 0.5, 0.0, 1.0);
-    let eps_axis = uv.y * 2.0 / max(u.zoom, 0.05);
+    let eps_axis = uv.y * 2.0 / max(mp(MP_ZOOM), 0.05);
 
     // Sample path point and the two band candidates.
     let K         = dispersion_path_K(k_param);
     let eps_a     = dispersion_eps(K, 0.0);
     let eps_b     = dispersion_eps(K, 1.0);
-    let eps1      = mix(eps_a, eps_b, u.field_mix);
-    let eps2      = mix(eps_b, -eps_a, u.field_mix);
+    let eps1      = mix(eps_a, eps_b, mp(MP_FIELD_MIX));
+    let eps2      = mix(eps_b, -eps_a, mp(MP_FIELD_MIX));
 
     // Slow time-evolution: drift bands in energy, gently breathing.
     let drift1 = sin(t * 0.20) * 0.12;
@@ -84,7 +84,7 @@ fn render_dispersion(uv: vec2<f32>) -> vec3<f32> {
     col += smoothstep(0.005, 0.0, abs(uv.y)) * vec3<f32>(0.20, 0.22, 0.28);
 
     // Band line width — iso_level controls sharpness (higher → thinner).
-    let line_w = max(0.002, 0.012 * (1.0 - 0.7 * u.iso_level));
+    let line_w = max(0.002, 0.012 * (1.0 - 0.7 * mp(MP_ISO_LEVEL)));
 
     // Scrolling glow that sweeps along the path over time.
     let highlight_k  = fract(t * 0.1);
@@ -94,7 +94,7 @@ fn render_dispersion(uv: vec2<f32>) -> vec3<f32> {
 
     // Band 1 — crystal_color hue.
     let band1_base = u.crystal_color.xyz;
-    let band1_col  = dispersion_hue_shift(band1_base, u.color_shift);
+    let band1_col  = dispersion_hue_shift(band1_base, mp(MP_COLOR_SHIFT));
     let band1_line = smoothstep(line_w, 0.0, abs(eps_axis - e1));
     col += band1_line * band1_col * (1.6 + 2.4 * sweep_glow);
 
@@ -104,7 +104,7 @@ fn render_dispersion(uv: vec2<f32>) -> vec3<f32> {
 
     // Band 2 — complementary yellow-ish hue.
     let band2_base = vec3<f32>(1.0, 0.85, 0.35);
-    let band2_col  = dispersion_hue_shift(band2_base, u.color_shift);
+    let band2_col  = dispersion_hue_shift(band2_base, mp(MP_COLOR_SHIFT));
     let band2_line = smoothstep(line_w, 0.0, abs(eps_axis - e2));
     col += band2_line * band2_col * (1.4 + 2.2 * sweep_glow);
 

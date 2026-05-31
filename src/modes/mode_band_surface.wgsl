@@ -20,35 +20,35 @@ fn band_surface_wave(k: vec2<f32>, phase_mix: f32) -> f32 {
     for (var i = 0; i < ng_bs; i++) {
         let ga  = g_block.gamp[i];
         let ph  = g_block.phases[i].x;
-        let g2  = ga.xy * u.kscale;
+        let g2  = ga.xy * mp(MP_KSCALE);
         let amp = ga.w;
         let q   = dot(g2, k);
 
         let lat   = cos(q + ph * phase_mix);
         let motif = cos(q * 1.37 + ph * 1.9 + phase_mix * 1.7);
         let band  = sin(dot(vec2<f32>(-g2.y, g2.x), k) * 0.73 + ph);
-        e  += amp * (u.w_lattice * lat + u.w_motif * motif * 0.55 + u.w_band * band * 0.45);
-        ns += amp * (u.w_lattice + abs(u.w_motif) * 0.55 + abs(u.w_band) * 0.45);
+        e  += amp * (mp(MP_W_LATTICE) * lat + mp(MP_W_MOTIF) * motif * 0.55 + mp(MP_W_BAND) * band * 0.45);
+        ns += amp * (mp(MP_W_LATTICE) + abs(mp(MP_W_MOTIF)) * 0.55 + abs(mp(MP_W_BAND)) * 0.45);
     }
     return e / max(ns, 0.001);
 }
 
 fn band_surface_bands(k: vec2<f32>) -> vec3<f32> {
-    let t = u.time * u.speed;
+    let t = u.time * mp(MP_SPEED);
     let drift = vec2<f32>(cos(t * 0.09), sin(t * 0.07)) * 0.08;
-    let kr = band_surface_rot(k - drift, 0.45 + u.field_mix * 0.55);
+    let kr = band_surface_rot(k - drift, 0.45 + mp(MP_FIELD_MIX) * 0.55);
 
     let saddle_a = (k.x * k.x - k.y * k.y) * 0.18;
     let saddle_b = (kr.x * kr.y) * 0.34;
     let ripple_a = band_surface_wave(k + drift, 0.4);
     let ripple_b = band_surface_wave(kr * 1.12 - drift.yx, 1.0);
 
-    let e_a = ripple_a * 0.82 + saddle_a - 0.16 * u.iso_level;
-    let e_b = -ripple_b * 0.72 + saddle_b + 0.16 * (u.field_mix - 0.5);
+    let e_a = ripple_a * 0.82 + saddle_a - 0.16 * mp(MP_ISO_LEVEL);
+    let e_b = -ripple_b * 0.72 + saddle_b + 0.16 * (mp(MP_FIELD_MIX) - 0.5);
 
     let crossing = abs(e_a - e_b);
     let nodal = sin((k.x * 1.7 - k.y * 1.2) + t * 0.12);
-    let coupling = 0.055 + 0.22 * u.field_mix + 0.035 * nodal * nodal;
+    let coupling = 0.055 + 0.22 * mp(MP_FIELD_MIX) + 0.035 * nodal * nodal;
     let gap = sqrt(crossing * crossing + coupling * coupling);
 
     return vec3<f32>(0.5 * (e_a + e_b - gap), 0.5 * (e_a + e_b + gap), gap);
@@ -60,22 +60,22 @@ fn band_surface_contour(e: f32, spacing: f32, width: f32) -> f32 {
 }
 
 fn render_band_surface(uv: vec2<f32>) -> vec3<f32> {
-    let k = uv * (2.15 / max(u.zoom, 0.05));
+    let k = uv * (2.15 / max(mp(MP_ZOOM), 0.05));
     let bands = band_surface_bands(k);
     let e0 = bands.x;
     let e1 = bands.y;
     let gap = bands.z;
 
-    let base_a = band_surface_hue_shift(max(u.crystal_color.xyz, vec3<f32>(0.08)), u.color_shift);
-    let base_b = band_surface_hue_shift(vec3<f32>(1.0, 0.78, 0.30), u.color_shift + 0.08);
+    let base_a = band_surface_hue_shift(max(u.crystal_color.xyz, vec3<f32>(0.08)), mp(MP_COLOR_SHIFT));
+    let base_b = band_surface_hue_shift(vec3<f32>(1.0, 0.78, 0.30), mp(MP_COLOR_SHIFT) + 0.08);
 
     let energy_fill = 0.5 + 0.5 * tanh(e0 * 1.35);
     var col = mix(vec3<f32>(0.006, 0.008, 0.016), vec3<f32>(0.035, 0.025, 0.055), energy_fill);
     col += base_a * smoothstep(-0.55, 0.70, e0) * 0.16;
     col += base_b * smoothstep(0.80, -0.45, e1) * 0.10;
 
-    let spacing = mix(0.18, 0.075, clamp(u.iso_level, 0.0, 1.0));
-    let width = mix(0.018, 0.007, clamp(u.iso_level, 0.0, 1.0));
+    let spacing = mix(0.18, 0.075, clamp(mp(MP_ISO_LEVEL), 0.0, 1.0));
+    let width = mix(0.018, 0.007, clamp(mp(MP_ISO_LEVEL), 0.0, 1.0));
     let c0 = band_surface_contour(e0, spacing, width);
     let c1 = band_surface_contour(e1, spacing, width * 1.15);
     col += c0 * base_a * 1.35;

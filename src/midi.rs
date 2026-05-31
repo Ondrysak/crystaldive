@@ -209,15 +209,17 @@ pub fn apply_midi_cc(fp: &mut crate::FieldParams, snap: &CcSnapshot) {
     let lerp = |c: usize, lo: f32, hi: f32| -> Option<f32> {
         if snap.cc_set[c] { Some(lo + (hi - lo) * snap.cc[c]) } else { None }
     };
-    if let Some(v) = lerp(1,  0.1,  5.0)  { fp.kscale         = v; }
-    if let Some(v) = lerp(2,  0.0,  2.0)  { fp.speed          = v; }
-    if let Some(v) = lerp(3,  0.0,  1.0)  { fp.field_mix      = v; }
-    if let Some(v) = lerp(4,  0.0,  1.0)  { fp.iso_level      = v; }
-    if let Some(v) = lerp(5,  0.0,  1.0)  { fp.color_shift    = v; }
-    if let Some(v) = lerp(6,  0.2,  5.0)  { fp.zoom           = v; }
-    if let Some(v) = lerp(7,  0.0,  2.0)  { fp.w_lattice      = v; }
-    if let Some(v) = lerp(8,  0.0,  2.0)  { fp.w_motif        = v; }
-    if let Some(v) = lerp(9,  0.0,  2.0)  { fp.w_band         = v; }
+    use crate::{MP_KSCALE, MP_SPEED, MP_FIELD_MIX, MP_ISO_LEVEL, MP_COLOR_SHIFT,
+                MP_ZOOM, MP_W_LATTICE, MP_W_MOTIF, MP_W_BAND};
+    if let Some(v) = lerp(1,  0.1,  5.0)  { fp.mp[MP_KSCALE]      = v; }
+    if let Some(v) = lerp(2,  0.0,  2.0)  { fp.mp[MP_SPEED]       = v; }
+    if let Some(v) = lerp(3,  0.0,  1.0)  { fp.mp[MP_FIELD_MIX]   = v; }
+    if let Some(v) = lerp(4,  0.0,  1.0)  { fp.mp[MP_ISO_LEVEL]   = v; }
+    if let Some(v) = lerp(5,  0.0,  1.0)  { fp.mp[MP_COLOR_SHIFT] = v; }
+    if let Some(v) = lerp(6,  0.2,  5.0)  { fp.mp[MP_ZOOM]        = v; }
+    if let Some(v) = lerp(7,  0.0,  2.0)  { fp.mp[MP_W_LATTICE]   = v; }
+    if let Some(v) = lerp(8,  0.0,  2.0)  { fp.mp[MP_W_MOTIF]     = v; }
+    if let Some(v) = lerp(9,  0.0,  2.0)  { fp.mp[MP_W_BAND]      = v; }
     if let Some(v) = lerp(20, 0.30, 0.99) { fp.fb_decay       = v; }
     if let Some(v) = lerp(21, 0.90, 1.10) { fp.fb_zoom        = v; }
     if let Some(v) = lerp(22,-1.0,  1.0)  { fp.fb_color_shift = v; }
@@ -239,12 +241,14 @@ mod tests {
 
     #[test]
     fn unset_ccs_do_not_modify_fp() {
-        let original = FieldParams { kscale: 2.5, speed: 0.7, ..FieldParams::default() };
+        let mut original = FieldParams::default();
+        original.mp[crate::MP_KSCALE] = 2.5;
+        original.mp[crate::MP_SPEED]  = 0.7;
         let mut fp = original.clone();
         let snap = CcSnapshot::default(); // no CCs set
         apply_midi_cc(&mut fp, &snap);
-        assert!(approx_eq(fp.kscale, original.kscale));
-        assert!(approx_eq(fp.speed, original.speed));
+        assert!(approx_eq(fp.mp[crate::MP_KSCALE], original.mp[crate::MP_KSCALE]));
+        assert!(approx_eq(fp.mp[crate::MP_SPEED], original.mp[crate::MP_SPEED]));
     }
 
     #[test]
@@ -255,15 +259,15 @@ mod tests {
 
         snap.cc[1] = 0.0;
         apply_midi_cc(&mut fp, &snap);
-        assert!(approx_eq(fp.kscale, 0.1), "cc=0 -> kscale=0.1");
+        assert!(approx_eq(fp.mp[crate::MP_KSCALE], 0.1), "cc=0 -> kscale=0.1");
 
         snap.cc[1] = 1.0;
         apply_midi_cc(&mut fp, &snap);
-        assert!(approx_eq(fp.kscale, 5.0), "cc=1 -> kscale=5.0");
+        assert!(approx_eq(fp.mp[crate::MP_KSCALE], 5.0), "cc=1 -> kscale=5.0");
 
         snap.cc[1] = 0.5;
         apply_midi_cc(&mut fp, &snap);
-        assert!(approx_eq(fp.kscale, 2.55), "cc=0.5 -> kscale=mid");
+        assert!(approx_eq(fp.mp[crate::MP_KSCALE], 2.55), "cc=0.5 -> kscale=mid");
     }
 
     #[test]
@@ -284,14 +288,16 @@ mod tests {
 
     #[test]
     fn cc_set_only_partial_does_not_touch_others() {
-        let original = FieldParams { speed: 1.2, w_motif: 1.7, ..FieldParams::default() };
+        let mut original = FieldParams::default();
+        original.mp[crate::MP_SPEED]   = 1.2;
+        original.mp[crate::MP_W_MOTIF] = 1.7;
         let mut fp = original.clone();
         let mut snap = CcSnapshot::default();
         snap.cc_set[1] = true; snap.cc[1] = 0.5;  // kscale only
         apply_midi_cc(&mut fp, &snap);
-        assert!(approx_eq(fp.kscale,  2.55));
-        assert!(approx_eq(fp.speed,   original.speed));
-        assert!(approx_eq(fp.w_motif, original.w_motif));
+        assert!(approx_eq(fp.mp[crate::MP_KSCALE],  2.55));
+        assert!(approx_eq(fp.mp[crate::MP_SPEED],   original.mp[crate::MP_SPEED]));
+        assert!(approx_eq(fp.mp[crate::MP_W_MOTIF], original.mp[crate::MP_W_MOTIF]));
     }
 
     #[test]
@@ -313,15 +319,15 @@ mod tests {
     /// (cc, range_lo, range_hi, getter)
     type CcExpect = (usize, f32, f32, fn(&FieldParams) -> f32);
     const CC_EXPECT: &[CcExpect] = &[
-        (1,   0.1,  5.0,  |p| p.kscale),
-        (2,   0.0,  2.0,  |p| p.speed),
-        (3,   0.0,  1.0,  |p| p.field_mix),
-        (4,   0.0,  1.0,  |p| p.iso_level),
-        (5,   0.0,  1.0,  |p| p.color_shift),
-        (6,   0.2,  5.0,  |p| p.zoom),
-        (7,   0.0,  2.0,  |p| p.w_lattice),
-        (8,   0.0,  2.0,  |p| p.w_motif),
-        (9,   0.0,  2.0,  |p| p.w_band),
+        (1,   0.1,  5.0,  |p| p.mp[crate::MP_KSCALE]),
+        (2,   0.0,  2.0,  |p| p.mp[crate::MP_SPEED]),
+        (3,   0.0,  1.0,  |p| p.mp[crate::MP_FIELD_MIX]),
+        (4,   0.0,  1.0,  |p| p.mp[crate::MP_ISO_LEVEL]),
+        (5,   0.0,  1.0,  |p| p.mp[crate::MP_COLOR_SHIFT]),
+        (6,   0.2,  5.0,  |p| p.mp[crate::MP_ZOOM]),
+        (7,   0.0,  2.0,  |p| p.mp[crate::MP_W_LATTICE]),
+        (8,   0.0,  2.0,  |p| p.mp[crate::MP_W_MOTIF]),
+        (9,   0.0,  2.0,  |p| p.mp[crate::MP_W_BAND]),
         (20,  0.30, 0.99, |p| p.fb_decay),
         (21,  0.90, 1.10, |p| p.fb_zoom),
         (22, -1.0,  1.0,  |p| p.fb_color_shift),
@@ -382,7 +388,7 @@ mod tests {
         apply_midi_cc(&mut a, &snap);
         apply_midi_cc(&mut b, &snap);
         apply_midi_cc(&mut b, &snap); // second time should be a no-op effect
-        assert!(approx_eq(a.kscale,        b.kscale));
+        assert!(approx_eq(a.mp[crate::MP_KSCALE],        b.mp[crate::MP_KSCALE]));
         assert!(approx_eq(a.fb_brightness, b.fb_brightness));
     }
 
@@ -551,8 +557,8 @@ mod tests {
         let snap = CcSnapshot::from_state(&s);
         apply_midi_cc(&mut fp, &snap);
         // CC1: 64/127 ≈ 0.5039 → kscale lerps near mid of [0.1, 5.0] ≈ 2.57
-        assert!((fp.kscale - 2.57).abs() < 0.05,
-            "kscale should land near mid-range, got {}", fp.kscale);
+        assert!((fp.mp[crate::MP_KSCALE] - 2.57).abs() < 0.05,
+            "kscale should land near mid-range, got {}", fp.mp[crate::MP_KSCALE]);
         // CC24: 1.0 → fb_brightness at max of [0.0, 2.0]
         assert!((fp.fb_brightness - 2.0).abs() < 1e-3,
             "fb_brightness should hit 2.0, got {}", fp.fb_brightness);

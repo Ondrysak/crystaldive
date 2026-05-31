@@ -24,25 +24,51 @@ tone-map + gamma + vignette afterwards).
 
 ```wgsl
 struct FU {
+    mp:            array<vec4<f32>, 4>,  // 16-slot per-mode param bank (see below)
     time:          f32,    // seconds since start
-    kscale:        f32,    // global scale on every G vector
-    speed:         f32,    // animation rate multiplier
-    field_mix:     f32,    // user slider, 0..1, semantic up to you
-    iso_level:     f32,    // user slider, 0..1, semantic up to you
-    color_shift:   f32,    // user slider, hue rotation
-    zoom:          f32,    // user slider, 0.2..3 typical
-    w_lattice:     f32,    // band weight (already used by crystal_field)
-    w_motif:       f32,    // band weight
-    w_band:        f32,    // band weight
     mode:          u32,    // current mode index
     num_g:         u32,    // number of valid entries in g_block (≤ 128)
+    aspect:        f32,        // viewport.x / viewport.y
     crystal_color: vec4<f32>,  // .xyz accent color of current crystal system
     mouse:         vec2<f32>,  // .x,.y in [0,1] when mouse_down >= 0.5
     mouse_down:    f32,        // 0 or 1
-    aspect:        f32,        // viewport.x / viewport.y
+    // … feedback (fb_*) fields follow; post-process, not per-mode.
 }
 @group(0) @binding(0) var<uniform> u: FU;
+```
 
+## The per-mode parameter bank (`mp`)
+
+There are **no fixed global sliders** any more. Each mode declares its own
+panel. Read slot `i` (0..15) with the accessor `mp(i)`:
+
+```wgsl
+fn mp(i: u32) -> f32 { return u.mp[i >> 2u][i & 3u]; }
+```
+
+Slots **0..8 are the canonical crystal-field generator params** — `crystal_field`,
+`cf2`, `sdf`, `calc_normal`, and `cfield_col` read them internally:
+
+```wgsl
+const MP_KSCALE=0u; MP_SPEED=1u; MP_FIELD_MIX=2u; MP_ISO_LEVEL=3u;
+const MP_COLOR_SHIFT=4u; MP_ZOOM=5u; MP_W_LATTICE=6u; MP_W_MOTIF=7u; MP_W_BAND=8u;
+```
+
+- If your mode **calls** `crystal_field`/`sdf`/`cfield_col`, leave slots 0..8
+  meaning the generator's params (you may still expose/relabel them).
+- If your mode does **not** use those helpers, you may repurpose all 16 slots.
+- Slots **9..15 are always free** for bespoke per-mode knobs (e.g. LORENZ's
+  `sigma`/`rho`/`beta`/`dt`).
+
+Declare the panel in `info.rs` (`mode_params` → a `&[ParamDesc]` list of
+`{slot, name, min, max, default}`). The egui panel renders one named slider per
+declared slot for the active mode; LFO/mic ranges come from the same metadata.
+
+The preset/random/tour generators only fill slots 0..8. A bespoke **free** slot
+will arrive as `0` from those sources, so guard it:
+`let v = mp(9u); let eff = select(DEFAULT, v, v > 1e-4);`.
+
+```wgsl
 struct GBlock {
     gamp:   array<vec4<f32>, 128>,  // xyz = G (unscaled Å⁻¹), w = amplitude
     phases: array<vec4<f32>, 128>,  // x = initial phase (yzw unused)
@@ -71,7 +97,7 @@ const TAU: f32 = 6.28318530718;
 
 fn crystal_field(x: vec3<f32>) -> f32;          // Σ amp·cos(G·x + φ + ωt) (3 bands)
 fn cf2(x: vec3<f32>) -> f32;                    // shifted/scaled twin field
-fn sdf(p: vec3<f32>) -> f32;                    // |mix(cf, cf2, field_mix)| - iso_level*0.3
+fn sdf(p: vec3<f32>) -> f32;                    // |mix(cf, cf2, mp(2))| - mp(3)*0.3
 fn calc_normal(p: vec3<f32>) -> vec3<f32>;      // gradient of sdf
 fn cfield_col(f: f32, f2: f32, n: vec3<f32>) -> vec3<f32>;
 ```

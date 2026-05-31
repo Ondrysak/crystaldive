@@ -49,7 +49,7 @@ fn lensing_noise3(p: vec3<f32>) -> f32 {
 }
 
 fn lensing_sky(dir: vec3<f32>) -> vec3<f32> {
-    let neb_n = lensing_noise3(dir * 2.0 + vec3<f32>(0.0, u.time * u.speed * 0.02, 0.0));
+    let neb_n = lensing_noise3(dir * 2.0 + vec3<f32>(0.0, u.time * mp(MP_SPEED) * 0.02, 0.0));
     let cf    = 0.5 + 0.5 * crystal_field(dir * 4.0);
     var neb   = vec3<f32>(0.025, 0.020, 0.055) + 0.18 * u.crystal_color.xyz * cf * neb_n;
     neb += vec3<f32>(0.10, 0.04, 0.18) * pow(neb_n, 3.0);
@@ -121,7 +121,7 @@ fn lensing_disk_image(cam_pos: vec3<f32>, ray_dir: vec3<f32>, n_image: i32) -> v
     let boost  = pow(dop * grav, 4.0);
 
     let omega  = sqrt(0.5 / max(r * r * r, 1e-3));
-    let t_phys = u.time * u.speed;
+    let t_phys = u.time * mp(MP_SPEED);
     let arm    = 0.5 + 0.5 * cos(phi * 2.0 - omega * t_phys * 8.0 + r * 0.9);
     let turb   = 0.6 + 0.4 * crystal_field(hit * 0.6 + vec3<f32>(0.0, t_phys, 0.0));
 
@@ -130,8 +130,8 @@ fn lensing_disk_image(cam_pos: vec3<f32>, ray_dir: vec3<f32>, n_image: i32) -> v
     let cool = mix(vec3<f32>(1.00, 0.55, 0.20), vec3<f32>(0.55, 0.15, 0.10),
                   smoothstep(LENS_RIN + 1.5, LENS_ROU, r));
     var col  = mix(hot, cool, smoothstep(LENS_RIN + 1.0, LENS_RIN + 3.0, r));
-    col = lensing_hue_shift(col, u.color_shift);
-    let iso_boost = mix(0.6, 1.8, u.iso_level);
+    col = lensing_hue_shift(col, mp(MP_COLOR_SHIFT));
+    let iso_boost = mix(0.6, 1.8, mp(MP_ISO_LEVEL));
     col *= eps * boost * iso_boost * (0.55 + 0.55 * arm) * turb;
     if (n_image == 1) { col *= 0.55; }
 
@@ -141,10 +141,10 @@ fn lensing_disk_image(cam_pos: vec3<f32>, ray_dir: vec3<f32>, n_image: i32) -> v
 }
 
 fn render_lensing(uv: vec2<f32>) -> vec3<f32> {
-    let t = u.time * u.speed;
+    let t = u.time * mp(MP_SPEED);
 
     var az = t * 0.07;
-    var el = mix(0.05, 0.55, u.field_mix);
+    var el = mix(0.05, 0.55, mp(MP_FIELD_MIX));
     if (u.mouse_down >= 0.5) {
         az = u.mouse.x * TAU;
         el = mix(0.02, 1.1, clamp(u.mouse.y, 0.0, 1.0));
@@ -157,7 +157,7 @@ fn render_lensing(uv: vec2<f32>) -> vec3<f32> {
     let right    = normalize(cross(fwd, world_up));
     let up       = cross(right, fwd);
 
-    let fov = 1.0 / max(u.zoom, 0.2);
+    let fov = 1.0 / max(mp(MP_ZOOM), 0.2);
     let ray = normalize(fwd + right * uv.x * fov + up * uv.y * fov);
 
     let cd  = dot(cam_pos, ray);

@@ -31,13 +31,13 @@ fn strain_pol_density(p_strained: vec3<f32>, eps: f32) -> f32 {
 }
 
 fn render_strain_field(uv: vec2<f32>) -> vec3<f32> {
-    let t = u.time * u.speed;
-    let zoom = max(u.zoom, 0.1);
+    let t = u.time * mp(MP_SPEED);
+    let zoom = max(mp(MP_ZOOM), 0.1);
 
     // Animate strain: cycle between compression and tension
-    let eps_max = 0.18 + 0.22 * u.iso_level;
-    let eps = eps_max * sin(t * 0.55) * (1.0 - u.field_mix)
-            + eps_max * u.field_mix;  // field_mix holds strain at max
+    let eps_max = 0.18 + 0.22 * mp(MP_ISO_LEVEL);
+    let eps = eps_max * sin(t * 0.55) * (1.0 - mp(MP_FIELD_MIX))
+            + eps_max * mp(MP_FIELD_MIX);  // field_mix holds strain at max
 
     // Dividing line x = split
     let split = 0.0;
@@ -61,7 +61,7 @@ fn render_strain_field(uv: vec2<f32>) -> vec3<f32> {
     let base = u.crystal_color.xyz;
     let amp = sqrt(f_use * f_use + f2_use * f2_use);
     let phase = atan2(f2_use, f_use);
-    let hue_shift = phase / TAU + u.color_shift;
+    let hue_shift = phase / TAU + mp(MP_COLOR_SHIFT);
     // Simple hue rotation
     let hue_k = vec3<f32>(0.57735);
     let cs = cos(hue_shift * TAU);

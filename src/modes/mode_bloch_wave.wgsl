@@ -22,16 +22,16 @@ fn bloch_sigma(t: f32, F: f32) -> f32 {
 fn render_bloch_wave(uv: vec2<f32>) -> vec3<f32> {
     // Map screen-y to a time slice (older history downward, newest at top),
     // and scroll the whole pattern upward over wall-clock time.
-    let zoom     = max(u.zoom, 0.1);
+    let zoom     = max(mp(MP_ZOOM), 0.1);
     let tau      = (1.0 - uv.y) * 0.5 * (8.0 / zoom);
-    let t_global = u.time * u.speed * 0.5;
+    let t_global = u.time * mp(MP_SPEED) * 0.5;
     let t_eff    = tau + t_global;
 
     // Real-space x.
     let x = uv.x * 4.0 / zoom;
 
     // DC field strength controls Bloch period T_B = 2π / F.
-    let F = 0.4 + u.field_mix * 1.2;
+    let F = 0.4 + mp(MP_FIELD_MIX) * 1.2;
 
     // Wavepacket centre and width at this (x, t) sample.
     let xc    = bloch_xc(t_eff, F);
@@ -49,16 +49,16 @@ fn render_bloch_wave(uv: vec2<f32>) -> vec3<f32> {
     var col = vec3<f32>(0.012, 0.018, 0.045) * age_fade;
 
     // ── Faint lattice potential heatmap (vertical stripes). ──────────────
-    let lattice = 0.5 + 0.5 * cos(x * (3.0 + u.kscale * 1.5));
+    let lattice = 0.5 + 0.5 * cos(x * (3.0 + mp(MP_KSCALE) * 1.5));
     col += pow(lattice, 6.0) * u.crystal_color.xyz * 0.10 * age_fade;
 
     // ── Wavepacket glow, coloured by phase (rainbow palette). ────────────
-    let hue = fract(phase / TAU * 0.5 + u.color_shift);
+    let hue = fract(phase / TAU * 0.5 + mp(MP_COLOR_SHIFT));
     let pal = 0.5 + 0.5 * cos(TAU * (hue + vec3<f32>(0.0, 0.333, 0.667)));
     col += pal * pow(rho, 0.7) * 1.4;
 
     // ── Phase fringes overlaid on the density. ───────────────────────────
-    let fringe_contrast = 0.5 + 0.5 * u.iso_level;
+    let fringe_contrast = 0.5 + 0.5 * mp(MP_ISO_LEVEL);
     col += rho * (0.5 + 0.5 * cos(phase * 4.0 + tau * 2.0)) * 0.25
               * fringe_contrast * u.crystal_color.xyz;
 

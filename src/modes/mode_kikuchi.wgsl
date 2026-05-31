@@ -1,6 +1,6 @@
 // ── Mode 19: KIKUCHI — EBSD-style Kikuchi band pattern from reciprocal lattice ──
 fn render_kikuchi(uv: vec2<f32>) -> vec3<f32> {
-    let t  = u.time * u.speed * 0.06;
+    let t  = u.time * mp(MP_SPEED) * 0.06;
     var az = t;
     var el = 0.15;
     if u.mouse_down >= 0.5 {
@@ -10,7 +10,7 @@ fn render_kikuchi(uv: vec2<f32>) -> vec3<f32> {
     let ca = cos(az); let sa = sin(az);
     let ce = cos(el); let se = sin(el);
 
-    let band_w = 0.005 + 0.012 * (1.0 - u.iso_level);
+    let band_w = 0.005 + 0.012 * (1.0 - mp(MP_ISO_LEVEL));
     let inv_bw2 = 1.0 / max(band_w * band_w, 1e-8);
 
     var bands  = 0.0;
@@ -20,7 +20,7 @@ fn render_kikuchi(uv: vec2<f32>) -> vec3<f32> {
     for (var i = 0; i < ng_ki; i++) {
         let ga  = g_block.gamp[i];
         let amp = ga.w;
-        let G   = ga.xyz * u.kscale;
+        let G   = ga.xyz * mp(MP_KSCALE);
 
         let gx  = G.x*ca - G.z*sa;
         let gyr = G.x*sa + G.z*ca;
@@ -38,7 +38,7 @@ fn render_kikuchi(uv: vec2<f32>) -> vec3<f32> {
         let d_perp = dot(uv, n);
 
         let G_len = length(G);
-        let D     = G_len * 0.18 / max(u.zoom, 1e-4);
+        let D     = G_len * 0.18 / max(mp(MP_ZOOM), 1e-4);
 
         let dp = d_par - D;
         let dn = d_par + D;
@@ -79,7 +79,7 @@ fn render_kikuchi(uv: vec2<f32>) -> vec3<f32> {
     col += exp(-r*r * 600.0) * vec3<f32>(1.0, 0.92, 0.70) * 0.18;
 
     // Circular detector boundary fade (vignette is disabled for this mode).
-    let edge = 1.0 - smoothstep(0.85, 0.98, r * u.zoom);
+    let edge = 1.0 - smoothstep(0.85, 0.98, r * mp(MP_ZOOM));
     col *= edge;
 
     return col;

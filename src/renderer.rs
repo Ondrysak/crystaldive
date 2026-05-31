@@ -45,42 +45,52 @@ struct PostParams {
 
 /// Uniform block for the crystal-field fragment shader.
 /// Layout must match the WGSL `FU` struct exactly.
+///
+/// `mp` is the 16-slot per-mode parameter bank (see `FieldParams::mp`). It is
+/// packed as 4×vec4 (not a flat `[f32; 16]`) because uniform-address-space array
+/// elements have a 16-byte stride under std140; the WGSL side reads it via the
+/// `mp(i)` accessor. Slots 0..8 carry the canonical crystal-field generator
+/// params (kscale, speed, field_mix, iso_level, color_shift, zoom,
+/// w_lattice, w_motif, w_band); slots 9..15 are free per mode.
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct FieldUniform {
-    pub time:           f32,   //   0
-    pub kscale:         f32,   //   4
-    pub speed:          f32,   //   8
-    pub field_mix:      f32,   //  12
-    pub iso_level:      f32,   //  16
-    pub color_shift:    f32,   //  20
-    pub zoom:           f32,   //  24
-    pub w_lattice:      f32,   //  28
-    pub w_motif:        f32,   //  32
-    pub w_band:         f32,   //  36
-    pub mode:           u32,   //  40
-    pub num_g:          u32,   //  44
-    pub crystal_color:  [f32; 4], //  48
-    pub mouse:          [f32; 2], //  64
-    pub mouse_down:     f32,   //  72
+    pub mp:             [[f32; 4]; 4], //   0..64 — per-mode param bank (vec4-packed)
+    pub time:           f32,   //  64
+    pub mode:           u32,   //  68
+    pub num_g:          u32,   //  72
     pub aspect:         f32,   //  76
+    pub crystal_color:  [f32; 4], //  80
+    pub mouse:          [f32; 2], //  96
+    pub mouse_down:     f32,   // 104
     // feedback fields
-    pub fb_enabled:     u32,   //  80
-    pub fb_mirror:      u32,   //  84
-    pub fb_zoom:        f32,   //  88
-    pub fb_offset_x:    f32,   //  92
-    pub fb_offset_y:    f32,   //  96
-    pub fb_rotation:    f32,   // 100
-    pub fb_decay:       f32,   // 104
-    pub fb_color_shift: f32,   // 108
-    pub fb_inject:      f32,   // 112
-    pub fb_fold_angle:  f32,   // 116
-    pub fb_saturation:  f32,   // 120
-    pub fb_brightness:  f32,   // 124
-    pub fb_blend_mode:  u32,   // 128
-    pub fb_motion_blur: f32,   // 132 — un-warped temporal smoothing (Fraksl MotionBlur)
-    pub _pad:           [f32; 2],  // 136..144 — align to 144 (WGSL 16-byte struct align)
-}                              // total 144 bytes
+    pub fb_enabled:     u32,   // 108
+    pub fb_mirror:      u32,   // 112
+    pub fb_zoom:        f32,   // 116
+    pub fb_offset_x:    f32,   // 120
+    pub fb_offset_y:    f32,   // 124
+    pub fb_rotation:    f32,   // 128
+    pub fb_decay:       f32,   // 132
+    pub fb_color_shift: f32,   // 136
+    pub fb_inject:      f32,   // 140
+    pub fb_fold_angle:  f32,   // 144
+    pub fb_saturation:  f32,   // 148
+    pub fb_brightness:  f32,   // 152
+    pub fb_blend_mode:  u32,   // 156
+    pub fb_motion_blur: f32,   // 160 — un-warped temporal smoothing (Fraksl MotionBlur)
+    pub _pad:           [f32; 3],  // 164..176 — align to 176 (WGSL 16-byte struct align)
+}                              // total 176 bytes
+
+/// Pack the flat 16-slot param bank into the vec4-aligned uniform layout.
+#[inline]
+pub fn pack_mp(mp: &[f32; 16]) -> [[f32; 4]; 4] {
+    [
+        [mp[0], mp[1], mp[2], mp[3]],
+        [mp[4], mp[5], mp[6], mp[7]],
+        [mp[8], mp[9], mp[10], mp[11]],
+        [mp[12], mp[13], mp[14], mp[15]],
+    ]
+}
 
 pub struct FieldPipeline {
     pub uniform_buf: wgpu::Buffer,

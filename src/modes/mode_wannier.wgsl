@@ -7,7 +7,7 @@ fn wannier_psi(r: vec3<f32>) -> vec2<f32> {
     for (var i = 0i; i < ng_wa; i++) {
         let ga  = g_block.gamp[i];
         let ph  = g_block.phases[i].x;
-        let G   = ga.xyz * u.kscale;
+        let G   = ga.xyz * mp(MP_KSCALE);
         let amp = ga.w;
         let arg = dot(G, r) + ph;
         re += amp * cos(arg);
@@ -17,7 +17,7 @@ fn wannier_psi(r: vec3<f32>) -> vec2<f32> {
 }
 
 fn wannier_center() -> vec3<f32> {
-    return vec3<f32>((u.field_mix - 0.5) * 1.5, 0.0, 0.0);
+    return vec3<f32>((mp(MP_FIELD_MIX) - 0.5) * 1.5, 0.0, 0.0);
 }
 
 fn wannier_loc(r: vec3<f32>) -> vec2<f32> {
@@ -29,17 +29,17 @@ fn wannier_loc(r: vec3<f32>) -> vec2<f32> {
 fn wannier_sdf(r: vec3<f32>) -> f32 {
     let psi = wannier_loc(r);
     let rho = psi.x * psi.x + psi.y * psi.y;
-    return u.iso_level * 0.5 - sqrt(rho + 1e-6);
+    return mp(MP_ISO_LEVEL) * 0.5 - sqrt(rho + 1e-6);
 }
 
 fn render_wannier(uv: vec2<f32>) -> vec3<f32> {
-    var az = u.time * u.speed * 0.15;
+    var az = u.time * mp(MP_SPEED) * 0.15;
     var el = 0.4;
     if u.mouse_down >= 0.5 {
         az = u.mouse.x * TAU;
         el = (u.mouse.y - 0.5) * 2.5;
     }
-    let cp  = vec3<f32>(sin(az)*cos(el), sin(el), cos(az)*cos(el)) * (3.0 / u.zoom);
+    let cp  = vec3<f32>(sin(az)*cos(el), sin(el), cos(az)*cos(el)) * (3.0 / mp(MP_ZOOM));
     let fwd = normalize(-cp);
     let rgt = normalize(cross(vec3<f32>(0.0, 1.0, 0.0), fwd));
     let up  = cross(fwd, rgt);
@@ -87,7 +87,7 @@ fn render_wannier(uv: vec2<f32>) -> vec3<f32> {
         for (var k = 0i; k < ng_wn; k++) {
             let ga  = g_block.gamp[k];
             let ph  = g_block.phases[k].x;
-            let G   = ga.xyz * u.kscale;
+            let G   = ga.xyz * mp(MP_KSCALE);
             let amp = ga.w;
             let arg = dot(G, rl) + ph;
             let c   = cos(arg);

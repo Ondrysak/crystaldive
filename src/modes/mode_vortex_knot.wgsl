@@ -7,9 +7,9 @@ fn vortex_psi(r: vec3<f32>) -> vec2<f32> {
     for (var i = 0i; i < ng_vk; i++) {
         let ga = g_block.gamp[i];
         let ph = g_block.phases[i].x;
-        let G  = ga.xyz * u.kscale;
+        let G  = ga.xyz * mp(MP_KSCALE);
         let amp = ga.w;
-        let arg = dot(G, r) + ph + u.time * u.speed * 0.15 * f32(i + 1);
+        let arg = dot(G, r) + ph + u.time * mp(MP_SPEED) * 0.15 * f32(i + 1);
         re += amp * cos(arg);
         im += amp * sin(arg);
     }
@@ -17,12 +17,12 @@ fn vortex_psi(r: vec3<f32>) -> vec2<f32> {
 }
 
 fn vortex_field(r: vec3<f32>) -> vec2<f32> {
-    let r_eff = r - vec3<f32>((u.field_mix - 0.5) * 0.8, 0.0, 0.0);
+    let r_eff = r - vec3<f32>((mp(MP_FIELD_MIX) - 0.5) * 0.8, 0.0, 0.0);
     return vortex_psi(r_eff);
 }
 
 fn vortex_sdf(r: vec3<f32>) -> f32 {
-    let R_tube = 0.04 + 0.06 * u.iso_level;
+    let R_tube = 0.04 + 0.06 * mp(MP_ISO_LEVEL);
     let psi = vortex_field(r);
     return length(psi) - R_tube;
 }
@@ -37,14 +37,14 @@ fn vortex_normal(p: vec3<f32>) -> vec3<f32> {
 }
 
 fn render_vortex_knot(uv: vec2<f32>) -> vec3<f32> {
-    let t  = u.time * u.speed;
+    let t  = u.time * mp(MP_SPEED);
     var az = t * 0.15;
     var el = 0.4;
     if u.mouse_down >= 0.5 {
         az = u.mouse.x * TAU;
         el = (u.mouse.y - 0.5) * 2.5;
     }
-    let cp  = vec3<f32>(sin(az)*cos(el), sin(el), cos(az)*cos(el)) * (4.0 / u.zoom);
+    let cp  = vec3<f32>(sin(az)*cos(el), sin(el), cos(az)*cos(el)) * (4.0 / mp(MP_ZOOM));
     let fwd = normalize(-cp);
     let rgt = normalize(cross(vec3<f32>(0.0, 1.0, 0.0), fwd));
     let up  = cross(fwd, rgt);
@@ -84,7 +84,7 @@ fn render_vortex_knot(uv: vec2<f32>) -> vec3<f32> {
         let psi_off = vortex_field(hit_p + off);
         let phase   = atan2(psi_off.y, psi_off.x);
 
-        let hue = fract(phase / TAU + u.color_shift + u.time * u.speed * 0.04);
+        let hue = fract(phase / TAU + mp(MP_COLOR_SHIFT) + u.time * mp(MP_SPEED) * 0.04);
         var surf = 0.5 + 0.5 * cos(TAU * (hue + vec3<f32>(0.0, 0.333, 0.667)));
         surf = mix(surf, u.crystal_color.xyz, 0.20);
 
@@ -110,7 +110,7 @@ fn render_vortex_knot(uv: vec2<f32>) -> vec3<f32> {
         let m2   = dot(psi, psi);
         let glow = exp(-m2 * 30.0);
         let phase = atan2(psi.y, psi.x);
-        let hue   = fract(phase / TAU + u.color_shift + u.time * u.speed * 0.04);
+        let hue   = fract(phase / TAU + mp(MP_COLOR_SHIFT) + u.time * mp(MP_SPEED) * 0.04);
         var hc    = 0.5 + 0.5 * cos(TAU * (hue + vec3<f32>(0.0, 0.333, 0.667)));
         hc = mix(hc, u.crystal_color.xyz, 0.35);
         halo += hc * glow * 0.06;

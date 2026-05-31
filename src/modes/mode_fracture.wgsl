@@ -13,12 +13,12 @@ fn fracture_strain(p: vec2<f32>, tip: vec2<f32>) -> vec2<f32> {
 }
 
 fn render_fracture(uv: vec2<f32>) -> vec3<f32> {
-    let t = u.time * u.speed * 0.35;
-    let p = uv * (2.2 / max(u.zoom, 0.08));
-    let tip = vec2<f32>(mix(-1.15, 0.65, u.field_mix), fracture_crack_y(mix(-1.15, 0.65, u.field_mix), t));
+    let t = u.time * mp(MP_SPEED) * 0.35;
+    let p = uv * (2.2 / max(mp(MP_ZOOM), 0.08));
+    let tip = vec2<f32>(mix(-1.15, 0.65, mp(MP_FIELD_MIX)), fracture_crack_y(mix(-1.15, 0.65, mp(MP_FIELD_MIX)), t));
     let cy = fracture_crack_y(p.x, t);
     let behind = smoothstep(tip.x + 0.05, tip.x - 0.15, p.x);
-    let crack = behind * (1.0 - smoothstep(0.015, 0.085 + 0.08 * u.iso_level, abs(p.y - cy)));
+    let crack = behind * (1.0 - smoothstep(0.015, 0.085 + 0.08 * mp(MP_ISO_LEVEL), abs(p.y - cy)));
 
     let strain = fracture_strain(p, tip) * (1.0 - crack * 0.7);
     let warped = p + strain + vec2<f32>(0.0, sign(p.y - cy) * crack * 0.18);
@@ -29,7 +29,7 @@ fn render_fracture(uv: vec2<f32>) -> vec3<f32> {
     let rtip = length(p - tip);
     let stress = exp(-rtip * 1.6) * (0.55 + 0.45 * sin(rtip * 28.0 - t * 5.0));
     var col = mix(vec3<f32>(0.015, 0.014, 0.020), u.crystal_color.xyz * 0.55, lattice);
-    col += stress * vec3<f32>(1.2, 0.65, 0.22) * (0.7 + u.iso_level);
+    col += stress * vec3<f32>(1.2, 0.65, 0.22) * (0.7 + mp(MP_ISO_LEVEL));
     col = mix(col, vec3<f32>(0.0, 0.0, 0.0), crack * 0.88);
     col += crack * vec3<f32>(0.18, 0.30, 0.45) * smoothstep(0.08, 0.0, abs(p.y - cy));
     return col;

@@ -30,12 +30,12 @@ fn quasicrystal_spot(q: vec2<f32>, k: vec2<f32>, w: f32) -> f32 {
 
 fn render_quasicrystal(uv: vec2<f32>) -> vec3<f32> {
     let phi = 1.61803398875;
-    let t = u.time * u.speed;
+    let t = u.time * mp(MP_SPEED);
 
-    let zoom = max(u.zoom, 0.05);
-    let scale = (7.5 + 5.5 * u.kscale) / zoom;
+    let zoom = max(mp(MP_ZOOM), 0.05);
+    let scale = (7.5 + 5.5 * mp(MP_KSCALE)) / zoom;
     let irrational_turn = TAU / (phi * phi + 1.0);
-    let base_angle = u.color_shift * TAU * 0.17 + t * 0.025;
+    let base_angle = mp(MP_COLOR_SHIFT) * TAU * 0.17 + t * 0.025;
     let p = quasicrystal_rot(uv * scale, base_angle);
 
     var field_a = 0.0;
@@ -70,12 +70,12 @@ fn render_quasicrystal(uv: vec2<f32>) -> vec3<f32> {
     let interference = fa * fb + 0.45 * (fa + fb);
     let cells = abs(interference);
 
-    let iso = mix(0.18, 0.72, clamp(u.iso_level, 0.0, 1.0));
-    let line_w = mix(0.055, 0.014, clamp(u.iso_level, 0.0, 1.0));
+    let iso = mix(0.18, 0.72, clamp(mp(MP_ISO_LEVEL), 0.0, 1.0));
+    let line_w = mix(0.055, 0.014, clamp(mp(MP_ISO_LEVEL), 0.0, 1.0));
     let penrose_edges = smoothstep(line_w, 0.0, abs(cells - iso));
     let star_edges = smoothstep(line_w * 1.4, 0.0, abs(abs(fa) - abs(fb)));
 
-    let q_scale = mix(1.9, 3.1, u.field_mix);
+    let q_scale = mix(1.9, 3.1, mp(MP_FIELD_MIX));
     let q = uv * q_scale;
     var diffraction = 0.0;
     var ring = 0.0;
@@ -96,15 +96,15 @@ fn render_quasicrystal(uv: vec2<f32>) -> vec3<f32> {
     let base = mix(vec3<f32>(0.010, 0.010, 0.018),
                    u.crystal_color.xyz * 0.10,
                    0.45);
-    let cool = quasicrystal_hue_shift(vec3<f32>(0.20, 0.62, 0.95), u.color_shift);
-    let warm = quasicrystal_hue_shift(vec3<f32>(1.00, 0.78, 0.32), u.color_shift + 0.09);
-    let accent = quasicrystal_hue_shift(u.crystal_color.xyz, u.color_shift * 0.5);
+    let cool = quasicrystal_hue_shift(vec3<f32>(0.20, 0.62, 0.95), mp(MP_COLOR_SHIFT));
+    let warm = quasicrystal_hue_shift(vec3<f32>(1.00, 0.78, 0.32), mp(MP_COLOR_SHIFT) + 0.09);
+    let accent = quasicrystal_hue_shift(u.crystal_color.xyz, mp(MP_COLOR_SHIFT) * 0.5);
 
     var col = base;
     col += smoothstep(0.05, 0.95, cells) * cool * 0.35;
     col += penrose_edges * warm * (1.15 + 0.65 * radial_cut);
     col += star_edges * accent * 0.55;
-    col += ridge * inv_env * mix(0.18, 0.55, u.field_mix) * accent;
+    col += ridge * inv_env * mix(0.18, 0.55, mp(MP_FIELD_MIX)) * accent;
     col += decagon * mix(warm, vec3<f32>(1.0), 0.45) * 2.0;
     col += center_bloom * vec3<f32>(1.0, 0.92, 0.68) * 1.4;
     col += ring * 0.015 * cool;

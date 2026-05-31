@@ -26,31 +26,31 @@ fn ewald_point_hit(ro: vec3<f32>, rd: vec3<f32>, c: vec3<f32>, r: f32) -> f32 {
 }
 
 fn render_ewald(uv: vec2<f32>) -> vec3<f32> {
-    let t = u.time * u.speed;
+    let t = u.time * mp(MP_SPEED);
 
     // ── Incidence direction (mouse-controlled, otherwise slow precession) ──
-    var az_inc: f32 = u.time * u.speed * 0.1;
+    var az_inc: f32 = u.time * mp(MP_SPEED) * 0.1;
     var el_inc: f32 = 0.2;
     if u.mouse_down >= 0.5 {
         az_inc = u.mouse.x * TAU;
         el_inc = (u.mouse.y - 0.5) * 2.5;
     }
-    let k0 = 0.4 + u.iso_level * 2.5;
+    let k0 = 0.4 + mp(MP_ISO_LEVEL) * 2.5;
     let k_dir = vec3<f32>(sin(az_inc)*cos(el_inc), sin(el_inc), cos(az_inc)*cos(el_inc));
     let k_i  = k0 * k_dir;
     let c_ewald = -k_i;
     let R_ewald = k0;
 
     // ── Camera (independent slow orbit; mouse drives the sphere, not the cam) ──
-    let cam_az = u.time * u.speed * 0.07;
+    let cam_az = u.time * mp(MP_SPEED) * 0.07;
     let cam_el = 0.35;
-    let cp  = vec3<f32>(sin(cam_az)*cos(cam_el), sin(cam_el), cos(cam_az)*cos(cam_el)) * (5.5 / u.zoom);
+    let cp  = vec3<f32>(sin(cam_az)*cos(cam_el), sin(cam_el), cos(cam_az)*cos(cam_el)) * (5.5 / mp(MP_ZOOM));
     let fwd = normalize(-cp);
     let rgt = normalize(cross(vec3<f32>(0.0, 1.0, 0.0), fwd));
     let up  = cross(fwd, rgt);
     let rd  = normalize(fwd + uv.x*rgt + uv.y*up);
 
-    let G_scale = u.kscale * 0.42;
+    let G_scale = mp(MP_KSCALE) * 0.42;
     let pt_r    = 0.04;
 
     var best_t   = 1e9;

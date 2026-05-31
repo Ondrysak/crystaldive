@@ -24,11 +24,11 @@ fn plasmon_dispersion(q: f32, omega_p0: f32, alpha: f32) -> f32 {
 }
 
 fn render_plasmon(uv: vec2<f32>) -> vec3<f32> {
-    let t = u.time * u.speed;
+    let t = u.time * mp(MP_SPEED);
 
     // Screen mapping: x → q ∈ [0, 1], y → ω ∈ [0, ~3] (zero at bottom).
     let q     = (uv.x / max(u.aspect, 0.0001)) * 0.5 + 0.5;
-    let omega = (1.0 - uv.y) * 0.5 * 3.0 / max(u.zoom, 0.05);
+    let omega = (1.0 - uv.y) * 0.5 * 3.0 / max(mp(MP_ZOOM), 0.05);
 
     // Lindhard continuum boundaries.
     let om_plus  = plasmon_omega_plus(q);
@@ -36,8 +36,8 @@ fn render_plasmon(uv: vec2<f32>) -> vec3<f32> {
     let inside_continuum = step(om_minus, omega) * step(omega, om_plus);
 
     // Plasmon dispersion parameters — controlled by user sliders.
-    let omega_p0 = 0.7 + 0.4 * u.field_mix;
-    let alpha    = 0.6 + 0.5 * u.iso_level;
+    let omega_p0 = 0.7 + 0.4 * mp(MP_FIELD_MIX);
+    let alpha    = 0.6 + 0.5 * mp(MP_ISO_LEVEL);
     let om_p     = plasmon_dispersion(q, omega_p0, alpha);
 
     // Landau damping: broaden plasmon line inside the continuum.
@@ -65,7 +65,7 @@ fn render_plasmon(uv: vec2<f32>) -> vec3<f32> {
     // Tint with crystal_color (mix 0.30).
     plas_col = mix(plas_col, plas_col * u.crystal_color.xyz, 0.30);
     // Hue-rotate by color_shift.
-    plas_col = plasmon_hue_shift(plas_col, u.color_shift);
+    plas_col = plasmon_hue_shift(plas_col, mp(MP_COLOR_SHIFT));
 
     // Subtle scrolling shimmer along the plasmon line — animated by u.time.
     let shimmer = 0.85 + 0.30 * sin(q * 18.0 - t * 2.5);

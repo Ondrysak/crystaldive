@@ -24,22 +24,22 @@ fn ewave_c_long(n: vec2<f32>) -> f32 {
 fn ewave_phase_vel_L(theta: f32) -> f32 {
     let n = vec2<f32>(cos(theta), sin(theta));
     let cl = ewave_c_long(n);
-    let v_hi = 0.75 + 0.35 * clamp(u.kscale * 0.5, 0.0, 1.0);
-    let v_lo = 0.30 + 0.12 * clamp(u.kscale * 0.5, 0.0, 1.0);
+    let v_hi = 0.75 + 0.35 * clamp(mp(MP_KSCALE) * 0.5, 0.0, 1.0);
+    let v_lo = 0.30 + 0.12 * clamp(mp(MP_KSCALE) * 0.5, 0.0, 1.0);
     return mix(v_lo, v_hi, cl);
 }
 
 fn ewave_phase_vel_T(theta: f32) -> f32 {
     let n = vec2<f32>(cos(theta), sin(theta));
     let ct = 1.0 - ewave_c_long(n);
-    let v_hi = 0.45 + 0.20 * clamp(u.kscale * 0.5, 0.0, 1.0);
-    let v_lo = 0.15 + 0.06 * clamp(u.kscale * 0.5, 0.0, 1.0);
+    let v_hi = 0.45 + 0.20 * clamp(mp(MP_KSCALE) * 0.5, 0.0, 1.0);
+    let v_lo = 0.15 + 0.06 * clamp(mp(MP_KSCALE) * 0.5, 0.0, 1.0);
     return mix(v_lo, v_hi, ct);
 }
 
 fn render_elastic_wave(uv: vec2<f32>) -> vec3<f32> {
-    let t = u.time * u.speed * 0.55;
-    let zoom = max(u.zoom, 0.1);
+    let t = u.time * mp(MP_SPEED) * 0.55;
+    let zoom = max(mp(MP_ZOOM), 0.1);
     let p = uv / zoom;
     let r = length(p);
     let theta = atan2(p.y, p.x);
@@ -48,8 +48,8 @@ fn render_elastic_wave(uv: vec2<f32>) -> vec3<f32> {
 
     // 4 evenly-spaced pulses cycling on period T
     let period = 2.8;
-    let sharp = 0.010 + 0.022 * (1.0 - u.field_mix);
-    let show_T = u.field_mix;
+    let sharp = 0.010 + 0.022 * (1.0 - mp(MP_FIELD_MIX));
+    let show_T = mp(MP_FIELD_MIX);
 
     for (var pulse = 0; pulse < 4; pulse++) {
         // fract gives age ∈ [0, 1) for each pulse offset by 0.25
@@ -94,8 +94,8 @@ fn render_elastic_wave(uv: vec2<f32>) -> vec3<f32> {
     col += vec3<f32>(0.85, 0.92, 1.0) * exp(-90.0 * r * r / (zoom * zoom)) * 0.7;
 
     // iso_level: sector tint from crystal colour
-    let sector = 0.5 + 0.5 * sin(theta * 4.0 + u.color_shift * TAU);
-    col += u.crystal_color.xyz * sector * 0.05 * u.iso_level;
+    let sector = 0.5 + 0.5 * sin(theta * 4.0 + mp(MP_COLOR_SHIFT) * TAU);
+    col += u.crystal_color.xyz * sector * 0.05 * mp(MP_ISO_LEVEL);
 
     return col;
 }

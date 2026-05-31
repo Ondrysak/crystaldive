@@ -10,8 +10,8 @@
 // where ξ = penetration depth, k_perp = bulk wave vector at gap edge.
 fn tsss_psi(kpar: f32, z: f32, t: f32) -> f32 {
     // Penetration depth ξ: shrinks as iso_level → gap deepens → more localized
-    let xi = 0.4 + 0.6 * (1.0 - u.iso_level);
-    let k_perp = 1.8 + 0.8 * u.kscale;
+    let xi = 0.4 + 0.6 * (1.0 - mp(MP_ISO_LEVEL));
+    let k_perp = 1.8 + 0.8 * mp(MP_KSCALE);
     let phi = kpar * 0.4 + t * 0.3;
     return exp(-z / max(xi, 0.01)) * cos(k_perp * z + phi);
 }
@@ -19,8 +19,8 @@ fn tsss_psi(kpar: f32, z: f32, t: f32) -> f32 {
 // Surface energy (Dirac cone): E(k∥) = ħv_F |k∥|
 // shifted by Dirac point position E_D (controlled by field_mix)
 fn tsss_e_dirac(kpar: f32) -> f32 {
-    let v_F = 0.9 + 0.6 * u.kscale;
-    let e_D = (u.field_mix - 0.5) * 0.6;   // Dirac point energy
+    let v_F = 0.9 + 0.6 * mp(MP_KSCALE);
+    let e_D = (mp(MP_FIELD_MIX) - 0.5) * 0.6;   // Dirac point energy
     return v_F * abs(kpar) + e_D;
 }
 
@@ -35,7 +35,7 @@ fn tsss_e_bulk_upper(kpar: f32) -> f32 {
 // Spectral function: Dirac-cone peak + Lorentzian broadened
 fn tsss_spectral(kpar: f32, omega: f32) -> f32 {
     let e_ss = tsss_e_dirac(kpar);
-    let gamma_ss = 0.04 + 0.06 * (1.0 - u.iso_level);  // coherent when iso→1
+    let gamma_ss = 0.04 + 0.06 * (1.0 - mp(MP_ISO_LEVEL));  // coherent when iso→1
     let A_ss = gamma_ss / (TAU * ((omega - e_ss) * (omega - e_ss) + gamma_ss * gamma_ss));
 
     // Bulk continuum (broad Lorentzian smear)
@@ -50,11 +50,11 @@ fn tsss_spectral(kpar: f32, omega: f32) -> f32 {
 }
 
 fn render_tamm_shockley(uv: vec2<f32>) -> vec3<f32> {
-    let t = u.time * u.speed * 0.4;
-    let zoom = max(u.zoom, 0.05);
+    let t = u.time * mp(MP_SPEED) * 0.4;
+    let zoom = max(mp(MP_ZOOM), 0.05);
 
     // Split: left = real-space, right = k-space spectral
-    let split = -0.05 + u.field_mix * 0.1 - 0.4;  // slightly left of centre by default
+    let split = -0.05 + mp(MP_FIELD_MIX) * 0.1 - 0.4;  // slightly left of centre by default
     let div_width = 0.04;
 
     var col = vec3<f32>(0.008, 0.010, 0.020);
@@ -130,8 +130,8 @@ fn render_tamm_shockley(uv: vec2<f32>) -> vec3<f32> {
 
         // color_shift: hue of the cone
         let k3 = vec3<f32>(0.57735);
-        let cs = cos(u.color_shift * TAU);
-        let sn = sin(u.color_shift * TAU);
+        let cs = cos(mp(MP_COLOR_SHIFT) * TAU);
+        let sn = sin(mp(MP_COLOR_SHIFT) * TAU);
         col = col * cs + cross(k3, col) * sn + k3 * dot(k3, col) * (1.0 - cs);
     } else {
         // ── DIVIDER ───────────────────────────────────────────────────────

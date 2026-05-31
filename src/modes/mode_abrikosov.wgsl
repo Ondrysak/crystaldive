@@ -122,7 +122,7 @@ fn abrikosov_brandt_Bz(p: vec2<f32>, K1: vec2<f32>, K2: vec2<f32>,
 
 fn render_abrikosov(uv: vec2<f32>) -> vec3<f32> {
     // ── reduced temperature, GL parameters (wider visible response than v2)
-    let t_red   = clamp(u.iso_level, 0.0, 0.99);
+    let t_red   = clamp(mp(MP_ISO_LEVEL), 0.0, 0.99);
     let amp_T   = sqrt(max(1.0 - t_red * t_red, 0.0));
     let one_mt  = max(1.0 - t_red,                  0.015);
     let one_mt4 = max(1.0 - t_red * t_red * t_red * t_red, 0.015);
@@ -135,8 +135,8 @@ fn render_abrikosov(uv: vec2<f32>) -> vec3<f32> {
     // Real SCs in a slowly-varying applied field show the lattice constant
     // pulsing as a₀ ∝ 1/√B. Add a ~12 % AC envelope so the lattice visibly
     // breathes; speed slider scales the oscillation frequency.
-    let t_main   = u.time * u.speed;
-    let B_static = mix(0.6, 14.0, clamp(u.field_mix, 0.0, 1.0));
+    let t_main   = u.time * mp(MP_SPEED);
+    let B_static = mix(0.6, 14.0, clamp(mp(MP_FIELD_MIX), 0.0, 1.0));
     let B_field  = B_static * (1.0 + 0.12 * sin(t_main * 0.43));
 
     // ── CRYSTAL-DERIVED LATTICE GEOMETRY ─────────────────────────────────
@@ -184,7 +184,7 @@ fn render_abrikosov(uv: vec2<f32>) -> vec3<f32> {
         abrikosov_vnoise(uv * 1.7 + vec2<f32>(t_main * 0.9, 0.0)) - 0.5,
         abrikosov_vnoise(uv * 1.7 + vec2<f32>(0.0, t_main * 1.1)) - 0.5,
     );
-    let p = uv * (2.2 / max(u.zoom, 0.08)) - drift + lib;
+    let p = uv * (2.2 / max(mp(MP_ZOOM), 0.08)) - drift + lib;
 
     // ── 1. Globally smooth magnetic field via Brandt sum.
     let Bz_mod = abrikosov_brandt_Bz(p, K1, K2, xi2, lam2);
@@ -233,7 +233,7 @@ fn render_abrikosov(uv: vec2<f32>) -> vec3<f32> {
     // CdGM star arms point along the lattice's nearest-neighbour direction.
     let star_axis   = atan2(b1u.y, b1u.x) + phi0;
     let n_arms      = 6.0;                  // hexagonal/triangular materials
-    let star_amp    = clamp(u.w_lattice, 0.0, 1.0) * (0.55 * amp_T);
+    let star_amp    = clamp(mp(MP_W_LATTICE), 0.0, 1.0) * (0.55 * amp_T);
     let star        = 1.0 + star_amp * cos(n_arms * (theta_local - star_axis));
     let core_env    = exp(-d2_min / (2.0 * 1.8 * 1.8 * xi2));
 
@@ -241,9 +241,9 @@ fn render_abrikosov(uv: vec2<f32>) -> vec3<f32> {
     //      crystal_field() of the loaded material. Different G-vector phases →
     //      different core-to-core intensity pattern. Strength is controlled by
     //      w_band so the user can dial it in.
-    let mat_mod_raw = crystal_field(vec3<f32>(p * 1.3, u.time * u.speed * 0.05));
+    let mat_mod_raw = crystal_field(vec3<f32>(p * 1.3, u.time * mp(MP_SPEED) * 0.05));
     let mat_mod     = 0.5 + 0.5 * sin(mat_mod_raw * 1.5);
-    let mat_w       = clamp(u.w_band, 0.0, 1.0) * 0.7;
+    let mat_w       = clamp(mp(MP_W_BAND), 0.0, 1.0) * 0.7;
 
     // ── 5. Vortex-liquid melt
     let melt_t     = smoothstep(0.55, 0.93, t_red);
@@ -265,12 +265,12 @@ fn render_abrikosov(uv: vec2<f32>) -> vec3<f32> {
     let core_col   = mix(core_warm,
                          core_warm * (0.4 + 0.9 * u.crystal_color.xyz),
                          0.35);
-    let hue   = fract(phase_acc / TAU + u.color_shift + u.time * u.speed * 0.05);
+    let hue   = fract(phase_acc / TAU + mp(MP_COLOR_SHIFT) + u.time * mp(MP_SPEED) * 0.05);
     var ring  = 0.5 + 0.5 * cos(TAU * (hue + vec3<f32>(0.0, 0.333, 0.667)));
     ring      = mix(ring, u.crystal_color.xyz, 0.30);
 
     let suppress    = 1.0 - psi2_final;
-    let ring_weight = clamp(u.w_motif, 0.0, 1.0);
+    let ring_weight = clamp(mp(MP_W_MOTIF), 0.0, 1.0);
     var col = meissner
             + core_col * (suppress * (0.55 + 0.65 * amp_T) + core_env * star * 0.65)
             + ring     * suppress * 0.30 * ring_weight

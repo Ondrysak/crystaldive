@@ -17,7 +17,10 @@
 //! mode authors.
 
 pub mod info;
-pub use info::{ModeArea, ModeInfo, MODES, MODE_NAMES, MODE_NAMES_SLICE};
+pub use info::{
+    mode_params, slot_range, ModeArea, ModeInfo, ParamDesc, MODES, MODE_NAMES,
+    MODE_NAMES_SLICE,
+};
 
 pub const FIELD_SHADER: &str = concat!(
     include_str!("prelude.wgsl"),

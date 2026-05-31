@@ -13,9 +13,9 @@ fn thermal_peak(k: vec2<f32>, center: vec2<f32>, width: f32) -> f32 {
 }
 
 fn render_thermal(uv: vec2<f32>) -> vec3<f32> {
-    let temp = clamp(u.iso_level, 0.0, 1.0);
-    let t = u.time * u.speed;
-    let k = uv * (3.4 / max(u.zoom, 0.08));
+    let temp = clamp(mp(MP_ISO_LEVEL), 0.0, 1.0);
+    let t = u.time * mp(MP_SPEED);
+    let k = uv * (3.4 / max(mp(MP_ZOOM), 0.08));
     let haze = vec2<f32>(
         sin(uv.y * 18.0 + t * 1.7),
         cos(uv.x * 16.0 - t * 1.3)
@@ -28,7 +28,7 @@ fn render_thermal(uv: vec2<f32>) -> vec3<f32> {
     let ng_th = i32(u.num_g);
     for (var i = 0; i < ng_th; i++) {
         let ga = g_block.gamp[i];
-        let g = ga.xy * u.kscale * 0.38;
+        let g = ga.xy * mp(MP_KSCALE) * 0.38;
         let amp = ga.w;
         let g2 = dot(ga.xyz, ga.xyz);
         let dw = exp(-temp * g2 * 0.065);
@@ -42,9 +42,9 @@ fn render_thermal(uv: vec2<f32>) -> vec3<f32> {
         soft += pk * temp;
     }
 
-    let field = crystal_field(vec3<f32>(uv * 1.9 / max(u.zoom, 0.08), t * 0.12));
+    let field = crystal_field(vec3<f32>(uv * 1.9 / max(mp(MP_ZOOM), 0.08), t * 0.12));
     let shimmer = 0.5 + 0.5 * sin(field * 3.0 + t * 2.0);
-    let base = thermal_hue_shift(u.crystal_color.xyz, u.color_shift);
+    let base = thermal_hue_shift(u.crystal_color.xyz, mp(MP_COLOR_SHIFT));
     var col = vec3<f32>(0.010, 0.012, 0.020);
     col += base * intensity * (1.5 + temp);
     col += vec3<f32>(0.95, 0.62, 0.24) * soft * 1.3;

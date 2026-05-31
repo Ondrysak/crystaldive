@@ -7,8 +7,8 @@ fn nematic_director(p: vec3<f32>) -> vec2<f32> {
 }
 
 fn render_nematic(uv: vec2<f32>) -> vec3<f32> {
-    let r = uv * 2.0 / u.zoom;
-    let t = u.time * u.speed;
+    let r = uv * 2.0 / mp(MP_ZOOM);
+    let t = u.time * mp(MP_SPEED);
 
     // Two scalar fields whose phase encodes 2θ (so θ is unique mod π → nematic).
     // Analytical gradient replaces 8 finite-difference crystal_field calls for Jacobian.
@@ -29,7 +29,7 @@ fn render_nematic(uv: vec2<f32>) -> vec3<f32> {
 
     // Alternative director construction (90°-rotated) for field_mix interpolation.
     let theta_alt = 0.5 * atan2(h1, -h2);
-    let theta_eff = mix(theta, theta_alt, u.field_mix);
+    let theta_eff = mix(theta, theta_alt, mp(MP_FIELD_MIX));
 
     // Order parameter magnitude: zero at disclination cores.
     let m    = sqrt(h1 * h1 + h2 * h2);
@@ -38,7 +38,7 @@ fn render_nematic(uv: vec2<f32>) -> vec3<f32> {
     // Hairy streaks projected along the director (uses theta_eff so streaks
     // line up cleanly across cores and fan into ±1/2 comet/triangle shapes).
     let s      = uv.x * cos(theta_eff) + uv.y * sin(theta_eff);
-    let freq   = 50.0 + 60.0 * u.iso_level;
+    let freq   = 50.0 + 60.0 * mp(MP_ISO_LEVEL);
     let streak = 0.5 + 0.5 * sin(s * freq);
     let dash   = smoothstep(0.45, 0.65, streak);
 

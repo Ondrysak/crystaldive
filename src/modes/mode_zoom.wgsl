@@ -10,7 +10,7 @@ fn lw_path(fly: f32) -> vec3<f32> {
 }
 
 fn render_zoom(uv: vec2<f32>) -> vec3<f32> {
-    let t   = u.time * u.speed;
+    let t   = u.time * mp(MP_SPEED);
     let fly = t * 0.30;
 
     // Camera on forward-moving path; forward = numeric derivative of path
@@ -29,7 +29,7 @@ fn render_zoom(uv: vec2<f32>) -> vec3<f32> {
     }
 
     // zoom acts as inverse-FOV (larger zoom = more telephoto = narrower tunnel view)
-    let fov = 1.0 / max(u.zoom, 0.1);
+    let fov = 1.0 / max(mp(MP_ZOOM), 0.1);
     let rd  = normalize(look + uv.x * rgt * fov + uv.y * up * fov);
 
     var col = vec3<f32>(0.005, 0.008, 0.022);
@@ -57,7 +57,7 @@ fn render_zoom(uv: vec2<f32>) -> vec3<f32> {
 
         // Colour from the crystal field value at the hit point
         let cf_val = crystal_field(hit_p);
-        let hue    = fract(cf_val * 0.45 + u.color_shift + t * 0.022);
+        let hue    = fract(cf_val * 0.45 + mp(MP_COLOR_SHIFT) + t * 0.022);
         var surf   = 0.5 + 0.5 * cos(TAU * (hue + vec3<f32>(0.0, 0.333, 0.667)));
         surf = mix(surf, u.crystal_color.xyz, 0.25);
 

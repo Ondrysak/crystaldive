@@ -14,7 +14,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    FieldParams, LfoParams, LfoEngine, LfoWave, LfoSrc,
+    LfoParams, LfoEngine, LfoSrc,
     SeqPlayMode, SeqStep, Sequencer, TranCurve, TripLevel,
     tour_lfo_preset_for_level, randomize_fp, bz_hash,
 };
@@ -159,21 +159,25 @@ pub fn random_preset(seed: u32) -> Preset {
         phase: r.unit(),
     };
     // Occasionally re-route a target so two random presets feel different.
-    let re_targets: [&mut LfoSrc; 11] = [
-        &mut lfo.kscale, &mut lfo.speed, &mut lfo.field_mix, &mut lfo.iso_level,
-        &mut lfo.color_shift, &mut lfo.zoom,
-        &mut lfo.fb_zoom, &mut lfo.fb_decay, &mut lfo.fb_color_shift,
-        &mut lfo.fb_saturation, &mut lfo.fb_fold_angle,
-    ];
-    for t in re_targets {
+    use crate::{MP_KSCALE, MP_SPEED, MP_FIELD_MIX, MP_ISO_LEVEL, MP_COLOR_SHIFT, MP_ZOOM};
+    let maybe_reroute = |slot: &mut LfoSrc, r: &mut Lcg| {
         if r.unit() < 0.18 {
-            *t = match r.next_u32() & 3 {
+            *slot = match r.next_u32() & 3 {
                 0 => LfoSrc::Off,
                 1 => LfoSrc::A,
                 _ => LfoSrc::B,
             };
         }
+    };
+    // Field-slot targets index into lfo.mp; feedback targets are named fields.
+    for i in [MP_KSCALE, MP_SPEED, MP_FIELD_MIX, MP_ISO_LEVEL, MP_COLOR_SHIFT, MP_ZOOM] {
+        maybe_reroute(&mut lfo.mp[i], &mut r);
     }
+    maybe_reroute(&mut lfo.fb_zoom, &mut r);
+    maybe_reroute(&mut lfo.fb_decay, &mut r);
+    maybe_reroute(&mut lfo.fb_color_shift, &mut r);
+    maybe_reroute(&mut lfo.fb_saturation, &mut r);
+    maybe_reroute(&mut lfo.fb_fold_angle, &mut r);
 
     let _ = bz_hash; // keep import warning-free if unused below
 

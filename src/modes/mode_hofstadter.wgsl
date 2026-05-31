@@ -7,7 +7,7 @@ fn hofstadter_density(phi: f32, eps: f32) -> f32 {
     var d = 0.0;
     var p = phi;
     var amp = 1.0;
-    let gate = mix(0.92, 0.78, clamp(u.iso_level, 0.0, 1.0));
+    let gate = mix(0.92, 0.78, clamp(mp(MP_ISO_LEVEL), 0.0, 1.0));
     for (var i = 0; i < 7; i++) {
         let ph_mod = p * f32(i + 1);
         let kshift = fract(ph_mod) * TAU;
@@ -28,17 +28,17 @@ fn hofstadter_axis_phi(phi: f32, x: f32) -> f32 {
 }
 
 fn render_hofstadter(uv: vec2<f32>) -> vec3<f32> {
-    let t = u.time * u.speed;
+    let t = u.time * mp(MP_SPEED);
 
     // Map screen → (phi, energy). phi ∈ [0,1], eps ∈ ~[-2,2].
     let phi = clamp((uv.x / u.aspect) * 0.5 + 0.5, 0.0, 1.0);
     let eps_raw = uv.y * 2.0;
-    let eps_eff = eps_raw * (1.0 + (u.field_mix - 0.5) * 0.4);
+    let eps_eff = eps_raw * (1.0 + (mp(MP_FIELD_MIX) - 0.5) * 0.4);
 
     let dens = hofstadter_density(phi, eps_eff);
 
     // Rainbow hue along φ axis, rotated by color_shift, gentle drift.
-    let hue = fract(phi + u.color_shift + t * 0.015);
+    let hue = fract(phi + mp(MP_COLOR_SHIFT) + t * 0.015);
     var rainbow = 0.5 + 0.5 * cos(TAU * (hue + vec3<f32>(0.0, 0.333, 0.667)));
     rainbow = mix(rainbow, u.crystal_color.xyz, 0.35);
 

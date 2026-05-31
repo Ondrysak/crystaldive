@@ -37,26 +37,26 @@ fn magnon_lorentz(dw: f32, gamma: f32) -> f32 {
 }
 
 fn render_magnon(uv: vec2<f32>) -> vec3<f32> {
-    let t = u.time * u.speed;
+    let t = u.time * mp(MP_SPEED);
 
     // Screen mapping: x → q ∈ [0, 1], y → ω ∈ [0, ~3] (zero at bottom).
     let q     = (uv.x / max(u.aspect, 0.0001)) * 0.5 + 0.5;
-    let omega = (1.0 - uv.y) * 0.5 * 3.0 / max(u.zoom, 0.05);
+    let omega = (1.0 - uv.y) * 0.5 * 3.0 / max(mp(MP_ZOOM), 0.05);
 
     // ── Magnon dispersion parameters ──
-    let gap   = 0.05 + 0.7 * u.iso_level;     // anisotropy Δ
-    let stiff = 1.2  + 2.0 * u.kscale * 0.5;  // FM stiffness D
-    let vel   = 1.0  + 1.6 * u.kscale * 0.5;  // AFM velocity c
+    let gap   = 0.05 + 0.7 * mp(MP_ISO_LEVEL);     // anisotropy Δ
+    let stiff = 1.2  + 2.0 * mp(MP_KSCALE) * 0.5;  // FM stiffness D
+    let vel   = 1.0  + 1.6 * mp(MP_KSCALE) * 0.5;  // AFM velocity c
 
     let om_fm  = magnon_omega_fm(q, gap, stiff);
     let om_afm = magnon_omega_afm(q, gap, vel);
     // field_mix interpolates FM (q²) ↔ AFM (linear-q).
-    let om_m   = mix(om_fm, om_afm, clamp(u.field_mix, 0.0, 1.0));
+    let om_m   = mix(om_fm, om_afm, clamp(mp(MP_FIELD_MIX), 0.0, 1.0));
 
     // ── Stoner continuum parameters ──
-    let d_ex = 0.35 + 0.35 * u.field_mix;     // exchange splitting onset
+    let d_ex = 0.35 + 0.35 * mp(MP_FIELD_MIX);     // exchange splitting onset
     let d_s  = 0.6;                            // single-particle stiffness
-    let v_f  = 1.6  + 1.2 * u.kscale * 0.5;   // Fermi velocity
+    let v_f  = 1.6  + 1.2 * mp(MP_KSCALE) * 0.5;   // Fermi velocity
 
     let om_sp = magnon_stoner_plus (q, d_s, d_ex, v_f);
     let om_sm = magnon_stoner_minus(q, d_s, d_ex, v_f);
@@ -65,9 +65,9 @@ fn render_magnon(uv: vec2<f32>) -> vec3<f32> {
     // ── Landau damping: broaden line where magnon enters Stoner continuum ──
     var gamma = 0.006;
     let inside_line = step(om_sm, om_m) * step(om_m, om_sp);
-    gamma += inside_line * u.w_band * (0.06 + 0.10 * smoothstep(0.0, 0.4, om_m - om_sm));
+    gamma += inside_line * mp(MP_W_BAND) * (0.06 + 0.10 * smoothstep(0.0, 0.4, om_m - om_sm));
     // Magnon decay above 2Δ — extra (softer) broadening once kinematically allowed.
-    gamma += smoothstep(2.0 * gap, 2.0 * gap + 0.2, om_m) * u.w_band * 0.03;
+    gamma += smoothstep(2.0 * gap, 2.0 * gap + 0.2, om_m) * mp(MP_W_BAND) * 0.03;
 
     // Lorentzian magnon intensity.
     let dw   = omega - om_m;
@@ -79,7 +79,7 @@ fn render_magnon(uv: vec2<f32>) -> vec3<f32> {
 
     // ── Stoner continuum cloud — soft violet stippled glow ──
     let noise = 0.5 + 0.5 * sin(q * 38.0 + omega * 27.0 + t * 0.4);
-    let cont_strength = clamp(u.w_motif, 0.0, 1.5);
+    let cont_strength = clamp(mp(MP_W_MOTIF), 0.0, 1.5);
     col += inside_cont
          * vec3<f32>(0.28, 0.14, 0.42)
          * (0.4 + 0.6 * noise) * 0.7 * cont_strength;
@@ -87,7 +87,7 @@ fn render_magnon(uv: vec2<f32>) -> vec3<f32> {
     // ── Magnon line: bright magenta-cyan tint ──
     var mag_col = vec3<f32>(0.45, 0.95, 1.00);
     mag_col = mix(mag_col, mag_col * u.crystal_color.xyz, 0.30);
-    mag_col = magnon_hue_shift(mag_col, u.color_shift);
+    mag_col = magnon_hue_shift(mag_col, mp(MP_COLOR_SHIFT));
 
     // Scrolling shimmer along the magnon line — precession feel.
     let shimmer = 0.85 + 0.30 * sin(q * 16.0 - t * 2.2);

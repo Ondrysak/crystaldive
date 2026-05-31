@@ -46,10 +46,10 @@ fn dipole_rad_E_terms(r: f32, sin_theta: f32, w: f32, tau: f32) -> vec3<f32> {
 }
 
 fn render_dipole_rad(uv: vec2<f32>) -> vec3<f32> {
-    let t = u.time * u.speed;
+    let t = u.time * mp(MP_SPEED);
 
     // xz-plane cross-section; dipole axis is vertical (p.y).
-    let z = 1.0 / max(u.zoom * 0.32, 0.05);
+    let z = 1.0 / max(mp(MP_ZOOM) * 0.32, 0.05);
     let p = uv * z;
 
     let r          = length(p);
@@ -57,7 +57,7 @@ fn render_dipole_rad(uv: vec2<f32>) -> vec3<f32> {
     let sin_abs    = abs(sin_signed);
 
     // field_mix slider -> angular frequency.
-    let w   = 1.6 + 4.4 * u.field_mix;
+    let w   = 1.6 + 4.4 * mp(MP_FIELD_MIX);
     let tau = t - r;
 
     let terms  = dipole_rad_E_terms(r, sin_signed, w, tau);
@@ -66,7 +66,7 @@ fn render_dipole_rad(uv: vec2<f32>) -> vec3<f32> {
     let e_near = terms.z;
 
     // iso_level: 0 -> pure far-field, 1 -> include near-field loops.
-    let near_w  = u.iso_level;
+    let near_w  = mp(MP_ISO_LEVEL);
     let e_total = e_far + near_w * (e_ind + e_near);
 
     // Background.
@@ -82,7 +82,7 @@ fn render_dipole_rad(uv: vec2<f32>) -> vec3<f32> {
     // Bipolar field color.
     let e_scaled  = e_total * 0.45;
     var field_col = dipole_rad_sign_color(e_scaled);
-    field_col     = dipole_rad_hue_shift(field_col, u.color_shift);
+    field_col     = dipole_rad_hue_shift(field_col, mp(MP_COLOR_SHIFT));
     let dist_fade = 1.0 / (1.0 + r * 0.25);
     col += field_col * dist_fade * 1.4;
 

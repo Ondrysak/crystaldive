@@ -49,14 +49,14 @@ fn karman_lamb_oseen_vel(p: vec2<f32>, c: vec2<f32>, gamma: f32, rc: f32) -> vec
 }
 
 fn render_karman(uv: vec2<f32>) -> vec3<f32> {
-    let t = u.time * u.speed;
+    let t = u.time * mp(MP_SPEED);
 
     // ── Flow-space coordinates ────────────────────────────────────────
-    let scale = 2.4 / max(u.zoom, 0.05);
+    let scale = 2.4 / max(mp(MP_ZOOM), 0.05);
     let p     = uv * scale;
 
     // ── Reynolds-number / shedding control ───────────────────────────
-    let Re = 60.0 + 240.0 * u.iso_level;
+    let Re = 60.0 + 240.0 * mp(MP_ISO_LEVEL);
     let St = 0.18 + 0.04 * smoothstep(60.0, 300.0, Re);
     let cyl_diam = 0.55;
     let U_inf    = 1.0;
@@ -68,7 +68,7 @@ fn render_karman(uv: vec2<f32>) -> vec3<f32> {
     let cyl_c = vec2<f32>(-1.6, 0.0);
 
     // ── Build the vortex street ──────────────────────────────────────
-    let rc0        = (0.10 + 0.35 * u.field_mix) * cyl_diam;
+    let rc0        = (0.10 + 0.35 * mp(MP_FIELD_MIX)) * cyl_diam;
     let nu         = 0.0006 + 0.0015 / max(Re * 0.01, 0.5);
     let shed_phase = t / T_shed;
 
@@ -149,7 +149,7 @@ fn render_karman(uv: vec2<f32>) -> vec3<f32> {
              * smoothstep(cyl_c.x + cyl_r, scale * 1.0, p.x);
     col += axis * vec3<f32>(0.18, 0.20, 0.26) * 0.35;
 
-    col = karman_hue_rotate(col, u.color_shift);
+    col = karman_hue_rotate(col, mp(MP_COLOR_SHIFT));
 
     return col;
 }
