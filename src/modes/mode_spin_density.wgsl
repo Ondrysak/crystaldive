@@ -49,9 +49,9 @@ fn sdens_density(p: vec2<f32>, t: f32, fm_weight: f32, afm_weight: f32, ferri_we
     let m_max = u.iso_level * 2.0 + 0.3;
 
     var density = 0.0;
-    let patch = 6;
-    for (var ix = -patch; ix <= patch; ix++) {
-        for (var iy = -patch; iy <= patch; iy++) {
+    let half = 6;
+    for (var ix = -half; ix <= half; ix++) {
+        for (var iy = -half; iy <= half; iy++) {
             let site = b0 * f32(ix) + b1 * f32(iy);
             let sl = sdens_sublattice(ix, iy);
 

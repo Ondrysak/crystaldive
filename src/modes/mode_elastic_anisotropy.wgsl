@@ -33,40 +33,52 @@ fn eaniso_stiffness(n: vec3<f32>) -> f32 {
 // direction n̂, then r_surface = stiffness(n̂).  We sphere-march: shrink step
 // when r_ray > r_surf to locate the crossing.
 fn eaniso_march(ro: vec3<f32>, rd: vec3<f32>) -> vec4<f32> {
-    var t = 0.001;
+    let scale = 0.55 + 0.55 * u.field_mix;
+    // Stiffness(n̂) ≤ 1, so the whole surface fits in a sphere of radius `scale`.
+    // Analytically clip the ray to that bounding sphere and only march the
+    // segment inside — background rays (screen corners) cost ~nothing.
+    let b = dot(ro, rd);
+    let c = dot(ro, ro) - scale * scale;
+    let disc = b * b - c;
+    if disc < 0.0 { return vec4<f32>(0.0); }
+    let sq = sqrt(disc);
+    let t_near = max(-b - sq, 0.001);
+    let t_far = -b + sq;
+    if t_far <= t_near { return vec4<f32>(0.0); }
+
+    let steps = 48;
+    let dt = (t_far - t_near) / f32(steps);
+    var t = t_near;
     var hit = false;
     var prev_inside = false;
-    var t_hit = 0.0;
-    let scale = 0.55 + 0.55 * u.field_mix;
-    for (var i = 0; i < 96; i++) {
+    var t_hit = t_near;
+    for (var i = 0; i < steps; i++) {
         let p = ro + rd * t;
         let r = length(p);
-        if r < 1e-4 { t += 0.01; continue; }
-        let n = p / r;
-        let r_surf = eaniso_stiffness(n) * scale;
-        let inside = r < r_surf;
+        if r < 1e-4 { t += dt; continue; }
+        let inside = r < eaniso_stiffness(p / r) * scale;
         if i > 0 && inside != prev_inside {
             t_hit = t;
             hit = true;
             break;
         }
         prev_inside = inside;
-        t += 0.018;
-        if t > 4.5 { break; }
+        t += dt;
     }
     if !hit { return vec4<f32>(0.0); }
     let p = ro + rd * t_hit;
     let r = length(p);
     let n = p / r;
-    let stiff = eaniso_stiffness(n) * scale;
-    // Numeric normal of the radial surface f(p) = |p| - r_surf(p/|p|)
-    let eps = 0.008;
-    let nx = eaniso_stiffness(normalize(p + vec3<f32>(eps,0,0))) - eaniso_stiffness(normalize(p - vec3<f32>(eps,0,0)));
-    let ny2 = eaniso_stiffness(normalize(p + vec3<f32>(0,eps,0))) - eaniso_stiffness(normalize(p - vec3<f32>(0,eps,0)));
-    let nz = eaniso_stiffness(normalize(p + vec3<f32>(0,0,eps))) - eaniso_stiffness(normalize(p - vec3<f32>(0,0,eps)));
-    let grad_surf = -vec3<f32>(nx, ny2, nz) * scale;
+    let stiff_c = eaniso_stiffness(n);
+    // Cheap forward-difference normal of f(p) = |p| − r_surf(p/|p|): 3 extra
+    // evals reusing the centre sample instead of a 6-call central difference.
+    let eps = 0.012;
+    let gx = eaniso_stiffness(normalize(p + vec3<f32>(eps, 0.0, 0.0))) - stiff_c;
+    let gy = eaniso_stiffness(normalize(p + vec3<f32>(0.0, eps, 0.0))) - stiff_c;
+    let gz = eaniso_stiffness(normalize(p + vec3<f32>(0.0, 0.0, eps))) - stiff_c;
+    let grad_surf = -vec3<f32>(gx, gy, gz) * scale;
     let surf_norm = normalize(n + grad_surf * 0.5);
-    return vec4<f32>(surf_norm, stiff);
+    return vec4<f32>(surf_norm, stiff_c * scale);
 }
 
 fn render_elastic_anisotropy(uv: vec2<f32>) -> vec3<f32> {
@@ -83,8 +95,8 @@ fn render_elastic_anisotropy(uv: vec2<f32>) -> vec3<f32> {
     let cam_dist = 2.8 / max(u.zoom, 0.1);
     let cam_raw = vec3<f32>(0.0, 0.0, cam_dist);
     let cam = eaniso_rot(cam_raw, az, el);
-    let target = vec3<f32>(0.0);
-    let fwd = normalize(target - cam);
+    let look_at = vec3<f32>(0.0);
+    let fwd = normalize(look_at - cam);
     let right = normalize(cross(fwd, vec3<f32>(0.0, 1.0, 0.0)));
     let up = cross(right, fwd);
     let rd = normalize(fwd + uv.x * right * 0.5 + uv.y * up * 0.5);

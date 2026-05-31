@@ -106,3 +106,26 @@ pub const FIELD_SHADER: &str = concat!(
     "\n",
     include_str!("dispatch.wgsl"),
 );
+
+#[cfg(test)]
+mod shader_tests {
+    use super::FIELD_SHADER;
+
+    /// Parse + validate the assembled field shader with naga — the same WGSL
+    /// frontend wgpu uses at runtime. Catches reserved keywords (`target`,
+    /// `sample`, …), type errors, and undefined identifiers WITHOUT a GPU, so
+    /// a broken mode fails `cargo test` instead of only at app launch.
+    #[test]
+    fn field_shader_parses_and_validates() {
+        let module = naga::front::wgsl::parse_str(FIELD_SHADER)
+            .unwrap_or_else(|e| panic!("FIELD_SHADER failed to parse:\n{}", e.emit_to_string(FIELD_SHADER)));
+
+        let mut validator = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        );
+        validator
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("FIELD_SHADER failed to validate:\n{:?}", e));
+    }
+}

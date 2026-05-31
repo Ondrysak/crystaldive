@@ -23,6 +23,11 @@ cpal        = "0.15"
 rustfft     = "6"
 midir       = "0.10"
 
+[dev-dependencies]
+# Pinned to the same naga wgpu 22 pulls in, so the shader-validation test
+# parses WGSL with the exact frontend the runtime uses (no GPU needed).
+naga = { version = "22", features = ["wgsl-in"] }
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1"
 console_log = "1"
