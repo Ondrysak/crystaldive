@@ -62,10 +62,10 @@ impl ModeArea {
 impl ModeInfo {
     pub const fn area(&self) -> ModeArea {
         match self.idx {
-            0..=8 | 11 | 13 | 24 | 37 => ModeArea::Crystal,
+            0..=8 | 11 | 13 | 24 | 37 | 46 => ModeArea::Crystal,
             9 | 10 | 14 | 18 => ModeArea::Reciprocal,
-            15 | 17 | 20..=22 | 28..=34 | 36 | 39 | 40 => ModeArea::Electronic,
-            12 | 16 | 19 | 23 | 25 | 26 | 35 | 38 => ModeArea::Materials,
+            15 | 17 | 20..=22 | 28..=34 | 36 | 39 | 40 | 51 => ModeArea::Electronic,
+            12 | 16 | 19 | 23 | 25 | 26 | 35 | 38 | 47 | 48 | 49 | 50 => ModeArea::Materials,
             27 | 42 | 43 => ModeArea::Classical,
             41 | 44 | 45 => ModeArea::Fields,
             _ => ModeArea::Crystal,
@@ -73,7 +73,7 @@ impl ModeInfo {
     }
 }
 
-pub const MODES: [ModeInfo; 46] = [
+pub const MODES: [ModeInfo; 52] = [
     ModeInfo {
         idx: 0, name: "3D ISO",
         tagline: "Ray-marched isosurface of the crystal-field scalar.",
@@ -540,6 +540,66 @@ pub const MODES: [ModeInfo; 46] = [
             "Delta L/L ~= h_+/2",
         ],
         notes: "A compact binary chirps from wide orbit to merger, sending quadrupole strain rings through a distorted test grid. The cross-shaped Michelson arms turn h+/hx into shifting interference fringes. field_mix raises chirp frequency, iso_level increases strain amplitude and ring sharpness, color_shift rotates the polarization basis, and zoom sets the detector window.",
+    },
+    ModeInfo {
+        idx: 46, name: "LATTICE WALK",
+        tagline: "First-person endless flight through the crystal isosurface tunnel.",
+        equations: &[
+            "pos(t) = (A sin(ω₁t), B cos(ω₂t), v t)   (helix path)",
+            "surface: |mix(f, f₂, blend)| = iso · 0.3",
+            "colour ← hue(f(hit) · 0.45 + color_shift)",
+        ],
+        notes: "The camera flies forward through the periodic crystal field, which repeats infinitely — same tunnel geometry, endlessly. iso_level opens/closes the tunnel bore (low = wide corridors, high = tight tubes). field_mix blends between the two field twins for tunnel topology variety. zoom is FOV (higher = telephoto, narrower). Mouse steers the gaze direction while the camera still flies straight.",
+    },
+    ModeInfo {
+        idx: 47, name: "ELASTIC ANISO",
+        tagline: "Directional Young's modulus polar surface derived from crystal G-vectors.",
+        equations: &[
+            "C(n̂) = Σᵢ aᵢ² (n̂·Ĝᵢ)⁴   (4th-rank projection)",
+            "surface: r(n̂) = C(n̂) · scale",
+            "Zener ring: highlight where C(n̂) ≈ C_iso",
+        ],
+        notes: "Each loaded crystal produces a distinct anisotropy shape: cubic → near-sphere with cubic-symmetric lobes; hexagonal → prolate/oblate blob. Mouse orbits. field_mix scales the surface amplitude; iso_level highlights the isotropic contour (Zener A = 1 ring). kscale modulates velocity range.",
+    },
+    ModeInfo {
+        idx: 48, name: "ELASTIC WAVE",
+        tagline: "Anisotropic acoustic wavefronts from a repeating impulse — qL and qT branches.",
+        equations: &[
+            "v_L(θ) ∝ √(Σ aᵢ² (n̂·Ĝᵢ)²)",
+            "v_T(θ) ∝ √(1 − Σ aᵢ² (n̂·Ĝᵢ)²)",
+            "focus ∝ |∂v/∂θ|²   (phonon-focusing caustic)",
+        ],
+        notes: "Warm rings = quasi-longitudinal (qL); cool rings = quasi-transverse (qT, toggled by field_mix). Crystal anisotropy deforms the circular wavefront into a crinkled shape; high |∂v/∂θ| directions produce bright caustic cusps (phonon focusing). The inner inset diagram shows the slowness surface (1/v vs θ). iso_level tints sector directions; kscale stiffens both branches.",
+    },
+    ModeInfo {
+        idx: 49, name: "STRAIN FIELD",
+        tagline: "Crystal under biaxial strain — deformed lattice + piezoelectric polarization charge.",
+        equations: &[
+            "ε_xx = ε_yy = ε,  ε_zz = −2ν ε / (1−ν)   (Poisson, ν ≈ 0.28)",
+            "r → (r_x(1+ε), r_y(1+ε), r_z(1+ε_zz))",
+            "ρ_P ∝ ε · ∇² f(r_strained)",
+        ],
+        notes: "Left panel shows the unstrained reference crystal field; right shows the deformed version. The interface glows with the piezoelectric polarization charge density (div P). Strain cycles sinusoidally unless field_mix is raised to lock it at maximum. iso_level sets the strain amplitude. A gauge bar at the bottom tracks the instantaneous strain.",
+    },
+    ModeInfo {
+        idx: 50, name: "SPIN DENSITY",
+        tagline: "Real-space element-resolved magnetic moment map across a 2D supercell.",
+        equations: &[
+            "ρ_s(r) = Σ_i mᵢ · exp(−|r − Rᵢ|² / σ²)",
+            "mᵢ = m₀·(1 + δ sin(t))   (spin precession)",
+            "ordering: FM ↔ AFM ↔ ferrimagnetic  (field_mix)",
+        ],
+        notes: "Red blobs = spin-up moments; blue = spin-down; dark = nonmagnetic sites. field_mix crossfades between ferromagnetic (all red), antiferromagnetic (checkerboard), and ferrimagnetic (alternating magnitudes). iso_level scales the moment magnitude. Mouse pans the supercell. Sublattice assignment uses the parity of the lattice site index so every loaded crystal has a natural two-sublattice decomposition.",
+    },
+    ModeInfo {
+        idx: 51, name: "TAMM/SHOCKLEY",
+        tagline: "Surface state: evanescent wavefunction (left) + A(k∥,ω) Dirac cone (right).",
+        equations: &[
+            "ψ(k∥, z) = C · e^(−z/ξ) · cos(k_⊥ z + φ)",
+            "E(k∥) = ħ v_F |k∥| + E_D   (Dirac cone)",
+            "A(k,ω) = Γ / (π ((ω−E)² + Γ²))",
+        ],
+        notes: "Left panel: real-space cross-section of the evanescent surface state decaying into the crystal bulk (yellow = high density, dark = bulk). Right panel: ARPES-style spectral function A(k∥, ω) — the bright V-shaped line is the topological Dirac cone inside the projected bulk band gap (grey shadow). iso_level controls quasiparticle coherence (line sharpness); field_mix moves the Dirac point energy E_D; kscale sets the Fermi velocity. Green horizontal line = Fermi level; green/blue verticals = Γ point.",
     },
 ];
 

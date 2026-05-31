@@ -56,6 +56,13 @@
         case 43u { col = render_lorenz(uv); }
         case 44u { col = render_lensing(uv); }
         case 45u { col = render_grav_wave(uv); }
+        case 46u { col = render_zoom(uv); }
+        // ── VASP-derived batch (47..51) ───────────────────────────────────
+        case 47u { col = render_elastic_anisotropy(uv); }
+        case 48u { col = render_elastic_wave(uv); }
+        case 49u { col = render_strain_field(uv); }
+        case 50u { col = render_spin_density(uv); }
+        case 51u { col = render_tamm_shockley(uv); }
         default  { col = render_crystal_dive(uv); }
     }
     // vignette — skip for XRD, RECIP3D, KIKUCHI, HOFSTADTER, SPECTRAL (own boundaries)
