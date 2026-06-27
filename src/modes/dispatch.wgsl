@@ -46,6 +46,8 @@
         case 33u { col = render_elastic_wave(uv); }
         case 34u { col = render_strain_field(uv); }
         case 35u { col = render_spin_density(uv); }
+        // ── generative dynamics (36) ──────────────────────────────────────
+        case 36u { col = render_kuramoto(uv); }
         default  { col = render_rm(uv); }
     }
     // vignette — skip for KIKUCHI (draws its own boundaries)

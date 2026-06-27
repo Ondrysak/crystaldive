@@ -251,6 +251,19 @@ const STRAIN_FIELD_PARAMS: &[ParamDesc] = &[
 const SPIN_DENSITY_PARAMS: &[ParamDesc] = &[
     P_KSCALE, P_SPEED, P_ZOOM, p(2, "order", 0.55), p(3, "moment", 0.5), p(4, "hue", 0.0),
 ];
+// 36 KURAMOTO — generative coupled-oscillator field (Un-0 inspired), rendered
+// in the phase-field language (PHASE colour + SPIN TEXTURE hands + NEMATIC cores).
+// Slots 0/1 feed the crystal seed field; 4 is hue; 2/3/13 drive the dynamics;
+// 5 is the view window; 9/10/11/12 are free knobs (guarded in-shader).
+const KURAMOTO_PARAMS: &[ParamDesc] = &[
+    P_KSCALE, P_SPEED, P_ZOOM, P_COLOR_SHIFT,
+    p(2, "coupling", 0.35), p(3, "class_bias", 0.5),
+    ParamDesc::new(13, "class", 0.0, 1.0, 0.0),
+    ParamDesc::new(12, "crys_init", 0.0, 1.0, 0.6),
+    ParamDesc::new(9, "hands", 0.0, 1.0, 0.5),
+    ParamDesc::new(10, "cores", 0.0, 1.0, 0.5),
+    ParamDesc::new(11, "seed", 0.0, 1.0, 0.5),
+];
 
 pub fn mode_params(mode: u32) -> &'static [ParamDesc] {
     match mode {
@@ -290,6 +303,7 @@ pub fn mode_params(mode: u32) -> &'static [ParamDesc] {
         33 => ELASTIC_WAVE_PARAMS,
         34 => STRAIN_FIELD_PARAMS,
         35 => SPIN_DENSITY_PARAMS,
+        36 => KURAMOTO_PARAMS,
         _  => CANONICAL,
     }
 }
@@ -357,14 +371,14 @@ impl ModeInfo {
             12 => ModeArea::Reciprocal,
             10 | 14 | 15 | 20 | 21 | 22 | 24 | 25 => ModeArea::Electronic,
             11 | 13 | 16 | 18 | 19 | 23 | 32 | 33 | 34 | 35 => ModeArea::Materials,
-            27 | 28 => ModeArea::Classical,
+            27 | 28 | 36 => ModeArea::Classical,
             26 | 29 | 30 => ModeArea::Fields,
             _ => ModeArea::Crystal,
         }
     }
 }
 
-pub const MODES: [ModeInfo; 36] = [
+pub const MODES: [ModeInfo; 37] = [
     ModeInfo {
         idx: 0, name: "3D ISO",
         tagline: "Ray-marched isosurface of the crystal-field scalar.",
@@ -725,6 +739,18 @@ pub const MODES: [ModeInfo; 36] = [
             "ordering: FM ↔ AFM ↔ ferrimagnetic  (field_mix)",
         ],
         notes: "Red blobs = spin-up moments; blue = spin-down; dark = nonmagnetic sites. field_mix crossfades between ferromagnetic (all red), antiferromagnetic (checkerboard), and ferrimagnetic (alternating magnitudes). iso_level scales the moment magnitude. Mouse pans the supercell. Sublattice assignment uses the parity of the lattice site index so every loaded crystal has a natural two-sublattice decomposition.",
+    },
+    ModeInfo {
+        idx: 36, name: "KURAMOTO",
+        tagline: "Generative coupled-oscillator field — a crystal-seeded Un-0.",
+        equations: &[
+            "population: θ̇ᵢ = ωᵢ + K·r·sin(ψ − θᵢ) + Kc·sin(τᵢ − θᵢ)",
+            "order param: r·e^{iψ} = (1/N) Σⱼ aⱼ e^{iθⱼ}",
+            "seed (per pixel): θ_c = arg(cf₀ + i·cf₁)  (crystal field)",
+            "lock(x) = smoothstep(|ω(x)| / K·r) · r   (per-pixel coherence)",
+            "render: θ = θ_c + lock·Δ(ψ−θ_c);  hue ← θ, cores ← |ψ_c|→0",
+        ],
+        notes: "A population of Kuramoto oscillators is released from a random seed blended with the crystal's reciprocal-lattice data, biased toward a class, and integrated by Euler to a snapshot time T — Unconventional AI's Un-0 image model — yielding the synchronisation order parameter r·e^{iψ}. The readout then treats every pixel as an oscillator entrained by that mean field (Adler equation, solved closed-form): its initial phase is the argument of the complex crystal field ψ_c = cf₀ + i·cf₁, whose zeros are genuine phase vortices. Pixels whose crystal detuning ω(x) is small vs the drive K·r lock to the class-warped mean phase; the rest keep drifting — locked and drifting regions coexisting is a chimera state. The look borrows three sibling modes: PHASE (cyclic domain colour + bright vortex cores), SPIN TEXTURE (oriented oscillator 'hands' — the metronome arms, golden when locked), and NEMATIC (magenta defect-core glow). coupling = K, class_bias = Kc, class picks the template (6 classes), crys_init weights the crystalline structure, hands/cores tune the glyph and defect overlays, seed re-rolls the generation. Each 6 s cycle re-seeds and replays order emerging from chaos. Hold the mouse to pick the class by cursor-x.",
     },
 
 ];

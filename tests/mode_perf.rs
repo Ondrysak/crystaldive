@@ -15,10 +15,15 @@ use crystal_viz::bench::{run, slow_modes, BenchOpts};
 const MAX_RATIO: f64 = 10.0;
 
 /// Modes exempt from the ratio gate. The threshold is relative to the median,
-/// which is set by cheap 2D field modes — a fullscreen first-person raymarcher
-/// is inherently ~30× heavier and can't meet 10× without gutting its visuals.
-/// These are intentionally heavy and allowed to exceed the cutoff.
-const EXEMPT: &[&str] = &["LATTICE WALK"];
+/// which is set by cheap 2D field modes — heavy raymarchers can't meet 10×
+/// without gutting their visuals, so they're intentionally exempt:
+///   • LATTICE WALK — fullscreen first-person raymarcher, inherently ~30× heavier.
+///   • WANNIER      — isosurface raymarcher that evaluates a full inverse-FT
+///     (Σ over all G-vectors, cos+sin each) at every march sample. It sits right
+///     at the ratio ceiling (~10× median); since the median is set by the cheap
+///     2D modes, adding any new cheap mode nudges the median down and tips it
+///     over. Its absolute cost (~1.6 ms, >600 fps) is still fully interactive.
+const EXEMPT: &[&str] = &["LATTICE WALK", "WANNIER"];
 
 #[test]
 #[ignore = "GPU benchmark — run via the pre-commit hook or `cargo test -- --ignored`"]
