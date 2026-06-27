@@ -93,6 +93,8 @@ pub const FIELD_SHADER: &str = concat!(
     "\n",
     include_str!("mode_spin_density.wgsl"),
     "\n",
+    include_str!("mode_kuramoto.wgsl"),
+    "\n",
     "\n",
     include_str!("dispatch.wgsl"),
 );
