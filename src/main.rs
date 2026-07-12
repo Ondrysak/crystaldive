@@ -17,7 +17,7 @@ mod midi;
 mod preset;
 use crystals::{all_crystals, all_groups, CrystalDef};
 use poscar::Crystal;
-use reciprocal::{crossfade_pack, GpuField};
+use reciprocal::GpuField;
 use renderer::{FieldUniform, GpuState};
 
 #[cfg(target_arch = "wasm32")]
@@ -32,62 +32,72 @@ use winit::platform::web::{EventLoopExtWebSys, WindowAttributesExtWebSys};
 /// indices below mirror the WGSL `MP_*` consts in `prelude.wgsl`); slots 9..15
 /// are free for each mode. The slot count must match `FieldUniform`'s 4×vec4
 /// pack and the WGSL `array<vec4<f32>, 4>`.
-pub const MP_SLOTS:        usize = 16;
-pub const MP_KSCALE:       usize = 0;
-pub const MP_SPEED:        usize = 1;
-pub const MP_FIELD_MIX:    usize = 2;
-pub const MP_ISO_LEVEL:    usize = 3;
-pub const MP_COLOR_SHIFT:  usize = 4;
-pub const MP_ZOOM:         usize = 5;
-pub const MP_W_LATTICE:    usize = 6;
-pub const MP_W_MOTIF:      usize = 7;
-pub const MP_W_BAND:       usize = 8;
+pub const MP_SLOTS: usize = 16;
+pub const MP_KSCALE: usize = 0;
+pub const MP_SPEED: usize = 1;
+pub const MP_FIELD_MIX: usize = 2;
+pub const MP_ISO_LEVEL: usize = 3;
+pub const MP_COLOR_SHIFT: usize = 4;
+pub const MP_ZOOM: usize = 5;
+pub const MP_W_LATTICE: usize = 6;
+pub const MP_W_MOTIF: usize = 7;
+pub const MP_W_BAND: usize = 8;
 
 /// Default values for the canonical generator slots (0..8); free slots are 0.
 pub fn default_mp() -> [f32; MP_SLOTS] {
     let mut m = [0.0f32; MP_SLOTS];
-    m[MP_KSCALE]      = 1.4;
-    m[MP_SPEED]       = 0.3;
-    m[MP_FIELD_MIX]   = 0.55;
-    m[MP_ISO_LEVEL]   = 0.5;
+    m[MP_KSCALE] = 1.4;
+    m[MP_SPEED] = 0.3;
+    m[MP_FIELD_MIX] = 0.55;
+    m[MP_ISO_LEVEL] = 0.5;
     m[MP_COLOR_SHIFT] = 0.0;
-    m[MP_ZOOM]        = 1.0;
-    m[MP_W_LATTICE]   = 1.0;
-    m[MP_W_MOTIF]     = 0.6;
-    m[MP_W_BAND]      = 0.4;
+    m[MP_ZOOM] = 1.0;
+    m[MP_W_LATTICE] = 1.0;
+    m[MP_W_MOTIF] = 0.6;
+    m[MP_W_BAND] = 0.4;
     m
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct FieldParams {
-    pub mode:           u32,
+    pub mode: u32,
     #[serde(default = "default_mp")]
-    pub mp:             [f32; MP_SLOTS],
+    pub mp: [f32; MP_SLOTS],
     // feedback
-    pub fb_enabled:     bool,
-    pub fb_mirror:      u32,
-    pub fb_zoom:        f32,
-    pub fb_offset_x:    f32,
-    pub fb_offset_y:    f32,
-    pub fb_rotation:    f32,
-    pub fb_decay:       f32,
+    pub fb_enabled: bool,
+    pub fb_mirror: u32,
+    pub fb_zoom: f32,
+    pub fb_offset_x: f32,
+    pub fb_offset_y: f32,
+    pub fb_rotation: f32,
+    pub fb_decay: f32,
     pub fb_color_shift: f32,
-    pub fb_inject:      f32,
-    pub fb_fold_angle:  f32,
-    pub fb_saturation:  f32,
-    pub fb_brightness:  f32,
-    pub fb_blend_mode:  u32,
+    pub fb_inject: f32,
+    pub fb_fold_angle: f32,
+    pub fb_saturation: f32,
+    pub fb_brightness: f32,
+    pub fb_blend_mode: u32,
     pub fb_motion_blur: f32,
 }
 
 impl Default for FieldParams {
     fn default() -> Self {
         Self {
-            mode: 4, mp: default_mp(),
-            fb_enabled: false, fb_mirror: 0,
-            fb_zoom: 0.98, fb_offset_x: 0.0, fb_offset_y: 0.0,
-            fb_rotation: 0.0, fb_decay: 0.85, fb_color_shift: 0.0, fb_inject: 1.0,
-            fb_fold_angle: 0.0, fb_saturation: 1.0, fb_brightness: 1.0, fb_blend_mode: 0,
+            mode: 4,
+            mp: default_mp(),
+            fb_enabled: false,
+            fb_mirror: 0,
+            fb_zoom: 0.98,
+            fb_offset_x: 0.0,
+            fb_offset_y: 0.0,
+            fb_rotation: 0.0,
+            fb_decay: 0.85,
+            fb_color_shift: 0.0,
+            fb_inject: 1.0,
+            fb_fold_angle: 0.0,
+            fb_saturation: 1.0,
+            fb_brightness: 1.0,
+            fb_blend_mode: 0,
             fb_motion_blur: 0.0,
         }
     }
@@ -137,8 +147,20 @@ impl LfoWave {
             Self::Sine => (TAU * x).sin(),
             Self::Triangle => 1.0 - 4.0 * (x - 0.5).abs(),
             Self::Saw => x * 2.0 - 1.0,
-            Self::Square => if x < 0.5 { 1.0 } else { -1.0 },
-            Self::Pulse => if x < 0.18 { 1.0 } else { -0.35 },
+            Self::Square => {
+                if x < 0.5 {
+                    1.0
+                } else {
+                    -1.0
+                }
+            }
+            Self::Pulse => {
+                if x < 0.18 {
+                    1.0
+                } else {
+                    -0.35
+                }
+            }
             Self::Steps => {
                 let n = (x * 8.0).floor();
                 bz_hash(n + phase.floor() * 17.0) * 2.0 - 1.0
@@ -164,16 +186,24 @@ pub enum LfoSrc {
 
 impl LfoSrc {
     fn next(self) -> Self {
-        match self { Self::Off => Self::A, Self::A => Self::B, Self::B => Self::Off }
+        match self {
+            Self::Off => Self::A,
+            Self::A => Self::B,
+            Self::B => Self::Off,
+        }
     }
     fn label(self) -> &'static str {
-        match self { Self::Off => "~", Self::A => "A", Self::B => "B" }
+        match self {
+            Self::Off => "~",
+            Self::A => "A",
+            Self::B => "B",
+        }
     }
     fn color(self) -> egui::Color32 {
         match self {
             Self::Off => egui::Color32::from_gray(90),
-            Self::A   => egui::Color32::from_rgb(80, 220, 120),
-            Self::B   => egui::Color32::from_rgb(120, 180, 255),
+            Self::A => egui::Color32::from_rgb(80, 220, 120),
+            Self::B => egui::Color32::from_rgb(120, 180, 255),
         }
     }
 }
@@ -182,10 +212,10 @@ impl LfoSrc {
 /// Two independent banks (A and B) live inside `LfoParams`.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct LfoEngine {
-    pub rate:  f32,    // cycles per second
-    pub depth: f32,    // 0..1 — scaled by each param's range
-    pub wave:  LfoWave,
-    pub phase: f32,    // phase offset in cycles (0..1), lets B de-sync from A
+    pub rate: f32,  // cycles per second
+    pub depth: f32, // 0..1 — scaled by each param's range
+    pub wave: LfoWave,
+    pub phase: f32, // phase offset in cycles (0..1), lets B de-sync from A
 }
 
 impl LfoEngine {
@@ -194,7 +224,9 @@ impl LfoEngine {
     }
 }
 
-fn lfo_mp_default() -> [LfoSrc; MP_SLOTS] { [LfoSrc::Off; MP_SLOTS] }
+fn lfo_mp_default() -> [LfoSrc; MP_SLOTS] {
+    [LfoSrc::Off; MP_SLOTS]
+}
 
 /// Reset the active mode's declared slots to their per-mode default values.
 /// Called on a *manual* mode switch so a freshly-picked mode starts sensible;
@@ -223,28 +255,30 @@ pub struct LfoParams {
     pub b: LfoEngine,
     // per-mode param bank — each slot picks LfoSrc::{Off, A, B}
     #[serde(default = "lfo_mp_default")]
-    pub mp:             [LfoSrc; MP_SLOTS],
+    pub mp: [LfoSrc; MP_SLOTS],
     // feedback params
-    pub fb_zoom:        LfoSrc,
-    pub fb_decay:       LfoSrc,
-    pub fb_offset_x:    LfoSrc,
-    pub fb_offset_y:    LfoSrc,
-    pub fb_rotation:    LfoSrc,
+    pub fb_zoom: LfoSrc,
+    pub fb_decay: LfoSrc,
+    pub fb_offset_x: LfoSrc,
+    pub fb_offset_y: LfoSrc,
+    pub fb_rotation: LfoSrc,
     pub fb_color_shift: LfoSrc,
-    pub fb_saturation:  LfoSrc,
-    pub fb_brightness:  LfoSrc,
-    pub fb_inject:      LfoSrc,
-    pub fb_fold_angle:  LfoSrc,
+    pub fb_saturation: LfoSrc,
+    pub fb_brightness: LfoSrc,
+    pub fb_inject: LfoSrc,
+    pub fb_fold_angle: LfoSrc,
     pub fb_motion_blur: LfoSrc,
     /// Total modulation budget (0..1): caps the summed, range-normalized
     /// LFO + mic swing across every routed target. When routes ask for more
     /// than the budget allows, all of them are scaled down proportionally —
     /// "everything moves, nothing explodes".
     #[serde(default = "flux_default")]
-    pub flux:           f32,
+    pub flux: f32,
 }
 
-fn flux_default() -> f32 { 0.5 }
+fn flux_default() -> f32 {
+    0.5
+}
 
 impl Default for LfoParams {
     fn default() -> Self {
@@ -253,17 +287,33 @@ impl Default for LfoParams {
         // flux budget keeps any later knob-twisting bounded.
         let mut mp = lfo_mp_default();
         mp[MP_COLOR_SHIFT] = LfoSrc::A;
-        mp[MP_ZOOM]        = LfoSrc::A;
-        mp[MP_W_MOTIF]     = LfoSrc::B;
+        mp[MP_ZOOM] = LfoSrc::A;
+        mp[MP_W_MOTIF] = LfoSrc::B;
         Self {
-            a: LfoEngine { rate: 0.11, depth: 0.10, wave: LfoWave::Sine,     phase: 0.0  },
-            b: LfoEngine { rate: 0.045, depth: 0.14, wave: LfoWave::Triangle, phase: 0.25 },
+            a: LfoEngine {
+                rate: 0.11,
+                depth: 0.10,
+                wave: LfoWave::Sine,
+                phase: 0.0,
+            },
+            b: LfoEngine {
+                rate: 0.045,
+                depth: 0.14,
+                wave: LfoWave::Triangle,
+                phase: 0.25,
+            },
             mp,
-            fb_zoom: LfoSrc::Off, fb_decay: LfoSrc::Off, fb_offset_x: LfoSrc::Off,
-            fb_offset_y: LfoSrc::Off, fb_rotation: LfoSrc::B,
-            fb_color_shift: LfoSrc::Off, fb_saturation: LfoSrc::Off,
-            fb_brightness: LfoSrc::Off, fb_inject: LfoSrc::Off,
-            fb_fold_angle: LfoSrc::Off, fb_motion_blur: LfoSrc::Off,
+            fb_zoom: LfoSrc::Off,
+            fb_decay: LfoSrc::Off,
+            fb_offset_x: LfoSrc::Off,
+            fb_offset_y: LfoSrc::Off,
+            fb_rotation: LfoSrc::B,
+            fb_color_shift: LfoSrc::Off,
+            fb_saturation: LfoSrc::Off,
+            fb_brightness: LfoSrc::Off,
+            fb_inject: LfoSrc::Off,
+            fb_fold_angle: LfoSrc::Off,
+            fb_motion_blur: LfoSrc::Off,
             flux: flux_default(),
         }
     }
@@ -275,11 +325,17 @@ impl LfoParams {
     pub fn unrouted() -> Self {
         Self {
             mp: lfo_mp_default(),
-            fb_zoom: LfoSrc::Off, fb_decay: LfoSrc::Off, fb_offset_x: LfoSrc::Off,
-            fb_offset_y: LfoSrc::Off, fb_rotation: LfoSrc::Off,
-            fb_color_shift: LfoSrc::Off, fb_saturation: LfoSrc::Off,
-            fb_brightness: LfoSrc::Off, fb_inject: LfoSrc::Off,
-            fb_fold_angle: LfoSrc::Off, fb_motion_blur: LfoSrc::Off,
+            fb_zoom: LfoSrc::Off,
+            fb_decay: LfoSrc::Off,
+            fb_offset_x: LfoSrc::Off,
+            fb_offset_y: LfoSrc::Off,
+            fb_rotation: LfoSrc::Off,
+            fb_color_shift: LfoSrc::Off,
+            fb_saturation: LfoSrc::Off,
+            fb_brightness: LfoSrc::Off,
+            fb_inject: LfoSrc::Off,
+            fb_fold_angle: LfoSrc::Off,
+            fb_motion_blur: LfoSrc::Off,
             ..Self::default()
         }
     }
@@ -289,36 +345,49 @@ impl LfoParams {
 
 /// Which audio band (or none) drives a parameter.
 #[derive(Clone, Copy, PartialEq, Default)]
-pub enum MicSrc { #[default] Off, Amp, Bass, Mid, Treble }
+pub enum MicSrc {
+    #[default]
+    Off,
+    Amp,
+    Bass,
+    Mid,
+    Treble,
+}
 
 impl MicSrc {
     fn next(self) -> Self {
         match self {
-            Self::Off    => Self::Amp,
-            Self::Amp    => Self::Bass,
-            Self::Bass   => Self::Mid,
-            Self::Mid    => Self::Treble,
+            Self::Off => Self::Amp,
+            Self::Amp => Self::Bass,
+            Self::Bass => Self::Mid,
+            Self::Mid => Self::Treble,
             Self::Treble => Self::Off,
         }
     }
     fn label(self) -> &'static str {
-        match self { Self::Off => "·", Self::Amp => "A", Self::Bass => "B", Self::Mid => "M", Self::Treble => "T" }
+        match self {
+            Self::Off => "·",
+            Self::Amp => "A",
+            Self::Bass => "B",
+            Self::Mid => "M",
+            Self::Treble => "T",
+        }
     }
     fn color(self) -> egui::Color32 {
         match self {
-            Self::Off    => egui::Color32::from_gray(70),
-            Self::Amp    => egui::Color32::from_rgb(220, 220, 220),
-            Self::Bass   => egui::Color32::from_rgb(255,  80,  80),
-            Self::Mid    => egui::Color32::from_rgb( 80, 220, 120),
-            Self::Treble => egui::Color32::from_rgb( 80, 160, 255),
+            Self::Off => egui::Color32::from_gray(70),
+            Self::Amp => egui::Color32::from_rgb(220, 220, 220),
+            Self::Bass => egui::Color32::from_rgb(255, 80, 80),
+            Self::Mid => egui::Color32::from_rgb(80, 220, 120),
+            Self::Treble => egui::Color32::from_rgb(80, 160, 255),
         }
     }
     fn value(self, b: &audio::AudioBands) -> f32 {
         match self {
-            Self::Off    => 0.0,
-            Self::Amp    => b.amplitude,
-            Self::Bass   => b.bass,
-            Self::Mid    => b.mid,
+            Self::Off => 0.0,
+            Self::Amp => b.amplitude,
+            Self::Bass => b.bass,
+            Self::Mid => b.mid,
             Self::Treble => b.treble,
         }
     }
@@ -327,30 +396,36 @@ impl MicSrc {
 #[derive(Clone)]
 pub struct MicParams {
     // per-mode param bank — each slot picks a MicSrc band
-    pub mp:             [MicSrc; MP_SLOTS],
+    pub mp: [MicSrc; MP_SLOTS],
     // feedback params
-    pub fb_zoom:        MicSrc,
-    pub fb_decay:       MicSrc,
-    pub fb_offset_x:    MicSrc,
-    pub fb_offset_y:    MicSrc,
-    pub fb_rotation:    MicSrc,
+    pub fb_zoom: MicSrc,
+    pub fb_decay: MicSrc,
+    pub fb_offset_x: MicSrc,
+    pub fb_offset_y: MicSrc,
+    pub fb_rotation: MicSrc,
     pub fb_color_shift: MicSrc,
-    pub fb_saturation:  MicSrc,
-    pub fb_brightness:  MicSrc,
-    pub fb_inject:      MicSrc,
-    pub fb_fold_angle:  MicSrc,
+    pub fb_saturation: MicSrc,
+    pub fb_brightness: MicSrc,
+    pub fb_inject: MicSrc,
+    pub fb_fold_angle: MicSrc,
     pub fb_motion_blur: MicSrc,
-    pub depth:          f32,
+    pub depth: f32,
 }
 
 impl Default for MicParams {
     fn default() -> Self {
         Self {
             mp: [MicSrc::Off; MP_SLOTS],
-            fb_zoom: MicSrc::Off, fb_decay: MicSrc::Off, fb_offset_x: MicSrc::Off,
-            fb_offset_y: MicSrc::Off, fb_rotation: MicSrc::Off, fb_color_shift: MicSrc::Off,
-            fb_saturation: MicSrc::Off, fb_brightness: MicSrc::Off,
-            fb_inject: MicSrc::Off, fb_fold_angle: MicSrc::Off,
+            fb_zoom: MicSrc::Off,
+            fb_decay: MicSrc::Off,
+            fb_offset_x: MicSrc::Off,
+            fb_offset_y: MicSrc::Off,
+            fb_rotation: MicSrc::Off,
+            fb_color_shift: MicSrc::Off,
+            fb_saturation: MicSrc::Off,
+            fb_brightness: MicSrc::Off,
+            fb_inject: MicSrc::Off,
+            fb_fold_angle: MicSrc::Off,
             fb_motion_blur: MicSrc::Off,
             depth: 0.5,
         }
@@ -371,26 +446,42 @@ const TOUR_MODES: [u32; 14] = [22, 20, 14, 21, 10, 17, 27, 4, 28, 15, 18, 12, 23
 #[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TripLevel(u8);
 
-impl Default for TripLevel { fn default() -> Self { Self(4) } }
+impl Default for TripLevel {
+    fn default() -> Self {
+        Self(4)
+    }
+}
 
 impl TripLevel {
     pub const MAX_VAL: u8 = 9;
 
-    pub fn new(v: u8) -> Self { Self(v.min(Self::MAX_VAL)) }
-    pub fn get(self) -> u8 { self.0 }
-    pub fn inc(self) -> Self { Self((self.0 + 1).min(Self::MAX_VAL)) }
-    pub fn dec(self) -> Self { Self(self.0.saturating_sub(1)) }
+    pub fn new(v: u8) -> Self {
+        Self(v.min(Self::MAX_VAL))
+    }
+    pub fn get(self) -> u8 {
+        self.0
+    }
+    pub fn inc(self) -> Self {
+        Self((self.0 + 1).min(Self::MAX_VAL))
+    }
+    pub fn dec(self) -> Self {
+        Self(self.0.saturating_sub(1))
+    }
 
-    fn t(self) -> f32 { self.0 as f32 / Self::MAX_VAL as f32 }
-    fn lerp(self, lo: f32, hi: f32) -> f32 { lo + (hi - lo) * self.t() }
+    fn t(self) -> f32 {
+        self.0 as f32 / Self::MAX_VAL as f32
+    }
+    fn lerp(self, lo: f32, hi: f32) -> f32 {
+        lo + (hi - lo) * self.t()
+    }
 
     fn wave_a(self) -> LfoWave {
         match self.0 {
             0..=2 => LfoWave::Sine,
             3..=5 => LfoWave::Triangle,
             6..=7 => LfoWave::Saw,
-            8     => LfoWave::Pulse,
-            _     => LfoWave::Steps,
+            8 => LfoWave::Pulse,
+            _ => LfoWave::Steps,
         }
     }
     fn wave_b(self) -> LfoWave {
@@ -398,21 +489,39 @@ impl TripLevel {
             0..=1 => LfoWave::Sine,
             2..=4 => LfoWave::Triangle,
             5..=6 => LfoWave::Saw,
-            7     => LfoWave::Pulse,
-            _     => LfoWave::Square,
+            7 => LfoWave::Pulse,
+            _ => LfoWave::Square,
         }
     }
 
-    fn scene_len(self)   -> f32 { self.lerp(28.0, 1.8) }
-    fn walk_dur(self)    -> f32 { self.lerp(28.0, 2.0) }
-    fn fade_dur(self)    -> f32 { self.lerp(3.0, 0.8) }
-    fn lfo_a_rate(self)  -> f32 { self.lerp(0.03, 1.00) }
-    fn lfo_b_rate(self)  -> f32 { self.lerp(0.02, 0.65) }
-    fn lfo_a_depth(self) -> f32 { self.lerp(0.0, 0.70) }
-    fn lfo_b_depth(self) -> f32 { self.lerp(0.0, 0.55) }
-    fn fb_enabled(self)  -> bool { self.0 >= 3 }
+    fn scene_len(self) -> f32 {
+        self.lerp(28.0, 1.8)
+    }
+    fn walk_dur(self) -> f32 {
+        self.lerp(28.0, 2.0)
+    }
+    fn fade_dur(self) -> f32 {
+        self.lerp(3.0, 0.8)
+    }
+    fn lfo_a_rate(self) -> f32 {
+        self.lerp(0.03, 1.00)
+    }
+    fn lfo_b_rate(self) -> f32 {
+        self.lerp(0.02, 0.65)
+    }
+    fn lfo_a_depth(self) -> f32 {
+        self.lerp(0.0, 0.70)
+    }
+    fn lfo_b_depth(self) -> f32 {
+        self.lerp(0.0, 0.55)
+    }
+    fn fb_enabled(self) -> bool {
+        self.0 >= 3
+    }
     fn fb_strength(self) -> f32 {
-        if self.0 < 3 { 0.0 } else {
+        if self.0 < 3 {
+            0.0
+        } else {
             let t = (self.0 - 3) as f32 / (Self::MAX_VAL - 3) as f32;
             0.35 + 0.65 * t
         }
@@ -437,25 +546,42 @@ impl TripLevel {
 // ── Sequencer ────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
-pub enum TranCurve { Linear, EaseInOut, Silk, Snap, Bounce, Over }
+pub enum TranCurve {
+    Linear,
+    EaseInOut,
+    Silk,
+    Snap,
+    Bounce,
+    Over,
+}
 
 impl TranCurve {
     fn apply(self, t: f32) -> f32 {
         match self {
-            Self::Linear    => t,
+            Self::Linear => t,
             Self::EaseInOut => t * t * (3.0 - 2.0 * t),
-            Self::Silk      => {
+            Self::Silk => {
                 // Double smoothstep: long soft ends, brisk middle — buttery.
                 let s = t * t * (3.0 - 2.0 * t);
                 s * s * (3.0 - 2.0 * s)
             }
-            Self::Snap      => if t >= 1.0 { 1.0 } else { 0.0 },
-            Self::Bounce    => {
-                // quartic ease-in-out: quick rush then slow settle
-                if t < 0.5 { 8.0 * t * t * t * t }
-                else { let u = t - 1.0; 1.0 - 8.0 * u * u * u * u }
+            Self::Snap => {
+                if t >= 1.0 {
+                    1.0
+                } else {
+                    0.0
+                }
             }
-            Self::Over      => {
+            Self::Bounce => {
+                // quartic ease-in-out: quick rush then slow settle
+                if t < 0.5 {
+                    8.0 * t * t * t * t
+                } else {
+                    let u = t - 1.0;
+                    1.0 - 8.0 * u * u * u * u
+                }
+            }
+            Self::Over => {
                 // Ease-out-back: overshoot ~10 % past target, then settle.
                 // Downstream range clamps keep the excursion safe.
                 const C1: f32 = 1.70158;
@@ -467,40 +593,47 @@ impl TranCurve {
     }
     fn label(self) -> &'static str {
         match self {
-            Self::Linear    => "LINEAR",
+            Self::Linear => "LINEAR",
             Self::EaseInOut => "EASE",
-            Self::Silk      => "SILK",
-            Self::Snap      => "SNAP",
-            Self::Bounce    => "BOUNCE",
-            Self::Over      => "OVER",
+            Self::Silk => "SILK",
+            Self::Snap => "SNAP",
+            Self::Bounce => "BOUNCE",
+            Self::Over => "OVER",
         }
     }
     fn next(self) -> Self {
         match self {
-            Self::Linear    => Self::EaseInOut,
+            Self::Linear => Self::EaseInOut,
             Self::EaseInOut => Self::Silk,
-            Self::Silk      => Self::Snap,
-            Self::Snap      => Self::Bounce,
-            Self::Bounce    => Self::Over,
-            Self::Over      => Self::Linear,
+            Self::Silk => Self::Snap,
+            Self::Snap => Self::Bounce,
+            Self::Bounce => Self::Over,
+            Self::Over => Self::Linear,
         }
     }
 }
 
 /// Elektron-style cycle condition: step plays on pass `k` of every `n` visits.
 /// `(1,1)` = always. Ratios cycle through `TRIG_CONDS` in the UI.
-pub const TRIG_CONDS: [(u8, u8); 7] =
-    [(1, 1), (1, 2), (2, 2), (1, 3), (1, 4), (4, 4), (1, 8)];
+pub const TRIG_CONDS: [(u8, u8); 7] = [(1, 1), (1, 2), (2, 2), (1, 3), (1, 4), (4, 4), (1, 8)];
 
-fn cond_default() -> (u8, u8) { (1, 1) }
+fn cond_default() -> (u8, u8) {
+    (1, 1)
+}
 
 pub fn cond_label(cond: (u8, u8)) -> String {
-    if cond == (1, 1) { "--".to_string() } else { format!("{}:{}", cond.0, cond.1) }
+    if cond == (1, 1) {
+        "--".to_string()
+    } else {
+        format!("{}:{}", cond.0, cond.1)
+    }
 }
 
 pub fn cond_passes(cond: (u8, u8), visits: u32) -> bool {
     let (k, n) = cond;
-    if n <= 1 { return true; }
+    if n <= 1 {
+        return true;
+    }
     visits.wrapping_sub(1) % n as u32 == (k.max(1) - 1) as u32
 }
 
@@ -511,28 +644,32 @@ fn cond_next(cond: (u8, u8)) -> (u8, u8) {
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct SeqStep {
-    pub params:         FieldParams,
-    pub muted:          bool,
+    pub params: FieldParams,
+    pub muted: bool,
     /// Per-step duration multiplier in [0.25, 4.0]. 1.0 = global step_dur.
-    pub dur_mul:        f32,
+    pub dur_mul: f32,
     /// Per-step transition curve override (None = use Sequencer.curve).
     pub curve_override: Option<TranCurve>,
     /// Probability the step plays when advance lands on it (0..1, 1.0 = always).
-    pub prob:           f32,
+    pub prob: f32,
     /// Elektron cycle condition `(k, n)`: play on visit k of every n.
     #[serde(default = "cond_default")]
-    pub cond:           (u8, u8),
+    pub cond: (u8, u8),
     /// Runtime visit counter for `cond` (not persisted).
     #[serde(skip)]
-    pub visits:         u32,
+    pub visits: u32,
 }
 
 impl SeqStep {
     pub fn new(p: FieldParams) -> Self {
         Self {
-            params: p, muted: false, dur_mul: 1.0,
-            curve_override: None, prob: 1.0,
-            cond: cond_default(), visits: 0,
+            params: p,
+            muted: false,
+            dur_mul: 1.0,
+            curve_override: None,
+            prob: 1.0,
+            cond: cond_default(),
+            visits: 0,
         }
     }
 }
@@ -550,18 +687,18 @@ pub enum SeqPlayMode {
 impl SeqPlayMode {
     fn next(self) -> Self {
         match self {
-            Self::Forward  => Self::Reverse,
-            Self::Reverse  => Self::PingPong,
+            Self::Forward => Self::Reverse,
+            Self::Reverse => Self::PingPong,
             Self::PingPong => Self::Random,
-            Self::Random   => Self::Forward,
+            Self::Random => Self::Forward,
         }
     }
     fn label(self) -> &'static str {
         match self {
-            Self::Forward  => "FWD",
-            Self::Reverse  => "REV",
+            Self::Forward => "FWD",
+            Self::Reverse => "REV",
             Self::PingPong => "PP",
-            Self::Random   => "RND",
+            Self::Random => "RND",
         }
     }
 }
@@ -569,7 +706,13 @@ impl SeqPlayMode {
 fn lerp_fp(a: &FieldParams, b: &FieldParams, t: f32) -> FieldParams {
     let l = |x: f32, y: f32| x + (y - x) * t;
     let d = b.mp[MP_COLOR_SHIFT] - a.mp[MP_COLOR_SHIFT];
-    let cs_delta = if d > 0.5 { d - 1.0 } else if d < -0.5 { d + 1.0 } else { d };
+    let cs_delta = if d > 0.5 {
+        d - 1.0
+    } else if d < -0.5 {
+        d + 1.0
+    } else {
+        d
+    };
     // Discrete fields snap to `b` immediately at t=0 (Digitakt-style trig: when
     // the sequencer advances to step N, that step's mode/mirror/blend is what
     // we see for the whole step duration — no half-step desync against the
@@ -584,22 +727,22 @@ fn lerp_fp(a: &FieldParams, b: &FieldParams, t: f32) -> FieldParams {
         };
     }
     FieldParams {
-        mode:           b.mode,
+        mode: b.mode,
         mp,
-        fb_enabled:     b.fb_enabled,
-        fb_mirror:      b.fb_mirror,
-        fb_zoom:        l(a.fb_zoom,        b.fb_zoom),
-        fb_offset_x:    l(a.fb_offset_x,    b.fb_offset_x),
-        fb_offset_y:    l(a.fb_offset_y,    b.fb_offset_y),
-        fb_rotation:    l(a.fb_rotation,    b.fb_rotation),
-        fb_decay:       l(a.fb_decay,       b.fb_decay),
+        fb_enabled: b.fb_enabled,
+        fb_mirror: b.fb_mirror,
+        fb_zoom: l(a.fb_zoom, b.fb_zoom),
+        fb_offset_x: l(a.fb_offset_x, b.fb_offset_x),
+        fb_offset_y: l(a.fb_offset_y, b.fb_offset_y),
+        fb_rotation: l(a.fb_rotation, b.fb_rotation),
+        fb_decay: l(a.fb_decay, b.fb_decay),
         fb_color_shift: l(a.fb_color_shift, b.fb_color_shift),
-        fb_inject:      l(a.fb_inject,      b.fb_inject),
-        fb_fold_angle:  l(a.fb_fold_angle,  b.fb_fold_angle),
-        fb_saturation:  l(a.fb_saturation,  b.fb_saturation),
-        fb_brightness:  l(a.fb_brightness,  b.fb_brightness),
-        fb_blend_mode:  b.fb_blend_mode,
-        fb_motion_blur: l(a.fb_motion_blur,  b.fb_motion_blur),
+        fb_inject: l(a.fb_inject, b.fb_inject),
+        fb_fold_angle: l(a.fb_fold_angle, b.fb_fold_angle),
+        fb_saturation: l(a.fb_saturation, b.fb_saturation),
+        fb_brightness: l(a.fb_brightness, b.fb_brightness),
+        fb_blend_mode: b.fb_blend_mode,
+        fb_motion_blur: l(a.fb_motion_blur, b.fb_motion_blur),
     }
 }
 
@@ -609,86 +752,123 @@ fn lerp_fp(a: &FieldParams, b: &FieldParams, t: f32) -> FieldParams {
 /// amt = 1) and the result still passes through `apply_modulation`'s range
 /// clamps downstream — controlled motion, not chaos.
 fn apply_drift(fp: &mut FieldParams, clock: f32, amt: f32, step_idx: usize) {
-    if amt <= 0.001 { return; }
+    if amt <= 0.001 {
+        return;
+    }
     let ph = step_idx as f32 * 0.618;
     let osc = |rate: f32, phase: f32| (TAU * (rate * clock) + phase).sin();
     // Hue crawl: slow monotonic rotation — the surest "something is happening".
     fp.mp[MP_COLOR_SHIFT] = (fp.mp[MP_COLOR_SHIFT] + amt * 0.010 * clock).rem_euclid(1.0);
     // Breathing: proportional wobble keeps scale relationships intact.
-    fp.mp[MP_ZOOM]   *= 1.0 + amt * 0.045 * osc(0.050, ph);
+    fp.mp[MP_ZOOM] *= 1.0 + amt * 0.045 * osc(0.050, ph);
     fp.mp[MP_KSCALE] *= 1.0 + amt * 0.030 * osc(0.017, ph * 2.0);
-    fp.mp[MP_SPEED]  *= 1.0 + amt * 0.100 * osc(0.023, 1.7);
+    fp.mp[MP_SPEED] *= 1.0 + amt * 0.100 * osc(0.023, 1.7);
     fp.mp[MP_W_MOTIF] += amt * 0.120 * osc(0.031, ph);
-    fp.mp[MP_W_BAND]  += amt * 0.100 * osc(0.041, ph + 2.1);
+    fp.mp[MP_W_BAND] += amt * 0.100 * osc(0.041, ph + 2.1);
     if fp.fb_enabled {
         fp.fb_rotation += amt * 0.030 * osc(0.019, 0.0);
-        fp.fb_zoom     += amt * 0.006 * osc(0.043, ph);
+        fp.fb_zoom += amt * 0.006 * osc(0.043, ph);
     }
 }
 
 // Compact builder used by presets. The 9 positional args map to the canonical
 // generator slots (0..8); free slots (9..15) stay at their defaults.
-fn sp(mode: u32, ks: f32, sp: f32, fm: f32, il: f32, cs: f32, zm: f32, wl: f32, wm: f32, wb: f32) -> SeqStep {
+fn sp(
+    mode: u32,
+    ks: f32,
+    sp: f32,
+    fm: f32,
+    il: f32,
+    cs: f32,
+    zm: f32,
+    wl: f32,
+    wm: f32,
+    wb: f32,
+) -> SeqStep {
     let mut mp = default_mp();
-    mp[MP_KSCALE] = ks; mp[MP_SPEED] = sp; mp[MP_FIELD_MIX] = fm; mp[MP_ISO_LEVEL] = il;
-    mp[MP_COLOR_SHIFT] = cs; mp[MP_ZOOM] = zm;
-    mp[MP_W_LATTICE] = wl; mp[MP_W_MOTIF] = wm; mp[MP_W_BAND] = wb;
-    let mut fp = FieldParams { mode, mp, ..FieldParams::default() };
+    mp[MP_KSCALE] = ks;
+    mp[MP_SPEED] = sp;
+    mp[MP_FIELD_MIX] = fm;
+    mp[MP_ISO_LEVEL] = il;
+    mp[MP_COLOR_SHIFT] = cs;
+    mp[MP_ZOOM] = zm;
+    mp[MP_W_LATTICE] = wl;
+    mp[MP_W_MOTIF] = wm;
+    mp[MP_W_BAND] = wb;
+    let mut fp = FieldParams {
+        mode,
+        mp,
+        ..FieldParams::default()
+    };
     fill_free_slot_defaults(&mut fp);
     SeqStep::new(fp)
 }
 
-fn seq_preset_phase_space() -> Vec<SeqStep> { vec![
-    sp( 1, 1.5, 0.35, 0.30, 0.55, 0.00, 1.0, 1.5, 0.3, 0.5), // BZ SLICE
-    sp( 2, 2.0, 0.45, 0.50, 0.60, 0.12, 1.1, 0.8, 1.2, 0.8), // FERMI
-    sp( 4, 1.8, 0.30, 0.65, 0.40, 0.25, 0.9, 1.2, 1.8, 0.6), // NODAL
-    sp( 6, 2.5, 0.55, 0.40, 0.50, 0.37, 1.3, 0.5, 0.8, 1.8), // STRIPES
-    sp( 5, 1.2, 0.80, 0.55, 0.45, 0.50, 1.0, 1.2, 0.6, 0.8), // PHASE
-    sp(12, 2.0, 0.40, 0.70, 0.50, 0.62, 0.9, 0.6, 1.0, 1.5), // KIKUCHI
-    sp( 9, 1.0, 0.25, 0.45, 0.60, 0.75, 0.8, 1.0, 1.2, 0.9), // MOIRE
-    sp(16, 1.8, 0.50, 0.35, 0.70, 0.87, 1.2, 0.7, 0.5, 2.0), // CDW
-]}
+fn seq_preset_phase_space() -> Vec<SeqStep> {
+    vec![
+        sp(1, 1.5, 0.35, 0.30, 0.55, 0.00, 1.0, 1.5, 0.3, 0.5), // BZ SLICE
+        sp(2, 2.0, 0.45, 0.50, 0.60, 0.12, 1.1, 0.8, 1.2, 0.8), // FERMI
+        sp(4, 1.8, 0.30, 0.65, 0.40, 0.25, 0.9, 1.2, 1.8, 0.6), // NODAL
+        sp(6, 2.5, 0.55, 0.40, 0.50, 0.37, 1.3, 0.5, 0.8, 1.8), // STRIPES
+        sp(5, 1.2, 0.80, 0.55, 0.45, 0.50, 1.0, 1.2, 0.6, 0.8), // PHASE
+        sp(12, 2.0, 0.40, 0.70, 0.50, 0.62, 0.9, 0.6, 1.0, 1.5), // KIKUCHI
+        sp(9, 1.0, 0.25, 0.45, 0.60, 0.75, 0.8, 1.0, 1.2, 0.9), // MOIRE
+        sp(16, 1.8, 0.50, 0.35, 0.70, 0.87, 1.2, 0.7, 0.5, 2.0), // CDW
+    ]
+}
 
-fn seq_preset_quantum() -> Vec<SeqStep> { vec![
-    sp(10, 1.2, 0.20, 0.50, 0.55, 0.00, 1.2, 1.0, 0.6, 0.4), // WANNIER
-    sp( 3, 1.5, 0.30, 0.55, 0.50, 0.12, 1.0, 1.8, 0.4, 0.3), // DENSITY
-    sp(20, 2.0, 0.40, 0.50, 0.55, 0.25, 0.9, 0.8, 1.0, 1.2), // BERRY
-    sp(23, 1.5, 0.30, 0.45, 0.60, 0.37, 1.0, 1.0, 0.5, 0.8), // NEMATIC
-    sp(15, 1.8, 0.35, 0.30, 0.50, 0.50, 1.1, 1.2, 0.8, 0.5), // SPIN TEXTURE
-    sp(14, 2.2, 0.45, 0.60, 0.45, 0.62, 1.3, 1.5, 0.6, 0.7), // BAND SURFACE
-    sp(21, 1.0, 0.35, 0.60, 0.55, 0.75, 1.5, 0.5, 1.2, 0.6), // STM
-    sp(22, 1.5, 0.25, 0.50, 0.50, 0.87, 1.0, 0.8, 0.9, 1.0), // VORTEX KNOT
-]}
+fn seq_preset_quantum() -> Vec<SeqStep> {
+    vec![
+        sp(10, 1.2, 0.20, 0.50, 0.55, 0.00, 1.2, 1.0, 0.6, 0.4), // WANNIER
+        sp(3, 1.5, 0.30, 0.55, 0.50, 0.12, 1.0, 1.8, 0.4, 0.3),  // DENSITY
+        sp(20, 2.0, 0.40, 0.50, 0.55, 0.25, 0.9, 0.8, 1.0, 1.2), // BERRY
+        sp(23, 1.5, 0.30, 0.45, 0.60, 0.37, 1.0, 1.0, 0.5, 0.8), // NEMATIC
+        sp(15, 1.8, 0.35, 0.30, 0.50, 0.50, 1.1, 1.2, 0.8, 0.5), // SPIN TEXTURE
+        sp(14, 2.2, 0.45, 0.60, 0.45, 0.62, 1.3, 1.5, 0.6, 0.7), // BAND SURFACE
+        sp(21, 1.0, 0.35, 0.60, 0.55, 0.75, 1.5, 0.5, 1.2, 0.6), // STM
+        sp(22, 1.5, 0.25, 0.50, 0.50, 0.87, 1.0, 0.8, 0.9, 1.0), // VORTEX KNOT
+    ]
+}
 
-fn seq_preset_geometric() -> Vec<SeqStep> { vec![
-    sp( 0, 1.5, 0.30, 0.50, 0.40, 0.00, 1.2, 1.0, 0.6, 0.8), // 3D ISO
-    sp( 8, 1.2, 0.35, 0.30, 0.50, 0.12, 1.0, 0.8, 1.0, 1.2), // NONEUC
-    sp( 7, 2.0, 0.80, 0.55, 0.45, 0.25, 0.9, 0.6, 0.8, 1.8), // WARP
-    sp(22, 1.8, 0.45, 0.40, 0.55, 0.37, 1.3, 1.2, 0.5, 1.0), // VORTEX KNOT
-    sp(17, 1.5, 0.55, 0.60, 0.65, 0.50, 1.1, 0.7, 1.2, 0.8), // QUASICRYSTAL
-    sp(24, 1.2, 0.35, 0.45, 0.55, 0.62, 1.1, 1.5, 0.6, 0.5), // ABRIKOSOV
-    sp(19, 1.8, 0.40, 0.55, 0.50, 0.75, 1.0, 0.8, 1.0, 1.8), // DOMAIN WALL
-    sp(34, 2.0, 0.50, 0.35, 0.60, 0.87, 1.4, 0.5, 1.5, 1.0), // STRAIN FIELD
-]}
+fn seq_preset_geometric() -> Vec<SeqStep> {
+    vec![
+        sp(0, 1.5, 0.30, 0.50, 0.40, 0.00, 1.2, 1.0, 0.6, 0.8), // 3D ISO
+        sp(8, 1.2, 0.35, 0.30, 0.50, 0.12, 1.0, 0.8, 1.0, 1.2), // NONEUC
+        sp(7, 2.0, 0.80, 0.55, 0.45, 0.25, 0.9, 0.6, 0.8, 1.8), // WARP
+        sp(22, 1.8, 0.45, 0.40, 0.55, 0.37, 1.3, 1.2, 0.5, 1.0), // VORTEX KNOT
+        sp(17, 1.5, 0.55, 0.60, 0.65, 0.50, 1.1, 0.7, 1.2, 0.8), // QUASICRYSTAL
+        sp(24, 1.2, 0.35, 0.45, 0.55, 0.62, 1.1, 1.5, 0.6, 0.5), // ABRIKOSOV
+        sp(19, 1.8, 0.40, 0.55, 0.50, 0.75, 1.0, 0.8, 1.0, 1.8), // DOMAIN WALL
+        sp(34, 2.0, 0.50, 0.35, 0.60, 0.87, 1.4, 0.5, 1.5, 1.0), // STRAIN FIELD
+    ]
+}
 
 fn seq_preset_chromatic() -> Vec<SeqStep> {
     let modes: [u32; 16] = [27, 22, 20, 23, 10, 3, 0, 28, 9, 17, 29, 12, 5, 15, 14, 8];
-    modes.iter().enumerate().map(|(i, &mode)| {
-        let phi = i as f32 / 16.0;
-        let mut mp = default_mp();
-        mp[MP_KSCALE]      = 1.0 + 1.2 * (phi * TAU).sin().abs();
-        mp[MP_SPEED]       = 0.2 + 0.6 * (phi * TAU * 0.7).cos().abs();
-        mp[MP_FIELD_MIX]   = 0.3 + 0.5 * (phi * TAU * 1.3).sin().abs();
-        mp[MP_ISO_LEVEL]   = 0.3 + 0.4 * (phi * TAU * 0.5).cos().abs();
-        mp[MP_COLOR_SHIFT] = phi;
-        mp[MP_ZOOM]        = 0.8 + 0.6 * (phi * TAU * 1.1).sin().abs();
-        mp[MP_W_LATTICE]   = 0.5 + 1.2 * (phi * TAU).cos().abs();
-        mp[MP_W_MOTIF]     = 0.3 + 1.0 * (phi * TAU * 1.7).sin().abs();
-        mp[MP_W_BAND]      = 0.4 + 1.2 * (phi * TAU * 0.9).cos().abs();
-        let mut fp = FieldParams { mode, mp, ..FieldParams::default() };
-        fill_free_slot_defaults(&mut fp);
-        SeqStep::new(fp)
-    }).collect()
+    modes
+        .iter()
+        .enumerate()
+        .map(|(i, &mode)| {
+            let phi = i as f32 / 16.0;
+            let mut mp = default_mp();
+            mp[MP_KSCALE] = 1.0 + 1.2 * (phi * TAU).sin().abs();
+            mp[MP_SPEED] = 0.2 + 0.6 * (phi * TAU * 0.7).cos().abs();
+            mp[MP_FIELD_MIX] = 0.3 + 0.5 * (phi * TAU * 1.3).sin().abs();
+            mp[MP_ISO_LEVEL] = 0.3 + 0.4 * (phi * TAU * 0.5).cos().abs();
+            mp[MP_COLOR_SHIFT] = phi;
+            mp[MP_ZOOM] = 0.8 + 0.6 * (phi * TAU * 1.1).sin().abs();
+            mp[MP_W_LATTICE] = 0.5 + 1.2 * (phi * TAU).cos().abs();
+            mp[MP_W_MOTIF] = 0.3 + 1.0 * (phi * TAU * 1.7).sin().abs();
+            mp[MP_W_BAND] = 0.4 + 1.2 * (phi * TAU * 0.9).cos().abs();
+            let mut fp = FieldParams {
+                mode,
+                mp,
+                ..FieldParams::default()
+            };
+            fill_free_slot_defaults(&mut fp);
+            SeqStep::new(fp)
+        })
+        .collect()
 }
 
 /// Default pattern: built to show the sequencer's articulation vocabulary in
@@ -696,12 +876,12 @@ fn seq_preset_chromatic() -> Vec<SeqStep> {
 /// feedback scenes — while every step stays readable on its own.
 fn seq_preset_showcase() -> Vec<SeqStep> {
     let mut steps = vec![
-        sp( 4, 1.8, 0.30, 0.65, 0.40, 0.00, 0.9, 1.2, 1.8, 0.6), // NODAL — home base
-        sp( 2, 2.0, 0.45, 0.50, 0.60, 0.13, 1.1, 0.8, 1.2, 0.8), // FERMI — quick accent
-        sp( 9, 1.0, 0.25, 0.45, 0.60, 0.28, 0.8, 1.0, 1.2, 0.9), // MOIRE — long dwell
+        sp(4, 1.8, 0.30, 0.65, 0.40, 0.00, 0.9, 1.2, 1.8, 0.6), // NODAL — home base
+        sp(2, 2.0, 0.45, 0.50, 0.60, 0.13, 1.1, 0.8, 1.2, 0.8), // FERMI — quick accent
+        sp(9, 1.0, 0.25, 0.45, 0.60, 0.28, 0.8, 1.0, 1.2, 0.9), // MOIRE — long dwell
         sp(22, 1.8, 0.45, 0.40, 0.55, 0.42, 1.3, 1.2, 0.5, 1.0), // VORTEX KNOT — snap hit
         sp(17, 1.5, 0.55, 0.60, 0.65, 0.55, 1.1, 0.7, 1.2, 0.8), // QUASICRYSTAL — fb bloom
-        sp( 6, 2.5, 0.55, 0.40, 0.50, 0.68, 1.3, 0.5, 0.8, 1.8), // STRIPES — every 2nd pass
+        sp(6, 2.5, 0.55, 0.40, 0.50, 0.68, 1.3, 0.5, 0.8, 1.8), // STRIPES — every 2nd pass
         sp(20, 2.0, 0.40, 0.50, 0.55, 0.80, 0.9, 0.8, 1.0, 1.2), // BERRY — overshoot jump
         sp(12, 2.0, 0.40, 0.70, 0.50, 0.92, 0.9, 0.6, 1.0, 1.5), // KIKUCHI — fb mirror coda
     ];
@@ -736,33 +916,33 @@ fn seq_preset_showcase() -> Vec<SeqStep> {
 
 const SEQ_PRESETS: [(&str, fn() -> Vec<SeqStep>); 5] = [
     ("SHOWCASE", seq_preset_showcase),
-    ("PHASE",    seq_preset_phase_space),
-    ("QUANTUM",  seq_preset_quantum),
-    ("GEO",      seq_preset_geometric),
-    ("CHROMA",   seq_preset_chromatic),
+    ("PHASE", seq_preset_phase_space),
+    ("QUANTUM", seq_preset_quantum),
+    ("GEO", seq_preset_geometric),
+    ("CHROMA", seq_preset_chromatic),
 ];
 
 pub struct Sequencer {
-    pub active:     bool,
-    pub manual:     bool,
-    pub steps:      Vec<SeqStep>,
-    pub cur:        usize,
-    pub step_dur:   f32,
+    pub active: bool,
+    pub manual: bool,
+    pub steps: Vec<SeqStep>,
+    pub cur: usize,
+    pub step_dur: f32,
     pub step_timer: f32,
-    pub curve:      TranCurve,
-    pub selected:   Option<usize>,
-    pub play_mode:  SeqPlayMode,
-    pub pp_dir:     i8,           // direction for PingPong: +1 or -1 (0 = not started)
-    pub rng_seed:   u32,          // LCG state for Random mode and prob gates
+    pub curve: TranCurve,
+    pub selected: Option<usize>,
+    pub play_mode: SeqPlayMode,
+    pub pp_dir: i8,               // direction for PingPong: +1 or -1 (0 = not started)
+    pub rng_seed: u32,            // LCG state for Random mode and prob gates
     pub from_params: FieldParams, // pub so preset::apply can rewind to step 0 cleanly
     /// Fraction of the step spent morphing (Elektron slide-trig feel):
     /// 0.25 = quick morph then hold; 1.0 = classic wall-to-wall glide.
-    pub morph:      f32,
+    pub morph: f32,
     /// Depth of the built-in micro-motion lane (0 = off). Keeps the image
     /// alive during holds — bounded by construction, never chaotic.
-    pub drift:      f32,
+    pub drift: f32,
     /// Free-running clock driving the drift lane (advances with tick).
-    pub clock:      f32,
+    pub clock: f32,
 }
 
 impl Sequencer {
@@ -770,13 +950,21 @@ impl Sequencer {
         let steps = seq_preset_showcase();
         let from_params = steps[0].params.clone();
         Self {
-            active: false, manual: false, steps, cur: 0,
-            step_dur: 2.6, step_timer: 0.0,
-            curve: TranCurve::Silk, selected: None,
+            active: false,
+            manual: false,
+            steps,
+            cur: 0,
+            step_dur: 2.6,
+            step_timer: 0.0,
+            curve: TranCurve::Silk,
+            selected: None,
             play_mode: SeqPlayMode::Forward,
-            pp_dir: 1, rng_seed: 0x9E3779B9,
+            pp_dir: 1,
+            rng_seed: 0x9E3779B9,
             from_params,
-            morph: 0.6, drift: 0.5, clock: 0.0,
+            morph: 0.6,
+            drift: 0.5,
+            clock: 0.0,
         }
     }
 
@@ -788,7 +976,8 @@ impl Sequencer {
 
     /// Transition curve for the current step (per-step override else global).
     fn effective_curve(&self) -> TranCurve {
-        self.steps.get(self.cur)
+        self.steps
+            .get(self.cur)
             .and_then(|s| s.curve_override)
             .unwrap_or(self.curve)
     }
@@ -806,7 +995,9 @@ impl Sequencer {
     }
 
     fn tick(&mut self, dt: f32) {
-        if !self.active { return; }
+        if !self.active {
+            return;
+        }
         self.clock += dt;
         self.step_timer += dt;
         let dur = self.effective_step_dur();
@@ -828,30 +1019,38 @@ impl Sequencer {
     }
     fn rng_unit(&mut self) -> f32 {
         let v = self.rng_next();
-        ((v >> 8) & 0x00FF_FFFF) as f32 / 16_777_216.0  // 24-bit fraction
+        ((v >> 8) & 0x00FF_FFFF) as f32 / 16_777_216.0 // 24-bit fraction
     }
 
     /// Compute the next raw index using the play mode (no muted/prob filtering).
     fn raw_next_index(&mut self) -> usize {
         let n = self.steps.len();
-        if n <= 1 { return 0; }
+        if n <= 1 {
+            return 0;
+        }
         match self.play_mode {
             SeqPlayMode::Forward => (self.cur + 1) % n,
             SeqPlayMode::Reverse => self.cur.checked_sub(1).unwrap_or(n - 1),
             SeqPlayMode::PingPong => {
-                if self.pp_dir == 0 { self.pp_dir = 1; }
+                if self.pp_dir == 0 {
+                    self.pp_dir = 1;
+                }
                 let cur = self.cur as i32;
                 let mut nx = cur + self.pp_dir as i32;
                 if nx < 0 || nx >= n as i32 {
                     self.pp_dir = -self.pp_dir;
                     nx = cur + self.pp_dir as i32;
-                    if nx < 0 || nx >= n as i32 { nx = cur; }
+                    if nx < 0 || nx >= n as i32 {
+                        nx = cur;
+                    }
                 }
                 nx as usize
             }
             SeqPlayMode::Random => {
                 let mut nx = (self.rng_next() as usize) % n;
-                if nx == self.cur { nx = (nx + 1) % n; }
+                if nx == self.cur {
+                    nx = (nx + 1) % n;
+                }
                 nx
             }
         }
@@ -859,18 +1058,26 @@ impl Sequencer {
 
     fn advance_next(&mut self) {
         let n = self.steps.len();
-        if n == 0 { return; }
+        if n == 0 {
+            return;
+        }
         // Try up to 2n candidates: skip muted, condition-failed, and
         // probability-failed steps.
         for _ in 0..(2 * n) {
             let cand = self.raw_next_index();
             self.cur = cand;
-            if self.steps[cand].muted { continue; }
+            if self.steps[cand].muted {
+                continue;
+            }
             // Elektron cycle condition: count this playhead visit, then gate.
             self.steps[cand].visits = self.steps[cand].visits.wrapping_add(1);
-            if !cond_passes(self.steps[cand].cond, self.steps[cand].visits) { continue; }
+            if !cond_passes(self.steps[cand].cond, self.steps[cand].visits) {
+                continue;
+            }
             if self.steps[cand].prob < 0.999 {
-                if self.rng_unit() > self.steps[cand].prob { continue; }
+                if self.rng_unit() > self.steps[cand].prob {
+                    continue;
+                }
             }
             return;
         }
@@ -878,7 +1085,9 @@ impl Sequencer {
     }
 
     fn manual_step(&mut self, dir: i32) {
-        if self.steps.is_empty() { return; }
+        if self.steps.is_empty() {
+            return;
+        }
         self.from_params = self.current_params();
         self.step_timer = 0.0;
         let n = self.steps.len();
@@ -887,7 +1096,9 @@ impl Sequencer {
         } else {
             let mut prev = self.cur.checked_sub(1).unwrap_or(n - 1);
             for _ in 0..n {
-                if !self.steps[prev].muted { break; }
+                if !self.steps[prev].muted {
+                    break;
+                }
                 prev = prev.checked_sub(1).unwrap_or(n - 1);
             }
             self.cur = prev;
@@ -895,17 +1106,30 @@ impl Sequencer {
     }
 
     fn add_step_after(&mut self, after: usize, seed: f32) {
-        if self.steps.len() >= 32 { return; }
-        let new_step = self.steps.get(after).cloned()
+        if self.steps.len() >= 32 {
+            return;
+        }
+        let new_step = self
+            .steps
+            .get(after)
+            .cloned()
             .unwrap_or_else(|| SeqStep::new(randomize_fp(seed)));
         let pos = (after + 1).min(self.steps.len());
         self.steps.insert(pos, new_step);
-        if self.cur >= pos { self.cur += 1; }
-        if let Some(sel) = self.selected { if sel >= pos { self.selected = Some(sel + 1); } }
+        if self.cur >= pos {
+            self.cur += 1;
+        }
+        if let Some(sel) = self.selected {
+            if sel >= pos {
+                self.selected = Some(sel + 1);
+            }
+        }
     }
 
     fn remove_step(&mut self, idx: usize) {
-        if self.steps.len() <= 1 || idx >= self.steps.len() { return; }
+        if self.steps.len() <= 1 || idx >= self.steps.len() {
+            return;
+        }
         self.steps.remove(idx);
         // shift cur down if removed step was before it; clamp only if cur was the removed step
         if self.cur > idx {
@@ -915,7 +1139,7 @@ impl Sequencer {
         }
         self.selected = match self.selected {
             Some(s) if s == idx => None,
-            Some(s) if s > idx  => Some(s - 1),
+            Some(s) if s > idx => Some(s - 1),
             s => s,
         };
     }
@@ -925,20 +1149,28 @@ impl Sequencer {
         self.cur = 0;
         self.step_timer = 0.0;
         self.selected = None;
-        if !self.steps.is_empty() { self.from_params = self.steps[0].params.clone(); }
+        if !self.steps.is_empty() {
+            self.from_params = self.steps[0].params.clone();
+        }
     }
 
     /// Append a captured FieldParams as a fresh step at the end. Returns the new
     /// step's index, or None if the 32-step cap was hit.
     fn capture(&mut self, params: FieldParams) -> Option<usize> {
-        if self.steps.len() >= 32 { return None; }
+        if self.steps.len() >= 32 {
+            return None;
+        }
         self.steps.push(SeqStep::new(params));
         Some(self.steps.len() - 1)
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     fn total_dur_mul(&self) -> f32 {
-        self.steps.iter().map(|s| s.dur_mul.max(1e-6)).sum::<f32>().max(1e-6)
+        self.steps
+            .iter()
+            .map(|s| s.dur_mul.max(1e-6))
+            .sum::<f32>()
+            .max(1e-6)
     }
 }
 
@@ -951,15 +1183,15 @@ fn mode_color(mode: u32) -> egui::Color32 {
 fn hue_to_rgb(h: f32) -> (u8, u8, u8) {
     let h6 = h * 6.0;
     let hi = h6 as u32 % 6;
-    let f  = h6 - h6.floor();
-    let q  = 1.0 - f;
+    let f = h6 - h6.floor();
+    let q = 1.0 - f;
     let (r, g, b) = match hi {
-        0 => (1.0, f,   0.0),
-        1 => (q,   1.0, 0.0),
-        2 => (0.0, 1.0, f  ),
-        3 => (0.0, q,   1.0),
-        4 => (f,   0.0, 1.0),
-        _ => (1.0, 0.0, q  ),
+        0 => (1.0, f, 0.0),
+        1 => (q, 1.0, 0.0),
+        2 => (0.0, 1.0, f),
+        3 => (0.0, q, 1.0),
+        4 => (f, 0.0, 1.0),
+        _ => (1.0, 0.0, q),
     };
     ((r * 200.0) as u8, (g * 200.0) as u8, (b * 200.0) as u8)
 }
@@ -968,39 +1200,47 @@ pub fn randomize_fp(seed: f32) -> FieldParams {
     let r = |s: f32| tour_rand(seed + s * 13.17);
     let fb_on = r(11.0) > 0.55; // ~45% chance of feedback
     let mirror_roll = r(12.0);
-    let fb_mirror = if mirror_roll < 0.25 { 0u32 }
-        else if mirror_roll < 0.45 { 1 }
-        else if mirror_roll < 0.60 { 3 }
-        else if mirror_roll < 0.72 { 5 }
-        else if mirror_roll < 0.82 { 6 }
-        else if mirror_roll < 0.90 { 7 }
-        else { 9 };
+    let fb_mirror = if mirror_roll < 0.25 {
+        0u32
+    } else if mirror_roll < 0.45 {
+        1
+    } else if mirror_roll < 0.60 {
+        3
+    } else if mirror_roll < 0.72 {
+        5
+    } else if mirror_roll < 0.82 {
+        6
+    } else if mirror_roll < 0.90 {
+        7
+    } else {
+        9
+    };
     let mut mp = default_mp();
-    mp[MP_KSCALE]      = 0.3 + r(2.0) * 3.5;
-    mp[MP_SPEED]       = r(3.0) * 1.6;
-    mp[MP_FIELD_MIX]   = r(4.0);
-    mp[MP_ISO_LEVEL]   = 0.05 + r(5.0) * 0.9;
+    mp[MP_KSCALE] = 0.3 + r(2.0) * 3.5;
+    mp[MP_SPEED] = r(3.0) * 1.6;
+    mp[MP_FIELD_MIX] = r(4.0);
+    mp[MP_ISO_LEVEL] = 0.05 + r(5.0) * 0.9;
     mp[MP_COLOR_SHIFT] = r(6.0);
-    mp[MP_ZOOM]        = 0.4 + r(7.0) * 1.9;
-    mp[MP_W_LATTICE]   = r(8.0) * 2.0;
-    mp[MP_W_MOTIF]     = r(9.0) * 2.0;
-    mp[MP_W_BAND]      = r(10.0) * 2.0;
+    mp[MP_ZOOM] = 0.4 + r(7.0) * 1.9;
+    mp[MP_W_LATTICE] = r(8.0) * 2.0;
+    mp[MP_W_MOTIF] = r(9.0) * 2.0;
+    mp[MP_W_BAND] = r(10.0) * 2.0;
     FieldParams {
-        mode:           ((r(1.0) * MODE_NAMES.len() as f32) as u32).min(MODE_NAMES.len() as u32 - 1),
+        mode: ((r(1.0) * MODE_NAMES.len() as f32) as u32).min(MODE_NAMES.len() as u32 - 1),
         mp,
-        fb_enabled:     fb_on,
+        fb_enabled: fb_on,
         fb_mirror,
-        fb_zoom:        0.93 + r(13.0) * 0.09,
-        fb_decay:       0.60 + r(14.0) * 0.38,
+        fb_zoom: 0.93 + r(13.0) * 0.09,
+        fb_decay: 0.60 + r(14.0) * 0.38,
         fb_color_shift: (r(15.0) - 0.5) * 0.6,
-        fb_inject:      0.5 + r(16.0) * 0.5,
-        fb_saturation:  0.7 + r(17.0) * 0.6,
-        fb_brightness:  0.8 + r(18.0) * 0.4,
-        fb_rotation:    (r(19.0) - 0.5) * 0.06,
-        fb_offset_x:    (r(20.0) - 0.5) * 0.04,
-        fb_offset_y:    (r(21.0) - 0.5) * 0.04,
-        fb_fold_angle:  (r(22.0) - 0.5) * 2.0,
-        fb_blend_mode:  (r(23.0) * 4.0) as u32, // modes 0-3 most useful
+        fb_inject: 0.5 + r(16.0) * 0.5,
+        fb_saturation: 0.7 + r(17.0) * 0.6,
+        fb_brightness: 0.8 + r(18.0) * 0.4,
+        fb_rotation: (r(19.0) - 0.5) * 0.06,
+        fb_offset_x: (r(20.0) - 0.5) * 0.04,
+        fb_offset_y: (r(21.0) - 0.5) * 0.04,
+        fb_fold_angle: (r(22.0) - 0.5) * 2.0,
+        fb_blend_mode: (r(23.0) * 4.0) as u32, // modes 0-3 most useful
         // Fraksl MotionBlur: ~40% chance of light trails, else off
         fb_motion_blur: if r(24.0) > 0.6 { r(25.0) * 0.6 } else { 0.0 },
         ..FieldParams::default()
@@ -1038,15 +1278,15 @@ impl TourStyle {
 pub fn tour_lfo_preset_for_level(level: TripLevel) -> LfoParams {
     let mut p = LfoParams::unrouted();
     p.a = LfoEngine {
-        rate:  level.lfo_a_rate(),
+        rate: level.lfo_a_rate(),
         depth: level.lfo_a_depth(),
-        wave:  level.wave_a(),
+        wave: level.wave_a(),
         phase: 0.0,
     };
     p.b = LfoEngine {
-        rate:  level.lfo_b_rate(),
+        rate: level.lfo_b_rate(),
         depth: level.lfo_b_depth(),
-        wave:  level.wave_b(),
+        wave: level.wave_b(),
         phase: 0.33,
     };
     let l = level.get();
@@ -1056,7 +1296,7 @@ pub fn tour_lfo_preset_for_level(level: TripLevel) -> LfoParams {
     }
     if l >= 2 {
         p.mp[MP_FIELD_MIX] = LfoSrc::A;
-        p.fb_zoom   = LfoSrc::B;
+        p.fb_zoom = LfoSrc::B;
     }
     if l >= 3 {
         p.mp[MP_ISO_LEVEL] = LfoSrc::A;
@@ -1064,21 +1304,21 @@ pub fn tour_lfo_preset_for_level(level: TripLevel) -> LfoParams {
         p.fb_saturation = LfoSrc::A;
     }
     if l >= 4 {
-        p.mp[MP_KSCALE]    = LfoSrc::A;
-        p.mp[MP_SPEED]     = LfoSrc::A;
-        p.mp[MP_ZOOM]      = LfoSrc::A;
+        p.mp[MP_KSCALE] = LfoSrc::A;
+        p.mp[MP_SPEED] = LfoSrc::A;
+        p.mp[MP_ZOOM] = LfoSrc::A;
         p.mp[MP_W_LATTICE] = LfoSrc::A;
-        p.mp[MP_W_MOTIF]   = LfoSrc::A;
-        p.mp[MP_W_BAND]    = LfoSrc::A;
+        p.mp[MP_W_MOTIF] = LfoSrc::A;
+        p.mp[MP_W_BAND] = LfoSrc::A;
         p.fb_rotation = LfoSrc::B;
     }
     if l >= 5 {
         p.fb_offset_x = LfoSrc::B;
         p.fb_offset_y = LfoSrc::B;
-        p.fb_decay    = LfoSrc::B;
+        p.fb_decay = LfoSrc::B;
     }
     if l >= 6 {
-        p.fb_brightness  = LfoSrc::A;
+        p.fb_brightness = LfoSrc::A;
         p.fb_motion_blur = LfoSrc::B;
     }
     if l >= 7 {
@@ -1094,16 +1334,32 @@ fn tour_lfo_preset() -> LfoParams {
 
 fn tour_lfo_preset_fb_heavy() -> LfoParams {
     let mut mp = lfo_mp_default();
-    mp[MP_SPEED]       = LfoSrc::A;
+    mp[MP_SPEED] = LfoSrc::A;
     mp[MP_COLOR_SHIFT] = LfoSrc::A;
     LfoParams {
-        a: LfoEngine { rate: 0.07, depth: 0.25, wave: LfoWave::Sine,     phase: 0.0  },
-        b: LfoEngine { rate: 0.21, depth: 0.18, wave: LfoWave::Triangle, phase: 0.5  },
+        a: LfoEngine {
+            rate: 0.07,
+            depth: 0.25,
+            wave: LfoWave::Sine,
+            phase: 0.0,
+        },
+        b: LfoEngine {
+            rate: 0.21,
+            depth: 0.18,
+            wave: LfoWave::Triangle,
+            phase: 0.5,
+        },
         mp,
-        fb_zoom: LfoSrc::A, fb_decay: LfoSrc::B, fb_color_shift: LfoSrc::A,
-        fb_saturation: LfoSrc::A, fb_brightness: LfoSrc::B,
-        fb_rotation: LfoSrc::A, fb_offset_x: LfoSrc::B, fb_offset_y: LfoSrc::B,
-        fb_inject: LfoSrc::Off, fb_fold_angle: LfoSrc::A,
+        fb_zoom: LfoSrc::A,
+        fb_decay: LfoSrc::B,
+        fb_color_shift: LfoSrc::A,
+        fb_saturation: LfoSrc::A,
+        fb_brightness: LfoSrc::B,
+        fb_rotation: LfoSrc::A,
+        fb_offset_x: LfoSrc::B,
+        fb_offset_y: LfoSrc::B,
+        fb_inject: LfoSrc::Off,
+        fb_fold_angle: LfoSrc::A,
         fb_motion_blur: LfoSrc::B,
         flux: flux_default(),
     }
@@ -1120,43 +1376,57 @@ fn tour_rand(seed: f32) -> f32 {
 fn fb_auto_params(t: f32, base: &FieldParams) -> FieldParams {
     const SCENE_LEN: f32 = 7.3;
     let scene_f = (t / SCENE_LEN).floor();
-    let local   = (t / SCENE_LEN).fract();
-    let drift   = t * 0.13;
-    let punch   = (TAU * local).sin().max(0.0).powf(1.6);
-    let snap    = if local < 0.18 { (1.0 - local / 0.18).powf(2.0) } else { 0.0 };
+    let local = (t / SCENE_LEN).fract();
+    let drift = t * 0.13;
+    let punch = (TAU * local).sin().max(0.0).powf(1.6);
+    let snap = if local < 0.18 {
+        (1.0 - local / 0.18).powf(2.0)
+    } else {
+        0.0
+    };
 
     // Per-scene discrete picks
     let mirrors: [u32; 9] = [0, 1, 3, 5, 6, 7, 8, 9, 11];
-    let blends:  [u32; 7] = [0, 1, 2, 3, 5, 6, 9];
+    let blends: [u32; 7] = [0, 1, 2, 3, 5, 6, 9];
     let mi = (tour_rand(scene_f + 11.0) * mirrors.len() as f32) as usize % mirrors.len();
-    let bi = (tour_rand(scene_f + 23.0) * blends.len()  as f32) as usize % blends.len();
+    let bi = (tour_rand(scene_f + 23.0) * blends.len() as f32) as usize % blends.len();
 
     // Continuous, energy-bounded variation. Keeps things "trippy" but stable.
-    let fb_zoom        = (0.965 + 0.045 * (TAU * (local * 0.35 + drift * 0.27)).sin()
-                                + 0.020 * snap).clamp(0.93, 1.05);
-    let fb_decay       = (0.82 + 0.14 * (TAU * (local * 0.55 + drift * 0.19)).cos()).clamp(0.50, 0.98);
-    let fb_inject      = (0.65 + 0.35 * punch).clamp(0.0, 1.0);
+    let fb_zoom = (0.965 + 0.045 * (TAU * (local * 0.35 + drift * 0.27)).sin() + 0.020 * snap)
+        .clamp(0.93, 1.05);
+    let fb_decay = (0.82 + 0.14 * (TAU * (local * 0.55 + drift * 0.19)).cos()).clamp(0.50, 0.98);
+    let fb_inject = (0.65 + 0.35 * punch).clamp(0.0, 1.0);
     let fb_color_shift = 0.55 * (TAU * (drift * 0.17 + local * 0.41)).sin();
-    let fb_saturation  = (1.05 + 0.45 * (TAU * (local * 0.7 + drift * 0.11)).sin()).clamp(0.0, 2.0);
-    let fb_brightness  = (1.0  + 0.18 * (TAU * (local * 0.4 + drift * 0.09)).cos()).clamp(0.5, 1.5);
-    let fb_rotation    = 0.06  * (TAU * (drift * 0.09 + local * 0.27)).sin();
-    let fb_offset_x    = 0.035 * (TAU * (drift * 0.14 + local * 0.42)).sin();
-    let fb_offset_y    = 0.035 * (TAU * (drift * 0.11 + local * 0.36)).cos();
-    let fb_fold_angle  = 2.4   * (TAU * (drift * 0.06 + local * 0.22)).sin()
-                              + (tour_rand(scene_f + 37.0) - 0.5) * 1.6;
+    let fb_saturation = (1.05 + 0.45 * (TAU * (local * 0.7 + drift * 0.11)).sin()).clamp(0.0, 2.0);
+    let fb_brightness = (1.0 + 0.18 * (TAU * (local * 0.4 + drift * 0.09)).cos()).clamp(0.5, 1.5);
+    let fb_rotation = 0.06 * (TAU * (drift * 0.09 + local * 0.27)).sin();
+    let fb_offset_x = 0.035 * (TAU * (drift * 0.14 + local * 0.42)).sin();
+    let fb_offset_y = 0.035 * (TAU * (drift * 0.11 + local * 0.36)).cos();
+    let fb_fold_angle =
+        2.4 * (TAU * (drift * 0.06 + local * 0.22)).sin() + (tour_rand(scene_f + 37.0) - 0.5) * 1.6;
     // Motion blur on for ~60% of scenes, lightly modulated.
-    let mb_on   = tour_rand(scene_f + 53.0) > 0.40;
+    let mb_on = tour_rand(scene_f + 53.0) > 0.40;
     let fb_motion_blur = if mb_on {
         (0.18 + 0.22 * (TAU * (local * 0.30 + drift * 0.05)).sin().abs()).clamp(0.0, 0.65)
-    } else { 0.0 };
+    } else {
+        0.0
+    };
 
     FieldParams {
-        fb_enabled:     true,
-        fb_mirror:      mirrors[mi],
-        fb_blend_mode:  blends[bi],
-        fb_zoom, fb_decay, fb_inject, fb_color_shift,
-        fb_saturation, fb_brightness, fb_rotation,
-        fb_offset_x, fb_offset_y, fb_fold_angle, fb_motion_blur,
+        fb_enabled: true,
+        fb_mirror: mirrors[mi],
+        fb_blend_mode: blends[bi],
+        fb_zoom,
+        fb_decay,
+        fb_inject,
+        fb_color_shift,
+        fb_saturation,
+        fb_brightness,
+        fb_rotation,
+        fb_offset_x,
+        fb_offset_y,
+        fb_fold_angle,
+        fb_motion_blur,
         ..base.clone()
     }
 }
@@ -1171,13 +1441,22 @@ fn tour_random_field_params(t: f32, crystal_idx: usize, level: TripLevel) -> Fie
     let seed = scene_f + crystal_idx as f32 * 37.0;
     let ease = local * local * (3.0 - 2.0 * local);
     let burst_scale = level.lerp(0.0, 1.0);
-    let burst = if local < 0.22 { (1.0 - local / 0.22).powf(2.0) * burst_scale } else { 0.0 };
+    let burst = if local < 0.22 {
+        (1.0 - local / 0.22).powf(2.0) * burst_scale
+    } else {
+        0.0
+    };
 
     let mode_a = (tour_rand(seed + 1.0) * MODE_NAMES.len() as f32).floor() as u32;
     let mode_b = (tour_rand(seed + 2.0) * MODE_NAMES.len() as f32).floor() as u32;
     // Below level 2 we lock to a single mode per crystal so transitions are not the focus.
-    let mode = if level.get() < 2 { TOUR_MODES[crystal_idx % TOUR_MODES.len()] }
-               else if local < 0.72 { mode_a } else { mode_b };
+    let mode = if level.get() < 2 {
+        TOUR_MODES[crystal_idx % TOUR_MODES.len()]
+    } else if local < 0.72 {
+        mode_a
+    } else {
+        mode_b
+    };
 
     let morph = |slot: f32, min: f32, max: f32| -> f32 {
         let a = tour_rand(seed + slot);
@@ -1187,44 +1466,60 @@ fn tour_random_field_params(t: f32, crystal_idx: usize, level: TripLevel) -> Fie
 
     let fb_on = level.fb_enabled() && tour_rand(seed + 77.0) > 0.45;
     let mirror_roll = tour_rand(seed + 88.0);
-    let fb_mirror = if mirror_roll < 0.3 { 0u32 }
-        else if mirror_roll < 0.5 { 1 }
-        else if mirror_roll < 0.65 { 5 }
-        else if mirror_roll < 0.78 { 6 }
-        else if mirror_roll < 0.88 { 7 }
-        else { 9 };
+    let fb_mirror = if mirror_roll < 0.3 {
+        0u32
+    } else if mirror_roll < 0.5 {
+        1
+    } else if mirror_roll < 0.65 {
+        5
+    } else if mirror_roll < 0.78 {
+        6
+    } else if mirror_roll < 0.88 {
+        7
+    } else {
+        9
+    };
     let mut mp = default_mp();
-    mp[MP_KSCALE]      = (morph(3.0, 0.25, 3.8) + burst * 0.55).clamp(0.1, 5.0);
-    mp[MP_SPEED]       = (morph(4.0, 0.05, 1.75) + burst * 0.25).clamp(0.0, 2.0);
-    mp[MP_FIELD_MIX]   = morph(5.0, 0.0, 1.0).clamp(0.0, 1.0);
-    mp[MP_ISO_LEVEL]   = morph(6.0, 0.05, 0.96).clamp(0.0, 1.0);
+    mp[MP_KSCALE] = (morph(3.0, 0.25, 3.8) + burst * 0.55).clamp(0.1, 5.0);
+    mp[MP_SPEED] = (morph(4.0, 0.05, 1.75) + burst * 0.25).clamp(0.0, 2.0);
+    mp[MP_FIELD_MIX] = morph(5.0, 0.0, 1.0).clamp(0.0, 1.0);
+    mp[MP_ISO_LEVEL] = morph(6.0, 0.05, 0.96).clamp(0.0, 1.0);
     mp[MP_COLOR_SHIFT] = (morph(7.0, 0.0, 1.0) + t * 0.025).rem_euclid(1.0);
-    mp[MP_ZOOM]        = (morph(8.0, 0.35, 2.15) + burst * 0.25).clamp(0.2, 5.0);
-    mp[MP_W_LATTICE]   = morph(9.0, 0.0, 2.0).clamp(0.0, 2.0);
-    mp[MP_W_MOTIF]     = morph(10.0, 0.0, 2.0).clamp(0.0, 2.0);
-    mp[MP_W_BAND]      = morph(11.0, 0.0, 2.0).clamp(0.0, 2.0);
+    mp[MP_ZOOM] = (morph(8.0, 0.35, 2.15) + burst * 0.25).clamp(0.2, 5.0);
+    mp[MP_W_LATTICE] = morph(9.0, 0.0, 2.0).clamp(0.0, 2.0);
+    mp[MP_W_MOTIF] = morph(10.0, 0.0, 2.0).clamp(0.0, 2.0);
+    mp[MP_W_BAND] = morph(11.0, 0.0, 2.0).clamp(0.0, 2.0);
     FieldParams {
         mode: mode.min((MODE_NAMES.len() - 1) as u32),
         mp,
-        fb_enabled:  fb_on,
+        fb_enabled: fb_on,
         fb_mirror,
-        fb_zoom:        morph(12.0, 0.93, 1.02),
-        fb_decay:       morph(13.0, 0.65, 0.97),
+        fb_zoom: morph(12.0, 0.93, 1.02),
+        fb_decay: morph(13.0, 0.65, 0.97),
         fb_color_shift: morph(14.0, -0.3, 0.3),
-        fb_inject:      morph(15.0, 0.5, 1.0),
-        fb_saturation:  morph(16.0, 0.7, 1.4),
-        fb_brightness:  morph(17.0, 0.85, 1.15),
-        fb_rotation:    morph(18.0, -0.03, 0.03),
-        fb_offset_x:    morph(19.0, -0.02, 0.02),
-        fb_offset_y:    morph(20.0, -0.02, 0.02),
-        fb_fold_angle:  morph(21.0, -1.57, 1.57),
-        fb_blend_mode:  (tour_rand(seed + 99.0) * 4.0) as u32,
-        fb_motion_blur: if tour_rand(seed + 101.0) > 0.55 { morph(22.0, 0.0, 0.55) } else { 0.0 },
+        fb_inject: morph(15.0, 0.5, 1.0),
+        fb_saturation: morph(16.0, 0.7, 1.4),
+        fb_brightness: morph(17.0, 0.85, 1.15),
+        fb_rotation: morph(18.0, -0.03, 0.03),
+        fb_offset_x: morph(19.0, -0.02, 0.02),
+        fb_offset_y: morph(20.0, -0.02, 0.02),
+        fb_fold_angle: morph(21.0, -1.57, 1.57),
+        fb_blend_mode: (tour_rand(seed + 99.0) * 4.0) as u32,
+        fb_motion_blur: if tour_rand(seed + 101.0) > 0.55 {
+            morph(22.0, 0.0, 0.55)
+        } else {
+            0.0
+        },
         ..FieldParams::default()
     }
 }
 
-fn tour_field_params(t: f32, crystal_idx: usize, style: TourStyle, level: TripLevel) -> FieldParams {
+fn tour_field_params(
+    t: f32,
+    crystal_idx: usize,
+    style: TourStyle,
+    level: TripLevel,
+) -> FieldParams {
     if style == TourStyle::Random {
         return tour_random_field_params(t, crystal_idx, level);
     }
@@ -1241,7 +1536,11 @@ fn tour_field_params(t: f32, crystal_idx: usize, style: TourStyle, level: TripLe
     let punch_amt = level.lerp(0.0, 1.0);
     let punch = (TAU * local).sin().max(0.0).powf(1.8) * punch_amt;
     let snap_amt = level.lerp(0.0, 1.0);
-    let snap = if local < 0.16 { (1.0 - local / 0.16).powf(2.0) * snap_amt } else { 0.0 };
+    let snap = if local < 0.16 {
+        (1.0 - local / 0.16).powf(2.0) * snap_amt
+    } else {
+        0.0
+    };
 
     let fb_on = level.fb_enabled() && (scene % 3) != 0;
     let fb_strength = level.fb_strength();
@@ -1253,35 +1552,39 @@ fn tour_field_params(t: f32, crystal_idx: usize, style: TourStyle, level: TripLe
     // level rises, the scene index folds back in to swap modes every scene_len.
     let mode_scene = if level.get() < 2 { 0 } else { scene };
     let mut mp = default_mp();
-    mp[MP_KSCALE]      = (1.05 + 0.72 * (TAU * drift).sin().abs() + 0.45 * snap).clamp(0.1, 5.0);
-    mp[MP_SPEED]       = (0.22 + 0.82 * punch + 0.18 * (TAU * (drift * 0.37)).sin().abs()).clamp(0.0, 2.0);
-    mp[MP_FIELD_MIX]   = (0.50 + 0.38 * (TAU * (local + drift * 0.11)).sin()).clamp(0.0, 1.0);
-    mp[MP_ISO_LEVEL]   = (0.42 + 0.36 * (TAU * (local * 0.5 + drift * 0.19)).cos()).clamp(0.0, 1.0);
+    mp[MP_KSCALE] = (1.05 + 0.72 * (TAU * drift).sin().abs() + 0.45 * snap).clamp(0.1, 5.0);
+    mp[MP_SPEED] =
+        (0.22 + 0.82 * punch + 0.18 * (TAU * (drift * 0.37)).sin().abs()).clamp(0.0, 2.0);
+    mp[MP_FIELD_MIX] = (0.50 + 0.38 * (TAU * (local + drift * 0.11)).sin()).clamp(0.0, 1.0);
+    mp[MP_ISO_LEVEL] = (0.42 + 0.36 * (TAU * (local * 0.5 + drift * 0.19)).cos()).clamp(0.0, 1.0);
     mp[MP_COLOR_SHIFT] = (drift * 0.22 + 0.08 * (TAU * local).sin()).rem_euclid(1.0);
-    mp[MP_ZOOM]        = (0.78 + 0.36 * (TAU * (local * 0.75)).sin().abs() + 0.22 * snap).clamp(0.2, 5.0);
-    mp[MP_W_LATTICE]   = (0.75 + 0.65 * (TAU * (local + 0.10)).sin().abs()).clamp(0.0, 2.0);
-    mp[MP_W_MOTIF]     = (0.38 + 0.92 * (TAU * (local * 0.7 + 0.35)).sin().abs()).clamp(0.0, 2.0);
-    mp[MP_W_BAND]      = (0.48 + 1.05 * (TAU * (local * 1.2 + drift * 0.07)).cos().abs()).clamp(0.0, 2.0);
+    mp[MP_ZOOM] = (0.78 + 0.36 * (TAU * (local * 0.75)).sin().abs() + 0.22 * snap).clamp(0.2, 5.0);
+    mp[MP_W_LATTICE] = (0.75 + 0.65 * (TAU * (local + 0.10)).sin().abs()).clamp(0.0, 2.0);
+    mp[MP_W_MOTIF] = (0.38 + 0.92 * (TAU * (local * 0.7 + 0.35)).sin().abs()).clamp(0.0, 2.0);
+    mp[MP_W_BAND] =
+        (0.48 + 1.05 * (TAU * (local * 1.2 + drift * 0.07)).cos().abs()).clamp(0.0, 2.0);
     FieldParams {
         mode: TOUR_MODES[(mode_scene + crystal_idx) % TOUR_MODES.len()],
         mp,
-        fb_enabled:  fb_on,
+        fb_enabled: fb_on,
         fb_mirror,
-        fb_zoom:        (0.96 + 0.04 * (TAU * (local * 0.3 + drift * 0.07)).sin()).clamp(0.90, 1.10),
-        fb_decay:       (0.82 + 0.12 * (TAU * (local * 0.5)).cos()).clamp(0.30, 0.99),
+        fb_zoom: (0.96 + 0.04 * (TAU * (local * 0.3 + drift * 0.07)).sin()).clamp(0.90, 1.10),
+        fb_decay: (0.82 + 0.12 * (TAU * (local * 0.5)).cos()).clamp(0.30, 0.99),
         fb_color_shift: 0.08 * fb_strength * (TAU * (drift * 0.11 + local * 0.3)).sin(),
-        fb_inject:      (0.4 + 0.6 * fb_strength * punch).clamp(0.0, 1.0),
-        fb_saturation:  (1.0 + 0.3 * (TAU * (local * 0.7 + drift * 0.13)).sin()).clamp(0.0, 2.0),
-        fb_brightness:  (1.0 + 0.15 * (TAU * local).cos()).clamp(0.0, 2.0),
-        fb_rotation:    0.015 * fb_strength * (TAU * (drift * 0.07 + local * 0.25)).sin(),
-        fb_offset_x:    0.012 * fb_strength * (TAU * (drift * 0.13 + local * 0.4)).sin(),
-        fb_offset_y:    0.012 * fb_strength * (TAU * (drift * 0.09 + local * 0.35)).cos(),
-        fb_fold_angle:  1.2 * fb_strength * (TAU * (drift * 0.05 + local * 0.2)).sin(),
-        fb_blend_mode:  (scene % 4) as u32,
+        fb_inject: (0.4 + 0.6 * fb_strength * punch).clamp(0.0, 1.0),
+        fb_saturation: (1.0 + 0.3 * (TAU * (local * 0.7 + drift * 0.13)).sin()).clamp(0.0, 2.0),
+        fb_brightness: (1.0 + 0.15 * (TAU * local).cos()).clamp(0.0, 2.0),
+        fb_rotation: 0.015 * fb_strength * (TAU * (drift * 0.07 + local * 0.25)).sin(),
+        fb_offset_x: 0.012 * fb_strength * (TAU * (drift * 0.13 + local * 0.4)).sin(),
+        fb_offset_y: 0.012 * fb_strength * (TAU * (drift * 0.09 + local * 0.35)).cos(),
+        fb_fold_angle: 1.2 * fb_strength * (TAU * (drift * 0.05 + local * 0.2)).sin(),
+        fb_blend_mode: (scene % 4) as u32,
         // Curated tour: motion blur cycles in 1/4 of scenes (smooth tail feel)
         fb_motion_blur: if (scene % 4) == 2 {
             (0.20 + 0.18 * fb_strength * (TAU * (local * 0.4)).sin()).clamp(0.0, 0.6)
-        } else { 0.0 },
+        } else {
+            0.0
+        },
         ..FieldParams::default()
     }
 }
@@ -1289,29 +1592,36 @@ fn tour_field_params(t: f32, crystal_idx: usize, style: TourStyle, level: TripLe
 /// Range-normalized modulation delta for one target (before the flux budget).
 #[inline]
 fn mod_norm(
-    lfo: &LfoParams, lfo_src: LfoSrc, lfo_a_s: f32, lfo_b_s: f32,
-    mic_src: MicSrc, mic_depth: f32, bands: &audio::AudioBands,
+    lfo: &LfoParams,
+    lfo_src: LfoSrc,
+    lfo_a_s: f32,
+    lfo_b_s: f32,
+    mic_src: MicSrc,
+    mic_depth: f32,
+    bands: &audio::AudioBands,
 ) -> f32 {
     let lfo_d = match lfo_src {
         LfoSrc::Off => 0.0,
-        LfoSrc::A   => lfo.a.depth * lfo_a_s,
-        LfoSrc::B   => lfo.b.depth * lfo_b_s,
+        LfoSrc::A => lfo.a.depth * lfo_a_s,
+        LfoSrc::B => lfo.b.depth * lfo_b_s,
     };
     lfo_d + mic_src.value(bands) * mic_depth
 }
 
 /// Flux budget in summed normalized units. flux 1.0 admits a total swing of
 /// three full knob-spans across all routes; flux 0.33 ≈ one span.
-fn flux_budget(flux: f32) -> f32 { flux.clamp(0.0, 1.0) * 3.0 }
+fn flux_budget(flux: f32) -> f32 {
+    flux.clamp(0.0, 1.0) * 3.0
+}
 
 /// Returns a FieldParams with LFO and mic deltas applied additively from the
 /// base, plus the fraction (0..1+) of the flux budget the routes asked for.
 fn apply_modulation_ex(
-    fp:    &FieldParams,
-    lfo:   &LfoParams,
-    mic:   &MicParams,
+    fp: &FieldParams,
+    lfo: &LfoParams,
+    mic: &MicParams,
     bands: &audio::AudioBands,
-    t:     f32,
+    t: f32,
 ) -> (FieldParams, f32) {
     let lfo_a_s = lfo.a.sample(t);
     let lfo_b_s = lfo.b.sample(t);
@@ -1320,32 +1630,70 @@ fn apply_modulation_ex(
     const FB_TARGETS: usize = 11;
     let mut mp_d = [0.0f32; MP_SLOTS];
     for i in 0..MP_SLOTS {
-        mp_d[i] = mod_norm(lfo, lfo.mp[i], lfo_a_s, lfo_b_s, mic.mp[i], mic.depth, bands);
+        mp_d[i] = mod_norm(
+            lfo, lfo.mp[i], lfo_a_s, lfo_b_s, mic.mp[i], mic.depth, bands,
+        );
     }
     let fb_ranges: [(f32, f32); FB_TARGETS] = [
-        (0.90, 1.10), (0.30, 0.99), (-0.10, 0.10), (-0.10, 0.10), (-0.30, 0.30),
-        (-1.00, 1.00), (0.00, 2.00), (0.00, 2.00), (0.00, 1.00), (-3.14, 3.14),
+        (0.90, 1.10),
+        (0.30, 0.99),
+        (-0.10, 0.10),
+        (-0.10, 0.10),
+        (-0.30, 0.30),
+        (-1.00, 1.00),
+        (0.00, 2.00),
+        (0.00, 2.00),
+        (0.00, 1.00),
+        (-3.14, 3.14),
         (0.00, 0.95),
     ];
     let fb_routes = [
-        lfo.fb_zoom, lfo.fb_decay, lfo.fb_offset_x, lfo.fb_offset_y, lfo.fb_rotation,
-        lfo.fb_color_shift, lfo.fb_saturation, lfo.fb_brightness, lfo.fb_inject,
-        lfo.fb_fold_angle, lfo.fb_motion_blur,
+        lfo.fb_zoom,
+        lfo.fb_decay,
+        lfo.fb_offset_x,
+        lfo.fb_offset_y,
+        lfo.fb_rotation,
+        lfo.fb_color_shift,
+        lfo.fb_saturation,
+        lfo.fb_brightness,
+        lfo.fb_inject,
+        lfo.fb_fold_angle,
+        lfo.fb_motion_blur,
     ];
     let fb_mics = [
-        mic.fb_zoom, mic.fb_decay, mic.fb_offset_x, mic.fb_offset_y, mic.fb_rotation,
-        mic.fb_color_shift, mic.fb_saturation, mic.fb_brightness, mic.fb_inject,
-        mic.fb_fold_angle, mic.fb_motion_blur,
+        mic.fb_zoom,
+        mic.fb_decay,
+        mic.fb_offset_x,
+        mic.fb_offset_y,
+        mic.fb_rotation,
+        mic.fb_color_shift,
+        mic.fb_saturation,
+        mic.fb_brightness,
+        mic.fb_inject,
+        mic.fb_fold_angle,
+        mic.fb_motion_blur,
     ];
     let mut fb_d = [0.0f32; FB_TARGETS];
     for i in 0..FB_TARGETS {
-        fb_d[i] = mod_norm(lfo, fb_routes[i], lfo_a_s, lfo_b_s, fb_mics[i], mic.depth, bands);
+        fb_d[i] = mod_norm(
+            lfo,
+            fb_routes[i],
+            lfo_a_s,
+            lfo_b_s,
+            fb_mics[i],
+            mic.depth,
+            bands,
+        );
     }
 
     // Pass 2 — budget: scale everything down proportionally if over cap.
     let total: f32 = mp_d.iter().chain(fb_d.iter()).map(|d| d.abs()).sum();
     let budget = flux_budget(lfo.flux);
-    let scale = if total > budget && total > 1e-6 { budget / total } else { 1.0 };
+    let scale = if total > budget && total > 1e-6 {
+        budget / total
+    } else {
+        1.0
+    };
     let load = if budget > 1e-6 { total / budget } else { 0.0 };
 
     let mut mp = [0.0f32; MP_SLOTS];
@@ -1358,21 +1706,21 @@ fn apply_modulation_ex(
         (base + fb_d[i] * scale * (hi - lo)).clamp(lo, hi)
     };
     let out = FieldParams {
-        mode:           fp.mode,
+        mode: fp.mode,
         mp,
-        fb_enabled:     fp.fb_enabled,
-        fb_mirror:      fp.fb_mirror,
-        fb_blend_mode:  fp.fb_blend_mode,
-        fb_zoom:        fb(0, fp.fb_zoom),
-        fb_decay:       fb(1, fp.fb_decay),
-        fb_offset_x:    fb(2, fp.fb_offset_x),
-        fb_offset_y:    fb(3, fp.fb_offset_y),
-        fb_rotation:    fb(4, fp.fb_rotation),
+        fb_enabled: fp.fb_enabled,
+        fb_mirror: fp.fb_mirror,
+        fb_blend_mode: fp.fb_blend_mode,
+        fb_zoom: fb(0, fp.fb_zoom),
+        fb_decay: fb(1, fp.fb_decay),
+        fb_offset_x: fb(2, fp.fb_offset_x),
+        fb_offset_y: fb(3, fp.fb_offset_y),
+        fb_rotation: fb(4, fp.fb_rotation),
         fb_color_shift: fb(5, fp.fb_color_shift),
-        fb_saturation:  fb(6, fp.fb_saturation),
-        fb_brightness:  fb(7, fp.fb_brightness),
-        fb_inject:      fb(8, fp.fb_inject),
-        fb_fold_angle:  fb(9, fp.fb_fold_angle),
+        fb_saturation: fb(6, fp.fb_saturation),
+        fb_brightness: fb(7, fp.fb_brightness),
+        fb_inject: fb(8, fp.fb_inject),
+        fb_fold_angle: fb(9, fp.fb_fold_angle),
         fb_motion_blur: fb(10, fp.fb_motion_blur),
     };
     (out, load)
@@ -1380,11 +1728,11 @@ fn apply_modulation_ex(
 
 /// Returns a FieldParams with LFO and mic deltas applied additively from the base.
 fn apply_modulation(
-    fp:    &FieldParams,
-    lfo:   &LfoParams,
-    mic:   &MicParams,
+    fp: &FieldParams,
+    lfo: &LfoParams,
+    mic: &MicParams,
     bands: &audio::AudioBands,
-    t:     f32,
+    t: f32,
 ) -> FieldParams {
     apply_modulation_ex(fp, lfo, mic, bands, t).0
 }
@@ -1392,15 +1740,25 @@ fn apply_modulation(
 // ── Tour state machine ────────────────────────────────────────────────────
 
 #[derive(PartialEq, Clone, Copy)]
-enum TourPhase { Settling, Walking, Fading }
+enum TourPhase {
+    Settling,
+    Walking,
+    Fading,
+}
 
 struct Tour {
-    pub active:      bool,
+    pub active: bool,
     pub crystal_idx: usize,
-    phase:           TourPhase,
-    phase_timer:     f32,
-    pub prev_field:  Option<GpuField>,
-    pub fade_t:      f32,
+    phase: TourPhase,
+    phase_timer: f32,
+    pub prev_field: Option<GpuField>,
+    pub prev_crystal_idx: Option<usize>,
+    previous_params: Option<FieldParams>,
+    last_params: Option<FieldParams>,
+    param_fade_elapsed: f32,
+    param_fade_duration: f32,
+    param_fade_style: CrossfadeStyle,
+    param_fade_cursor: usize,
 }
 
 const SETTLE_DUR: f32 = 1.2;
@@ -1408,17 +1766,81 @@ const SETTLE_DUR: f32 = 1.2;
 impl Tour {
     fn new() -> Self {
         Self {
-            active: false, crystal_idx: 0,
-            phase: TourPhase::Settling, phase_timer: 0.0,
-            prev_field: None, fade_t: 0.0,
+            active: false,
+            crystal_idx: 0,
+            phase: TourPhase::Settling,
+            phase_timer: 0.0,
+            prev_field: None,
+            prev_crystal_idx: None,
+            previous_params: None,
+            last_params: None,
+            param_fade_elapsed: 0.0,
+            param_fade_duration: 0.0,
+            param_fade_style: CrossfadeStyle::Silk,
+            param_fade_cursor: 0,
         }
+    }
+
+    /// Start an image-level transition from a stable snapshot. The renderer
+    /// shades this source independently, so `mode` can change without a
+    /// dispatch cut.
+    fn begin_param_transition(&mut self, from: FieldParams, duration: f32) {
+        self.previous_params = Some(from);
+        self.param_fade_elapsed = 0.0;
+        self.param_fade_duration = duration.max(0.01);
+        self.param_fade_style = CrossfadeStyle::next(&mut self.param_fade_cursor);
+    }
+
+    /// Track discrete mode changes in an otherwise continuously generated tour.
+    /// The first frame after a switch keeps the previous image fully visible;
+    /// later frames use a smoothstep blend to reveal the destination.
+    fn transition_params(
+        &mut self,
+        target: FieldParams,
+        dt: f32,
+        level: TripLevel,
+    ) -> Option<(FieldParams, f32)> {
+        if self.previous_params.is_none()
+            && self
+                .last_params
+                .as_ref()
+                .is_some_and(|last| last.mode != target.mode)
+        {
+            let duration = (level.scene_len() * 0.18).clamp(0.18, 0.75);
+            self.begin_param_transition(self.last_params.clone().unwrap(), duration);
+        }
+        self.last_params = Some(target);
+
+        let previous = self.previous_params.clone()?;
+        self.param_fade_elapsed += dt;
+        let raw = (self.param_fade_elapsed / self.param_fade_duration).clamp(0.0, 1.0);
+        let mix = self.param_fade_style.apply(raw);
+        if raw >= 1.0 {
+            self.previous_params = None;
+            None
+        } else {
+            Some((previous, mix))
+        }
+    }
+
+    fn reset_param_transition(&mut self) {
+        self.previous_params = None;
+        self.last_params = None;
+        self.param_fade_elapsed = 0.0;
+        self.param_fade_duration = 0.0;
+        self.param_fade_style = CrossfadeStyle::Silk;
+        self.param_fade_cursor = 0;
+        self.prev_field = None;
+        self.prev_crystal_idx = None;
     }
 
     /// Returns true when it's time to snapshot and load the next crystal.
     /// Walk and fade durations scale with `level` — level 0 lingers on each
     /// crystal for ~28s, level 9 swaps every ~2s.
     fn tick(&mut self, dt: f32, level: TripLevel) -> bool {
-        if !self.active { return false; }
+        if !self.active {
+            return false;
+        }
         let walk_dur = level.walk_dur();
         let fade_dur = level.fade_dur();
         self.phase_timer += dt;
@@ -1433,15 +1855,13 @@ impl Tour {
                 if self.phase_timer >= walk_dur {
                     self.phase = TourPhase::Fading;
                     self.phase_timer = 0.0;
-                    self.fade_t = 0.0;
                     return true;
                 }
             }
             TourPhase::Fading => {
-                self.fade_t = (self.phase_timer / fade_dur).clamp(0.0, 1.0);
                 if self.phase_timer >= fade_dur {
                     self.prev_field = None;
-                    self.fade_t = 0.0;
+                    self.prev_crystal_idx = None;
                     self.phase = TourPhase::Settling;
                     self.phase_timer = 0.0;
                 }
@@ -1450,117 +1870,243 @@ impl Tour {
         false
     }
 
-    fn is_fading(&self) -> bool  { self.phase == TourPhase::Fading }
-    fn is_walking(&self) -> bool { self.phase == TourPhase::Walking }
+    fn is_walking(&self) -> bool {
+        self.phase == TourPhase::Walking
+    }
+}
+
+/// Temporal personalities for scene melts. All styles preserve exact 0 → 1
+/// endpoints; only the rate of reveal changes, so the renderer can keep using
+/// its physically simple two-image blend.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum CrossfadeStyle {
+    Silk,
+    Rush,
+    Drift,
+    Ripple,
+}
+
+impl CrossfadeStyle {
+    const ALL: [Self; 4] = [Self::Silk, Self::Rush, Self::Drift, Self::Ripple];
+
+    fn apply(self, t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        match self {
+            // Long soft ends, brisk middle.
+            Self::Silk => {
+                let s = t * t * (3.0 - 2.0 * t);
+                s * s * (3.0 - 2.0 * s)
+            }
+            // The new scene blooms in quickly, then settles.
+            Self::Rush => 1.0 - (1.0 - t).powi(3),
+            // Hold the outgoing image before a deliberate melt.
+            Self::Drift => t * t * t,
+            // A small forward pulse gives busy scenes a living hand-off.
+            Self::Ripple => {
+                let s = t * t * (3.0 - 2.0 * t);
+                (s + 0.10 * (std::f32::consts::PI * t).sin()).clamp(0.0, 1.0)
+            }
+        }
+    }
+
+    fn next(cursor: &mut usize) -> Self {
+        let style = Self::ALL[*cursor % Self::ALL.len()];
+        *cursor = cursor.wrapping_add(1);
+        style
+    }
+}
+
+/// A short, image-level bridge for any non-tour scene discontinuity. It keeps
+/// the last fully rendered field uniform and, when a mode or G-field changes,
+/// feeds it to the renderer as the outgoing pass. Continuous LFO/mic motion
+/// remains in the incoming pass and therefore never starts a fade by itself.
+const DEFAULT_SCENE_FADE_DUR: f32 = 0.48;
+
+struct SceneTransition {
+    last: Option<FieldUniform>,
+    previous: Option<FieldUniform>,
+    previous_field: Option<GpuField>,
+    elapsed: f32,
+    style: CrossfadeStyle,
+    style_cursor: usize,
+}
+
+impl SceneTransition {
+    fn new() -> Self {
+        Self {
+            last: None,
+            previous: None,
+            previous_field: None,
+            elapsed: 0.0,
+            style: CrossfadeStyle::Silk,
+            style_cursor: 0,
+        }
+    }
+
+    /// Begin from the last image. `previous_field` is present only when the
+    /// underlying reciprocal field was regenerated (crystal load/randomize).
+    fn begin(&mut self, previous_field: Option<GpuField>) {
+        let Some(previous) = self.last else { return };
+        self.previous = Some(previous);
+        self.previous_field = previous_field;
+        self.elapsed = 0.0;
+        self.style = CrossfadeStyle::next(&mut self.style_cursor);
+    }
+
+    /// Store `target` and return an outgoing uniform + smooth fade mix when a
+    /// transition is active. A mode change starts one automatically; callers
+    /// explicitly call `begin` for same-mode G-field regeneration.
+    fn track(&mut self, target: FieldUniform, dt: f32) -> Option<(FieldUniform, f32)> {
+        if self.last.is_some_and(|last| last.mode != target.mode) {
+            self.begin(None);
+        }
+        self.last = Some(target);
+
+        let mut previous = self.previous?;
+        self.elapsed += dt;
+        let raw = (self.elapsed / DEFAULT_SCENE_FADE_DUR).clamp(0.0, 1.0);
+        let mix = self.style.apply(raw);
+        if raw >= 1.0 {
+            self.previous = None;
+            self.previous_field = None;
+            None
+        } else {
+            // Keep animated outgoing modes moving during the melt rather than
+            // freezing them at the frame where the scene changed.
+            previous.time = target.time;
+            Some((previous, mix))
+        }
+    }
+
+    fn record(&mut self, target: FieldUniform) {
+        self.last = Some(target);
+        self.previous = None;
+        self.previous_field = None;
+        self.elapsed = 0.0;
+    }
+}
+
+fn clone_gpu_field(field: &GpuField) -> GpuField {
+    GpuField {
+        gvecs: field.gvecs.clone(),
+        amps: field.amps.clone(),
+        phases: field.phases.clone(),
+        b_mat: field.b_mat,
+        count: field.count,
+    }
 }
 
 // ── App ───────────────────────────────────────────────────────────────────
 
 #[derive(PartialEq, Clone, Copy)]
-enum RenderMode { Atoms, Field }
+enum RenderMode {
+    Atoms,
+    Field,
+}
 
 /// Mutations requested by the egui UI within one frame.
 #[derive(Default)]
 struct UiReq {
-    switch_to:    Option<usize>,
-    prev:         bool,
-    next:         bool,
-    screenshot:   bool,
-    tour_toggle:  bool,
+    switch_to: Option<usize>,
+    prev: bool,
+    next: bool,
+    screenshot: bool,
+    tour_toggle: bool,
     tour_style_toggle: bool,
-    trip_level_inc:   bool,
-    trip_level_dec:   bool,
-    trip_level_set:   Option<u8>,
+    trip_level_inc: bool,
+    trip_level_dec: bool,
+    trip_level_set: Option<u8>,
     kpath_toggle: bool,
     panel_toggle: bool,
     sequencer_panel_toggle: bool,
-    render_mode:  Option<RenderMode>,
-    supercell:    Option<usize>,
+    render_mode: Option<RenderMode>,
+    supercell: Option<usize>,
     auto_rotate_toggle: bool,
-    seq_toggle:        bool,
+    seq_toggle: bool,
     seq_manual_toggle: bool,
-    seq_manual_step:   Option<i32>,   // +1 / -1
-    seq_select_step:   Option<usize>, // select for editor (toggle)
-    seq_mute_step:     Option<usize>, // toggle mute
-    seq_randomize:     Option<usize>,
-    seq_add_step:      bool,
-    seq_remove_step:   bool,
-    seq_preset:        Option<usize>,
-    seq_curve:         Option<TranCurve>,
-    seq_dur:           Option<f32>,
-    fb_reset:          bool,
-    fb_auto_toggle:    bool,
-    keymap_toggle:     bool,
-    mode_info_toggle:  bool,
+    seq_manual_step: Option<i32>,   // +1 / -1
+    seq_select_step: Option<usize>, // select for editor (toggle)
+    seq_mute_step: Option<usize>,   // toggle mute
+    seq_randomize: Option<usize>,
+    seq_add_step: bool,
+    seq_remove_step: bool,
+    seq_preset: Option<usize>,
+    seq_curve: Option<TranCurve>,
+    seq_dur: Option<f32>,
+    fb_reset: bool,
+    fb_auto_toggle: bool,
+    keymap_toggle: bool,
+    mode_info_toggle: bool,
     seq_play_mode_toggle: bool,
-    seq_capture:          bool,
-    seq_step_dur_mul:     Option<(usize, f32)>,
+    seq_capture: bool,
+    seq_step_dur_mul: Option<(usize, f32)>,
     seq_step_curve_cycle: Option<usize>,
-    seq_step_prob:        Option<(usize, f32)>,
-    seq_step_cond_cycle:  Option<usize>,
-    seq_morph:            Option<f32>,
-    seq_drift:            Option<f32>,
+    seq_step_prob: Option<(usize, f32)>,
+    seq_step_cond_cycle: Option<usize>,
+    seq_morph: Option<f32>,
+    seq_drift: Option<f32>,
     // Preset I/O
-    preset_load_bundled:  Option<usize>,
-    preset_random:        bool,
-    preset_show_json:     bool,
-    preset_copy_json:     bool,
+    preset_load_bundled: Option<usize>,
+    preset_random: bool,
+    preset_show_json: bool,
+    preset_copy_json: bool,
     preset_generate_loop: bool,
-    preset_apply_json:    Option<String>,
+    preset_apply_json: Option<String>,
     #[cfg(not(target_arch = "wasm32"))]
-    preset_save_path:     Option<String>,
+    preset_save_path: Option<String>,
     #[cfg(not(target_arch = "wasm32"))]
-    preset_load_path:     Option<String>,
+    preset_load_path: Option<String>,
 }
 
 struct App {
-    gpu:          Option<GpuState>,
+    gpu: Option<GpuState>,
     #[cfg(target_arch = "wasm32")]
-    event_proxy:  Option<winit::event_loop::EventLoopProxy<UserEvent>>,
+    event_proxy: Option<winit::event_loop::EventLoopProxy<UserEvent>>,
     start_crystal: Crystal,
-    start:        Instant,
-    prev_t:       f32,
+    start: Instant,
+    prev_t: f32,
 
-    dragging:     bool,
-    last_mouse:   Option<(f64, f64)>,
-    auto_rotate:  bool,
+    dragging: bool,
+    last_mouse: Option<(f64, f64)>,
+    auto_rotate: bool,
 
-    render_mode:  RenderMode,
+    render_mode: RenderMode,
     field_params: FieldParams,
-    mouse_norm:   [f32; 2],
+    mouse_norm: [f32; 2],
     mouse_btn_down: bool,
 
     kpath_active: bool,
-    kpt_idx:      usize,
+    kpt_idx: usize,
 
-    tour:         Tour,
-    tour_style:   TourStyle,
-    trip_level:   TripLevel,
-    sequencer:    Sequencer,
+    tour: Tour,
+    tour_style: TourStyle,
+    trip_level: TripLevel,
+    sequencer: Sequencer,
     all_crystals: Vec<&'static CrystalDef>,
+    scene_transition: SceneTransition,
 
-    panel_open:   bool,
+    panel_open: bool,
     sequencer_panel_open: bool,
-    search_str:   String,
-    lfo:          LfoParams,
-    mic_params:   MicParams,
-    audio:        Option<audio::AudioCapture>,
-    midi_in:      Option<midi::MidiCapture>,
-    fb_auto:      bool,
-    show_keymap:  bool,
+    search_str: String,
+    lfo: LfoParams,
+    mic_params: MicParams,
+    audio: Option<audio::AudioCapture>,
+    midi_in: Option<midi::MidiCapture>,
+    fb_auto: bool,
+    show_keymap: bool,
     show_mode_info: bool,
     mode_area: ModeArea,
     // Preset editor modal
     preset_editor_open: bool,
     preset_editor_text: String,
-    preset_status:      String,
+    preset_status: String,
     preset_random_seed: u32,
     #[cfg(not(target_arch = "wasm32"))]
-    preset_path_input:  String,
+    preset_path_input: String,
     /// Dev hook: capture the composed frame once `t` passes the given second
     /// mark (CRYSTALVIZ_SCREENSHOT + CRYSTALVIZ_SCREENSHOT_DELAY).
     #[cfg(not(target_arch = "wasm32"))]
-    capture_after:      Option<(f32, String)>,
+    capture_after: Option<(f32, String)>,
 }
 
 enum UserEvent {
@@ -1581,7 +2127,9 @@ impl App {
         #[cfg(not(target_arch = "wasm32"))]
         let sequencer = {
             let mut s = Sequencer::new();
-            if std::env::args().any(|arg| arg == "--play") { s.active = true; }
+            if std::env::args().any(|arg| arg == "--play") {
+                s.active = true;
+            }
             s
         };
         #[cfg(target_arch = "wasm32")]
@@ -1592,24 +2140,32 @@ impl App {
             .and_then(|d| d.parse::<f32>().ok())
             .zip(std::env::var("CRYSTALVIZ_SCREENSHOT").ok());
         #[cfg(not(target_arch = "wasm32"))]
-        let sequencer_panel_open = std::env::args().any(|arg| arg == "--timeline" || arg == "--play");
+        let sequencer_panel_open =
+            std::env::args().any(|arg| arg == "--timeline" || arg == "--play");
         #[cfg(target_arch = "wasm32")]
         let sequencer_panel_open = false;
         Self {
-            gpu: None, start_crystal: crystal,
+            gpu: None,
+            start_crystal: crystal,
             #[cfg(target_arch = "wasm32")]
             event_proxy: None,
-            start: Instant::now(), prev_t: 0.0,
-            dragging: false, last_mouse: None, auto_rotate: true,
+            start: Instant::now(),
+            prev_t: 0.0,
+            dragging: false,
+            last_mouse: None,
+            auto_rotate: true,
             render_mode,
             field_params: FieldParams::default(),
-            mouse_norm: [0.5, 0.5], mouse_btn_down: false,
-            kpath_active: false, kpt_idx: 0,
+            mouse_norm: [0.5, 0.5],
+            mouse_btn_down: false,
+            kpath_active: false,
+            kpt_idx: 0,
             tour: Tour::new(),
             tour_style: TourStyle::default(),
             trip_level: TripLevel::default(),
             sequencer,
             all_crystals: all,
+            scene_transition: SceneTransition::new(),
             panel_open: !sequencer_panel_open,
             sequencer_panel_open,
             search_str: String::new(),
@@ -1632,7 +2188,9 @@ impl App {
         }
     }
 
-    fn time(&self) -> f32 { self.start.elapsed().as_secs_f32() }
+    fn time(&self) -> f32 {
+        self.start.elapsed().as_secs_f32()
+    }
 
     fn load_crystal_def(&mut self, def: &CrystalDef) {
         let Some(gpu) = self.gpu.as_mut() else { return };
@@ -1650,13 +2208,8 @@ impl App {
 
     fn switch_to(&mut self, idx: usize) {
         if let Some(gpu) = &self.gpu {
-            self.tour.prev_field = Some(GpuField {
-                gvecs: gpu.gpu_field.gvecs.clone(),
-                amps:  gpu.gpu_field.amps.clone(),
-                phases: gpu.gpu_field.phases.clone(),
-                b_mat: gpu.gpu_field.b_mat,
-                count: gpu.gpu_field.count,
-            });
+            self.scene_transition
+                .begin(Some(clone_gpu_field(&gpu.gpu_field)));
         }
         self.tour.crystal_idx = idx;
         let def = self.all_crystals[idx];
@@ -1687,20 +2240,22 @@ impl ApplicationHandler<UserEvent> for App {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-        let mut gpu = pollster::block_on(GpuState::new(window, crystal));
-        let sys = gpu.crystal_system();
-        gpu.kpath = Some(kpoints::build_kpath(sys));
-        self.gpu = Some(gpu);
-        if let Ok(needle) = std::env::var("CRYSTALVIZ_CRYSTAL") {
-            let needle = needle.to_ascii_lowercase();
-            if let Some(idx) = self.all_crystals.iter()
-                .position(|def| def.name.to_ascii_lowercase().contains(&needle))
-            {
-                self.switch_to(idx);
-            } else {
-                log::warn!("Unknown CRYSTALVIZ_CRYSTAL value: {needle}");
+            let mut gpu = pollster::block_on(GpuState::new(window, crystal));
+            let sys = gpu.crystal_system();
+            gpu.kpath = Some(kpoints::build_kpath(sys));
+            self.gpu = Some(gpu);
+            if let Ok(needle) = std::env::var("CRYSTALVIZ_CRYSTAL") {
+                let needle = needle.to_ascii_lowercase();
+                if let Some(idx) = self
+                    .all_crystals
+                    .iter()
+                    .position(|def| def.name.to_ascii_lowercase().contains(&needle))
+                {
+                    self.switch_to(idx);
+                } else {
+                    log::warn!("Unknown CRYSTALVIZ_CRYSTAL value: {needle}");
+                }
             }
-        }
         }
     }
 
@@ -1726,13 +2281,15 @@ impl ApplicationHandler<UserEvent> for App {
         event: WindowEvent,
     ) {
         // Feed to egui first
-        let egui_consumed = self.gpu.as_mut()
+        let egui_consumed = self
+            .gpu
+            .as_mut()
             .map(|g| g.handle_ui_event(&event))
             .unwrap_or(false);
 
-        let auto_rotate  = self.auto_rotate;
-        let render_mode  = self.render_mode;
-        let t            = self.time();
+        let auto_rotate = self.auto_rotate;
+        let render_mode = self.render_mode;
+        let t = self.time();
         let Some(gpu) = self.gpu.as_mut() else { return };
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -1748,17 +2305,22 @@ impl ApplicationHandler<UserEvent> for App {
 
             WindowEvent::KeyboardInput { event, .. } => {
                 use winit::keyboard::{KeyCode, PhysicalKey};
-                if event.state != ElementState::Pressed { return }
+                if event.state != ElementState::Pressed {
+                    return;
+                }
                 match event.physical_key {
                     PhysicalKey::Code(KeyCode::Escape) => event_loop.exit(),
                     PhysicalKey::Code(KeyCode::KeyM) => {
-                        self.field_params.mode = (self.field_params.mode + 1) % MODE_NAMES.len() as u32;
+                        self.field_params.mode =
+                            (self.field_params.mode + 1) % MODE_NAMES.len() as u32;
                     }
                     PhysicalKey::Code(KeyCode::KeyK) => {
                         if let Some(kp) = &gpu.kpath {
                             let n = kp.n_points();
                             self.kpt_idx = (self.kpt_idx + 1) % n;
                             let coords = kp.snap_to(self.kpt_idx);
+                            self.scene_transition
+                                .begin(Some(clone_gpu_field(&gpu.gpu_field)));
                             gpu.gpu_field.seed_kpoint(coords, 1.0);
                             gpu.update_field();
                         }
@@ -1767,11 +2329,15 @@ impl ApplicationHandler<UserEvent> for App {
                     PhysicalKey::Code(KeyCode::KeyP) => {
                         self.kpath_active = !self.kpath_active;
                         if self.kpath_active {
-                            if let Some(kp) = &mut gpu.kpath { kp.reset(); }
+                            if let Some(kp) = &mut gpu.kpath {
+                                kp.reset();
+                            }
                         }
                     }
                     PhysicalKey::Code(KeyCode::KeyR) => {
                         if render_mode == RenderMode::Field {
+                            self.scene_transition
+                                .begin(Some(clone_gpu_field(&gpu.gpu_field)));
                             gpu.gpu_field.randomize();
                             gpu.update_field();
                         }
@@ -1782,7 +2348,9 @@ impl ApplicationHandler<UserEvent> for App {
                             self.render_mode = RenderMode::Field;
                             self.kpath_active = true;
                             self.lfo = tour_lfo_preset_for_level(self.trip_level);
-                            if let Some(kp) = &mut gpu.kpath { kp.reset(); }
+                            if let Some(kp) = &mut gpu.kpath {
+                                kp.reset();
+                            }
                         }
                     }
                     // Minus / Equals: step the trip level down/up
@@ -1810,10 +2378,12 @@ impl ApplicationHandler<UserEvent> for App {
                         self.show_keymap = !self.show_keymap;
                     }
                     PhysicalKey::Code(KeyCode::BracketRight) => {
-                        self.field_params.mp[MP_COLOR_SHIFT] = (self.field_params.mp[MP_COLOR_SHIFT] + 0.05) % 1.0;
+                        self.field_params.mp[MP_COLOR_SHIFT] =
+                            (self.field_params.mp[MP_COLOR_SHIFT] + 0.05) % 1.0;
                     }
                     PhysicalKey::Code(KeyCode::BracketLeft) => {
-                        self.field_params.mp[MP_COLOR_SHIFT] = (self.field_params.mp[MP_COLOR_SHIFT] - 0.05).rem_euclid(1.0);
+                        self.field_params.mp[MP_COLOR_SHIFT] =
+                            (self.field_params.mp[MP_COLOR_SHIFT] - 0.05).rem_euclid(1.0);
                     }
                     _ => {}
                 }
@@ -1824,15 +2394,17 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::MouseInput { state, button, .. } if !egui_consumed => {
                 if button == MouseButton::Left {
                     let pressed = state == ElementState::Pressed;
-                    self.dragging       = pressed;
+                    self.dragging = pressed;
                     self.mouse_btn_down = pressed;
-                    if !pressed { self.last_mouse = None; }
+                    if !pressed {
+                        self.last_mouse = None;
+                    }
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
                 let sz = gpu.size;
                 self.mouse_norm = [
-                    (position.x as f32 / sz.width  as f32).clamp(0.0, 1.0),
+                    (position.x as f32 / sz.width as f32).clamp(0.0, 1.0),
                     (position.y as f32 / sz.height as f32).clamp(0.0, 1.0),
                 ];
                 if self.dragging && !egui_consumed && render_mode == RenderMode::Atoms {
@@ -1845,12 +2417,13 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::MouseWheel { delta, .. } if !egui_consumed => {
                 let d = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y,
-                    MouseScrollDelta::PixelDelta(p)   => p.y as f32 * 0.05,
+                    MouseScrollDelta::PixelDelta(p) => p.y as f32 * 0.05,
                 };
                 match render_mode {
                     RenderMode::Atoms => gpu.zoom(d),
                     RenderMode::Field => {
-                        self.field_params.mp[MP_ZOOM] = (self.field_params.mp[MP_ZOOM] + d * 0.15).clamp(0.2, 5.0);
+                        self.field_params.mp[MP_ZOOM] =
+                            (self.field_params.mp[MP_ZOOM] + d * 0.15).clamp(0.2, 5.0);
                     }
                 }
             }
@@ -1869,11 +2442,20 @@ impl ApplicationHandler<UserEvent> for App {
                     let should_advance = self.tour.tick(dt, self.trip_level);
                     if should_advance {
                         let total = self.all_crystals.len();
-                        let next_idx = (self.tour.crystal_idx + 1) % total;
-                        // Snapshot current for crossfade
+                        let old_idx = self.tour.crystal_idx;
+                        let next_idx = (old_idx + 1) % total;
+                        // Snapshot both the outgoing G-field and its currently
+                        // shaded parameter state. Rendering them in separate
+                        // passes avoids the old dispatch cut between modes.
+                        let old_params = self.tour.last_params.clone().unwrap_or_else(|| {
+                            tour_field_params(t, old_idx, self.tour_style, self.trip_level)
+                        });
+                        self.tour
+                            .begin_param_transition(old_params, self.trip_level.fade_dur());
+                        self.tour.prev_crystal_idx = Some(old_idx);
                         self.tour.prev_field = Some(GpuField {
                             gvecs: gpu.gpu_field.gvecs.clone(),
-                            amps:  gpu.gpu_field.amps.clone(),
+                            amps: gpu.gpu_field.amps.clone(),
                             phases: gpu.gpu_field.phases.clone(),
                             b_mat: gpu.gpu_field.b_mat,
                             count: gpu.gpu_field.count,
@@ -1885,7 +2467,9 @@ impl ApplicationHandler<UserEvent> for App {
                         gpu.gpu_field.seed_kpoint([0.0, 0.0, 0.0], 1.0);
                         let sys = symmetry::detect(&crystal.lattice);
                         gpu.kpath = Some(kpoints::build_kpath(sys));
-                        if let Some(kp) = &mut gpu.kpath { kp.reset(); }
+                        if let Some(kp) = &mut gpu.kpath {
+                            kp.reset();
+                        }
                         self.kpt_idx = 0;
                         self.kpath_active = true;
                     }
@@ -1896,17 +2480,7 @@ impl ApplicationHandler<UserEvent> for App {
                             gpu.gpu_field.seed_kpoint(k, 0.4);
                         }
                     }
-
-                    if self.tour.is_fading() {
-                        if let Some(prev) = &self.tour.prev_field {
-                            let packed = crossfade_pack(prev, &gpu.gpu_field, self.tour.fade_t);
-                            gpu.field_pl.upload_gfield(&gpu.queue, &packed);
-                        } else {
-                            gpu.update_field();
-                        }
-                    } else {
-                        gpu.update_field();
-                    }
+                    gpu.update_field();
                 }
 
                 // ── Non-tour k-path walking ────────────────────────────
@@ -1920,72 +2494,106 @@ impl ApplicationHandler<UserEvent> for App {
 
                 // ── Snapshot all state read by the UI closure ──────────
                 // (We copy/clone so the closure doesn't hold borrows into self.)
-                let cur_render_mode   = self.render_mode;
-                let cur_tour_active   = self.tour.active;
-                let cur_tour_style    = self.tour_style;
-                let cur_kpath_active  = self.kpath_active;
-                let cur_panel_open    = self.panel_open;
+                let cur_render_mode = self.render_mode;
+                let cur_tour_active = self.tour.active;
+                let cur_tour_style = self.tour_style;
+                let cur_kpath_active = self.kpath_active;
+                let cur_panel_open = self.panel_open;
                 let cur_sequencer_panel_open = self.sequencer_panel_open;
-                let cur_fb_auto       = self.fb_auto;
-                let cur_show_keymap   = self.show_keymap;
+                let cur_fb_auto = self.fb_auto;
+                let cur_show_keymap = self.show_keymap;
                 let cur_show_mode_info = self.show_mode_info;
                 let mut cur_mode_area = self.mode_area;
                 #[cfg(not(target_arch = "wasm32"))]
                 let cur_surface_size = gpu.size;
-                let cur_supercell     = gpu.supercell;
-                let cur_crystal_idx   = self.tour.crystal_idx;
-                let cur_trip_level    = self.trip_level;
-                let tour_fp = if self.tour.active {
-                    Some(tour_field_params(t, self.tour.crystal_idx, self.tour_style, self.trip_level))
+                let cur_supercell = gpu.supercell;
+                let cur_crystal_idx = self.tour.crystal_idx;
+                let cur_trip_level = self.trip_level;
+                let (tour_fp, tour_transition) = if self.tour.active {
+                    let target = tour_field_params(
+                        t,
+                        self.tour.crystal_idx,
+                        self.tour_style,
+                        self.trip_level,
+                    );
+                    let transition =
+                        self.tour
+                            .transition_params(target.clone(), dt, self.trip_level);
+                    (Some(target), transition)
+                } else {
+                    (None, None)
+                };
+                let seq_fp = if self.sequencer.active {
+                    Some(self.sequencer.current_params())
                 } else {
                     None
                 };
-                let seq_fp = if self.sequencer.active { Some(self.sequencer.current_params()) } else { None };
                 // Sequencer overrides tour which overrides manual field_params
-                let cur_mode_idx      = seq_fp.as_ref()
+                let cur_mode_idx = seq_fp
+                    .as_ref()
                     .or(tour_fp.as_ref())
                     .map(|fp| fp.mode)
                     .unwrap_or(self.field_params.mode) as usize;
-                let cur_mode_name     = MODE_NAMES[cur_mode_idx];
-                let live_mode_area    = MODES[cur_mode_idx].area();
+                let cur_mode_name = MODE_NAMES[cur_mode_idx];
+                let live_mode_area = MODES[cur_mode_idx].area();
                 if live_mode_area != cur_mode_area {
                     cur_mode_area = live_mode_area;
                 }
-                let cur_crystal_name  = self.all_crystals[cur_crystal_idx].name;
-                let cur_sys_name      = self.all_crystals[cur_crystal_idx].system.name();
-                let cur_kpt_label: String = gpu.kpath.as_ref()
+                let cur_crystal_name = self.all_crystals[cur_crystal_idx].name;
+                let cur_sys_name = self.all_crystals[cur_crystal_idx].system.name();
+                let cur_kpt_label: String = gpu
+                    .kpath
+                    .as_ref()
                     .map(|kp| kp.label_at(self.kpt_idx % kp.n_points()).to_owned())
                     .unwrap_or_default();
                 // Snapshot sequencer state for UI
-                let cur_seq_active    = self.sequencer.active;
-                let cur_seq_manual    = self.sequencer.manual;
-                let cur_seq_selected  = self.sequencer.selected;
-                let cur_seq_steps: Vec<(bool, bool, bool, u32, (u8, u8), f32)> = self.sequencer.steps.iter().enumerate()
-                    .map(|(i, s)| (
-                        i == self.sequencer.cur, s.muted,
-                        Some(i) == self.sequencer.selected, s.params.mode,
-                        s.cond, s.prob,
-                    ))
+                let cur_seq_active = self.sequencer.active;
+                let cur_seq_manual = self.sequencer.manual;
+                let cur_seq_selected = self.sequencer.selected;
+                let cur_seq_steps: Vec<(bool, bool, bool, u32, (u8, u8), f32)> = self
+                    .sequencer
+                    .steps
+                    .iter()
+                    .enumerate()
+                    .map(|(i, s)| {
+                        (
+                            i == self.sequencer.cur,
+                            s.muted,
+                            Some(i) == self.sequencer.selected,
+                            s.params.mode,
+                            s.cond,
+                            s.prob,
+                        )
+                    })
                     .collect();
-                let cur_seq_dur       = self.sequencer.step_dur;
-                let cur_seq_curve     = self.sequencer.curve;
-                let cur_seq_morph     = self.sequencer.morph;
-                let cur_seq_drift     = self.sequencer.drift;
+                let cur_seq_dur = self.sequencer.step_dur;
+                let cur_seq_curve = self.sequencer.curve;
+                let cur_seq_morph = self.sequencer.morph;
+                let cur_seq_drift = self.sequencer.drift;
                 let cur_seq_play_mode = self.sequencer.play_mode;
-                let cur_seq_eff_dur   = self.sequencer.effective_step_dur();
-                let cur_seq_progress  = (self.sequencer.step_timer / cur_seq_eff_dur).clamp(0.0, 1.0);
+                let cur_seq_eff_dur = self.sequencer.effective_step_dur();
+                let cur_seq_progress =
+                    (self.sequencer.step_timer / cur_seq_eff_dur).clamp(0.0, 1.0);
                 // Editor: mutable local that closure can modify; written back in mutations
-                let mut seq_selected_edit: Option<(usize, FieldParams)> = self.sequencer.selected
+                let mut seq_selected_edit: Option<(usize, FieldParams)> = self
+                    .sequencer
+                    .selected
                     .and_then(|i| self.sequencer.steps.get(i).map(|s| (i, s.params.clone())));
                 // Per-step extras for the selected step editor: (dur_mul, curve_override, prob)
-                let seq_selected_extras: Option<(f32, Option<TranCurve>, f32, (u8, u8))> = self.sequencer.selected
+                let seq_selected_extras: Option<(f32, Option<TranCurve>, f32, (u8, u8))> = self
+                    .sequencer
+                    .selected
                     .and_then(|i| self.sequencer.steps.get(i))
                     .map(|s| (s.dur_mul, s.curve_override, s.prob, s.cond));
                 // Snapshot field_params, lfo, mic, and current audio bands.
-                let mut fp  = seq_fp.or(tour_fp).unwrap_or_else(|| self.field_params.clone());
+                let mut fp = seq_fp
+                    .or(tour_fp)
+                    .unwrap_or_else(|| self.field_params.clone());
                 // FB AUTO: override every fb_* field with an evolving auto-pilot pattern.
                 // Composes on top of the manual/tour/sequencer source, before LFO/mic.
-                if self.fb_auto { fp = fb_auto_params(t, &fp); }
+                if self.fb_auto {
+                    fp = fb_auto_params(t, &fp);
+                }
 
                 // MIDI snapshot: pull CC values and drain triggered notes.
                 let mut midi_notes: Vec<u8> = Vec::new();
@@ -1997,14 +2605,20 @@ impl ApplicationHandler<UserEvent> for App {
                         midi_port_name = s.port_name.clone();
                         midi_last_cc = s.last_cc;
                         midi::CcSnapshot::from_state(&s)
-                    } else { midi::CcSnapshot::default() }
-                } else { midi::CcSnapshot::default() };
+                    } else {
+                        midi::CcSnapshot::default()
+                    }
+                } else {
+                    midi::CcSnapshot::default()
+                };
                 // CC: directly drive params (overrides tour/seq for the set CCs).
                 midi::apply_midi_cc(&mut fp, &midi_cc_snap);
 
                 let mut lfo = self.lfo.clone();
                 let mut mic = self.mic_params.clone();
-                let cur_bands = self.audio.as_ref()
+                let cur_bands = self
+                    .audio
+                    .as_ref()
                     .and_then(|a| a.bands.lock().ok().map(|b| b.clone()))
                     .unwrap_or_default();
                 let mic_active = self.audio.is_some();
@@ -2012,34 +2626,66 @@ impl ApplicationHandler<UserEvent> for App {
                 // Apply LFO + mic modulation to get effective values for this frame.
                 let (fp_eff, cur_flux_load) = apply_modulation_ex(&fp, &lfo, &mic, &cur_bands, t);
 
-                // Pre-build FieldUniform from the LFO-modulated snapshot so the closure can
-                // freely mutate fp.* without conflicting with the match arm below.
+                // Build each pass's independent uniform. Tour transitions use
+                // the same current modulation inputs for both images, while the
+                // mode-specific base params and crystal colour stay distinct.
                 let cdef = self.all_crystals[cur_crystal_idx];
-                let field_params_uniform = FieldUniform {
-                    mp:             renderer::pack_mp(&fp_eff.mp),
-                    time:           t,
-                    mode:           fp_eff.mode,
-                    num_g:          gpu.gpu_field.count as u32,
-                    aspect:         gpu.size.width as f32 / gpu.size.height.max(1) as f32,
-                    crystal_color:  [cdef.color[0], cdef.color[1], cdef.color[2], 0.0],
-                    mouse:          self.mouse_norm,
-                    mouse_down:     if self.mouse_btn_down { 1.0 } else { 0.0 },
-                    fb_enabled:     if fp_eff.fb_enabled { 1 } else { 0 },
-                    fb_mirror:      fp_eff.fb_mirror,
-                    fb_zoom:        fp_eff.fb_zoom,
-                    fb_offset_x:    fp_eff.fb_offset_x,
-                    fb_offset_y:    fp_eff.fb_offset_y,
-                    fb_rotation:    fp_eff.fb_rotation,
-                    fb_decay:       fp_eff.fb_decay,
-                    fb_color_shift: fp_eff.fb_color_shift,
-                    fb_inject:      fp_eff.fb_inject,
-                    fb_fold_angle:  fp_eff.fb_fold_angle,
-                    fb_saturation:  fp_eff.fb_saturation,
-                    fb_brightness:  fp_eff.fb_brightness,
-                    fb_blend_mode:  fp_eff.fb_blend_mode,
-                    fb_motion_blur: fp_eff.fb_motion_blur,
-                    _pad:           [0.0; 3],
+                let make_field_uniform =
+                    |effective: &FieldParams, crystal_idx: usize| FieldUniform {
+                        mp: renderer::pack_mp(&effective.mp),
+                        time: t,
+                        mode: effective.mode,
+                        num_g: gpu.gpu_field.count as u32,
+                        aspect: gpu.size.width as f32 / gpu.size.height.max(1) as f32,
+                        crystal_color: {
+                            let cdef = self.all_crystals[crystal_idx];
+                            [cdef.color[0], cdef.color[1], cdef.color[2], 0.0]
+                        },
+                        mouse: self.mouse_norm,
+                        mouse_down: if self.mouse_btn_down { 1.0 } else { 0.0 },
+                        fb_enabled: if effective.fb_enabled { 1 } else { 0 },
+                        fb_mirror: effective.fb_mirror,
+                        fb_zoom: effective.fb_zoom,
+                        fb_offset_x: effective.fb_offset_x,
+                        fb_offset_y: effective.fb_offset_y,
+                        fb_rotation: effective.fb_rotation,
+                        fb_decay: effective.fb_decay,
+                        fb_color_shift: effective.fb_color_shift,
+                        fb_inject: effective.fb_inject,
+                        fb_fold_angle: effective.fb_fold_angle,
+                        fb_saturation: effective.fb_saturation,
+                        fb_brightness: effective.fb_brightness,
+                        fb_blend_mode: effective.fb_blend_mode,
+                        fb_motion_blur: effective.fb_motion_blur,
+                        _pad: [0.0; 3],
+                    };
+                let field_params_uniform = make_field_uniform(&fp_eff, cur_crystal_idx);
+                let tour_field_transition = if self.sequencer.active {
+                    None
+                } else {
+                    tour_transition.map(|(mut previous, mix)| {
+                        if self.fb_auto {
+                            previous = fb_auto_params(t, &previous);
+                        }
+                        midi::apply_midi_cc(&mut previous, &midi_cc_snap);
+                        let (previous_eff, _) =
+                            apply_modulation_ex(&previous, &lfo, &mic, &cur_bands, t);
+                        let previous_crystal_idx =
+                            self.tour.prev_crystal_idx.unwrap_or(cur_crystal_idx);
+                        (make_field_uniform(&previous_eff, previous_crystal_idx), mix)
+                    })
                 };
+                let uses_tour_transition = tour_field_transition.is_some();
+                let default_field_transition = if self.tour.active {
+                    // Tour owns its longer crystal/mode transition timing.
+                    self.scene_transition.record(field_params_uniform);
+                    None
+                } else if render_mode == RenderMode::Field {
+                    self.scene_transition.track(field_params_uniform, dt)
+                } else {
+                    None
+                };
+                let field_transition = tour_field_transition.or(default_field_transition);
 
                 // Snapshot search string
                 let mut search = self.search_str.clone();
@@ -2047,12 +2693,12 @@ impl ApplicationHandler<UserEvent> for App {
                 // Preset editor snapshot
                 let cur_preset_editor_open = self.preset_editor_open;
                 let mut preset_editor_text = self.preset_editor_text.clone();
-                let cur_preset_status      = self.preset_status.clone();
+                let cur_preset_status = self.preset_status.clone();
                 #[cfg(not(target_arch = "wasm32"))]
-                let mut preset_path_input  = self.preset_path_input.clone();
+                let mut preset_path_input = self.preset_path_input.clone();
 
                 // Crystal list (static data, no borrows)
-                let groups   = all_groups();
+                let groups = all_groups();
                 let all_defs = all_crystals();
 
                 // Accumulator for mutations
@@ -2079,7 +2725,8 @@ impl ApplicationHandler<UserEvent> for App {
                                     RenderMode::Atoms => "ATOMS",
                                     RenderMode::Field => "FIELD",
                                 };
-                                if ui.button(view_label)
+                                if ui
+                                    .button(view_label)
                                     .on_hover_text("Switch between structure and field views")
                                     .clicked()
                                 {
@@ -2089,13 +2736,12 @@ impl ApplicationHandler<UserEvent> for App {
                                     });
                                 }
 
-                                let inspector_text = egui::RichText::new("INSPECTOR").color(
-                                    if req_panel_open {
+                                let inspector_text =
+                                    egui::RichText::new("INSPECTOR").color(if req_panel_open {
                                         egui::Color32::from_rgb(137, 225, 215)
                                     } else {
                                         egui::Color32::from_gray(145)
-                                    },
-                                );
+                                    });
                                 if ui.add(egui::Button::new(inspector_text)).clicked() {
                                     req.panel_toggle = true;
                                 }
@@ -2107,7 +2753,8 @@ impl ApplicationHandler<UserEvent> for App {
                                         egui::Color32::from_gray(145)
                                     },
                                 );
-                                if ui.add(egui::Button::new(timeline_text))
+                                if ui
+                                    .add(egui::Button::new(timeline_text))
                                     .on_hover_text("Open the sequencer workspace")
                                     .clicked()
                                 {
@@ -2120,60 +2767,83 @@ impl ApplicationHandler<UserEvent> for App {
                                 } else {
                                     egui::Color32::from_gray(180)
                                 };
-                                if ui.add(egui::Button::new(
-                                    egui::RichText::new(if cur_tour_active { "STOP TOUR" } else { "TOUR" })
+                                if ui
+                                    .add(egui::Button::new(
+                                        egui::RichText::new(if cur_tour_active {
+                                            "STOP TOUR"
+                                        } else {
+                                            "TOUR"
+                                        })
                                         .color(tour_color),
-                                )).clicked() {
+                                    ))
+                                    .clicked()
+                                {
                                     req.tour_toggle = true;
                                 }
-                                if ui.small_button(cur_tour_style.label())
+                                if ui
+                                    .small_button(cur_tour_style.label())
                                     .on_hover_text("Tour direction")
                                     .clicked()
                                 {
                                     req.tour_style_toggle = true;
                                 }
 
-                                if ui.small_button("−").clicked() { req.trip_level_dec = true; }
+                                if ui.small_button("−").clicked() {
+                                    req.trip_level_dec = true;
+                                }
                                 ui.label(
                                     egui::RichText::new(format!("FLOW {}", cur_trip_level.label()))
                                         .monospace()
                                         .color(egui::Color32::from_rgb(247, 197, 106)),
                                 );
-                                if ui.small_button("+").clicked() { req.trip_level_inc = true; }
+                                if ui.small_button("+").clicked() {
+                                    req.trip_level_inc = true;
+                                }
 
-                                if ui.small_button(if cur_kpath_active { "K PATH ON" } else { "K PATH" })
+                                if ui
+                                    .small_button(if cur_kpath_active {
+                                        "K PATH ON"
+                                    } else {
+                                        "K PATH"
+                                    })
                                     .clicked()
                                 {
                                     req.kpath_toggle = true;
                                 }
-                                if ui.small_button(if cur_fb_auto { "AUTO ON" } else { "AUTO" })
+                                if ui
+                                    .small_button(if cur_fb_auto { "AUTO ON" } else { "AUTO" })
                                     .clicked()
                                 {
                                     req.fb_auto_toggle = true;
                                 }
 
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if ui.small_button("?")
-                                        .on_hover_text("Keyboard shortcuts")
-                                        .clicked()
-                                    {
-                                        req.keymap_toggle = true;
-                                    }
-                                    if ui.small_button("CAPTURE")
-                                        .on_hover_text("Save the complete frame, including UI")
-                                        .clicked()
-                                    {
-                                        req.screenshot = true;
-                                    }
-                                    ui.label(
-                                        egui::RichText::new(format!(
-                                            "{}  /  {}  /  {}",
-                                            cur_crystal_name, cur_sys_name, cur_mode_name
-                                        ))
-                                        .small()
-                                        .color(egui::Color32::from_gray(155)),
-                                    );
-                                });
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if ui
+                                            .small_button("?")
+                                            .on_hover_text("Keyboard shortcuts")
+                                            .clicked()
+                                        {
+                                            req.keymap_toggle = true;
+                                        }
+                                        if ui
+                                            .small_button("CAPTURE")
+                                            .on_hover_text("Save the complete frame, including UI")
+                                            .clicked()
+                                        {
+                                            req.screenshot = true;
+                                        }
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "{}  /  {}  /  {}",
+                                                cur_crystal_name, cur_sys_name, cur_mode_name
+                                            ))
+                                            .small()
+                                            .color(egui::Color32::from_gray(155)),
+                                        );
+                                    },
+                                );
                             });
                         });
 
@@ -2606,7 +3276,7 @@ impl ApplicationHandler<UserEvent> for App {
                     // One source of truth: transport, grid, presets, and (when a
                     // step is selected) an inline editor — all in a single dock.
                     if cur_sequencer_panel_open {
-                    egui::TopBottomPanel::bottom("sequencer_panel")
+                        egui::TopBottomPanel::bottom("sequencer_panel")
                         .resizable(true)
                         .default_height(if seq_selected_edit.is_some() { 340.0 } else { 132.0 })
                         .height_range(112.0..=390.0)
@@ -3026,7 +3696,9 @@ impl ApplicationHandler<UserEvent> for App {
                                 ui.label(egui::RichText::new("Click · / A / B / M / T on a slider to route mic / LFO source.")
                                     .small().color(egui::Color32::from_gray(150)));
                             });
-                        if !open { req.keymap_toggle = true; }
+                        if !open {
+                            req.keymap_toggle = true;
+                        }
                     }
 
                     // ── Mode info overlay ─────────────────────────────
@@ -3041,33 +3713,45 @@ impl ApplicationHandler<UserEvent> for App {
                             .collapsible(false)
                             .default_width(380.0)
                             .show(ctx, |ui| {
-                                ui.label(egui::RichText::new(info.tagline)
-                                    .italics()
-                                    .color(egui::Color32::from_rgb(200, 210, 230)));
+                                ui.label(
+                                    egui::RichText::new(info.tagline)
+                                        .italics()
+                                        .color(egui::Color32::from_rgb(200, 210, 230)),
+                                );
                                 ui.add_space(6.0);
                                 ui.separator();
                                 ui.add_space(4.0);
-                                ui.label(egui::RichText::new("equations")
-                                    .small()
-                                    .color(egui::Color32::from_gray(140)));
+                                ui.label(
+                                    egui::RichText::new("equations")
+                                        .small()
+                                        .color(egui::Color32::from_gray(140)),
+                                );
                                 ui.add_space(2.0);
                                 for eq in info.equations.iter() {
-                                    ui.label(egui::RichText::new(*eq)
-                                        .monospace()
-                                        .size(13.5)
-                                        .color(egui::Color32::from_rgb(230, 230, 200)));
+                                    ui.label(
+                                        egui::RichText::new(*eq)
+                                            .monospace()
+                                            .size(13.5)
+                                            .color(egui::Color32::from_rgb(230, 230, 200)),
+                                    );
                                 }
                                 ui.add_space(6.0);
                                 ui.separator();
                                 ui.add_space(4.0);
-                                ui.label(egui::RichText::new("notes")
-                                    .small()
-                                    .color(egui::Color32::from_gray(140)));
+                                ui.label(
+                                    egui::RichText::new("notes")
+                                        .small()
+                                        .color(egui::Color32::from_gray(140)),
+                                );
                                 ui.add_space(2.0);
-                                ui.label(egui::RichText::new(info.notes)
-                                    .color(egui::Color32::from_rgb(220, 220, 230)));
+                                ui.label(
+                                    egui::RichText::new(info.notes)
+                                        .color(egui::Color32::from_rgb(220, 220, 230)),
+                                );
                             });
-                        if !open { req.mode_info_toggle = true; }
+                        if !open {
+                            req.mode_info_toggle = true;
+                        }
                     }
 
                     // ── Preset JSON editor modal ─────────────────────
@@ -3086,11 +3770,19 @@ impl ApplicationHandler<UserEvent> for App {
                                         ui.ctx().copy_text(preset_editor_text.clone());
                                     }
                                     if ui.button("📥 Paste from clipboard").clicked() {
-                                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+                                        ui.ctx()
+                                            .send_viewport_cmd(egui::ViewportCommand::RequestPaste);
                                     }
-                                    if ui.add(egui::Button::new(
-                                        egui::RichText::new("Apply →").color(egui::Color32::from_rgb(140, 255, 140))
-                                    )).on_hover_text("Parse the JSON above and load it into the sequencer").clicked() {
+                                    if ui
+                                        .add(egui::Button::new(
+                                            egui::RichText::new("Apply →")
+                                                .color(egui::Color32::from_rgb(140, 255, 140)),
+                                        ))
+                                        .on_hover_text(
+                                            "Parse the JSON above and load it into the sequencer",
+                                        )
+                                        .clicked()
+                                    {
                                         req.preset_apply_json = Some(preset_editor_text.clone());
                                     }
                                 });
@@ -3099,22 +3791,29 @@ impl ApplicationHandler<UserEvent> for App {
                                 #[cfg(not(target_arch = "wasm32"))]
                                 ui.horizontal(|ui| {
                                     ui.label("Path:");
-                                    ui.add(egui::TextEdit::singleline(&mut preset_path_input)
-                                        .hint_text("presets/my_preset.preset.json")
-                                        .desired_width(280.0));
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut preset_path_input)
+                                            .hint_text("presets/my_preset.preset.json")
+                                            .desired_width(280.0),
+                                    );
                                     if ui.button("💾 Save").clicked()
-                                        && !preset_path_input.is_empty() {
+                                        && !preset_path_input.is_empty()
+                                    {
                                         req.preset_save_path = Some(preset_path_input.clone());
                                     }
                                     if ui.button("📁 Load").clicked()
-                                        && !preset_path_input.is_empty() {
+                                        && !preset_path_input.is_empty()
+                                    {
                                         req.preset_load_path = Some(preset_path_input.clone());
                                     }
                                 });
 
                                 if !cur_preset_status.is_empty() {
-                                    ui.label(egui::RichText::new(&cur_preset_status)
-                                        .small().color(egui::Color32::from_rgb(180, 220, 255)));
+                                    ui.label(
+                                        egui::RichText::new(&cur_preset_status)
+                                            .small()
+                                            .color(egui::Color32::from_rgb(180, 220, 255)),
+                                    );
                                 }
 
                                 ui.add_space(4.0);
@@ -3138,34 +3837,59 @@ impl ApplicationHandler<UserEvent> for App {
                                         );
                                     });
                             });
-                        if !open { req.preset_show_json = true; }
+                        if !open {
+                            req.preset_show_json = true;
+                        }
                     }
                 };
 
                 // ── Render ────────────────────────────────────────────
                 match cur_render_mode {
                     RenderMode::Atoms => {
-                        if auto_rotate { gpu.orbit(0.4, 0.0); }
+                        if auto_rotate {
+                            gpu.orbit(0.4, 0.0);
+                        }
                         match gpu.render(t, ui_fn) {
                             Ok(_) => {}
                             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                                let sz = gpu.size; gpu.resize(sz);
+                                let sz = gpu.size;
+                                gpu.resize(sz);
                             }
                             Err(wgpu::SurfaceError::OutOfMemory) => {
-                                log::error!("OOM"); event_loop.exit();
+                                log::error!("OOM");
+                                event_loop.exit();
                             }
                             Err(e) => log::warn!("render: {e:?}"),
                         }
                     }
                     RenderMode::Field => {
-                        // field_params_uniform was pre-built from `fp` snapshot before the closure.
-                        match gpu.render_field(&field_params_uniform, ui_fn) {
+                        // The transition path shades both modes independently
+                        // before blending, so tour scene changes do not chop.
+                        let previous_field = if uses_tour_transition {
+                            self.tour.prev_field.as_ref()
+                        } else {
+                            self.scene_transition.previous_field.as_ref()
+                        };
+                        let result = if let Some((previous, mix)) = field_transition {
+                            gpu.render_field_transition(
+                                &previous,
+                                previous_field,
+                                &field_params_uniform,
+                                mix,
+                                ui_fn,
+                            )
+                        } else {
+                            gpu.render_field(&field_params_uniform, ui_fn)
+                        };
+                        match result {
                             Ok(_) => {}
                             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                                let sz = gpu.size; gpu.resize(sz);
+                                let sz = gpu.size;
+                                gpu.resize(sz);
                             }
                             Err(wgpu::SurfaceError::OutOfMemory) => {
-                                log::error!("OOM"); event_loop.exit();
+                                log::error!("OOM");
+                                event_loop.exit();
                             }
                             Err(e) => log::warn!("field: {e:?}"),
                         }
@@ -3173,25 +3897,27 @@ impl ApplicationHandler<UserEvent> for App {
                 }
 
                 // ── Apply UI mutations (closure is dropped, borrows released) ──
-                self.field_params       = fp;
-                self.lfo                = lfo;
-                self.mic_params         = mic;
-                self.search_str         = search;
-                self.mode_area          = cur_mode_area;
+                self.field_params = fp;
+                self.lfo = lfo;
+                self.mic_params = mic;
+                self.search_str = search;
+                self.mode_area = cur_mode_area;
                 self.preset_editor_text = preset_editor_text;
                 #[cfg(not(target_arch = "wasm32"))]
-                { self.preset_path_input = preset_path_input; }
+                {
+                    self.preset_path_input = preset_path_input;
+                }
 
                 // ── MIDI Note triggers — route them into the same UiReq path so
                 //    they behave exactly like clicking the corresponding button.
                 for n in midi_notes {
                     match n {
                         midi::note::FB_AUTO_TOGGLE => req.fb_auto_toggle = true,
-                        midi::note::TOUR_TOGGLE    => req.tour_toggle = true,
-                        midi::note::SEQ_TOGGLE     => req.seq_toggle = true,
-                        midi::note::SEQ_PREV       => req.seq_manual_step = Some(-1),
-                        midi::note::SEQ_NEXT       => req.seq_manual_step = Some(1),
-                        midi::note::SEQ_CAPTURE    => req.seq_capture = true,
+                        midi::note::TOUR_TOGGLE => req.tour_toggle = true,
+                        midi::note::SEQ_TOGGLE => req.seq_toggle = true,
+                        midi::note::SEQ_PREV => req.seq_manual_step = Some(-1),
+                        midi::note::SEQ_NEXT => req.seq_manual_step = Some(1),
+                        midi::note::SEQ_CAPTURE => req.seq_capture = true,
                         _ => {}
                     }
                 }
@@ -3208,8 +3934,12 @@ impl ApplicationHandler<UserEvent> for App {
                         self.panel_open = false;
                     }
                 }
-                if req.keymap_toggle { self.show_keymap = !cur_show_keymap; }
-                if req.mode_info_toggle { self.show_mode_info = !cur_show_mode_info; }
+                if req.keymap_toggle {
+                    self.show_keymap = !cur_show_keymap;
+                }
+                if req.mode_info_toggle {
+                    self.show_mode_info = !cur_show_mode_info;
+                }
                 if req.fb_auto_toggle {
                     self.fb_auto = !cur_fb_auto;
                     // Turning auto on triggers a clean feedback restart and ensures fb_enabled
@@ -3219,8 +3949,12 @@ impl ApplicationHandler<UserEvent> for App {
                     }
                 }
 
-                if let Some(rm) = req.render_mode { self.render_mode = rm; }
-                if req.auto_rotate_toggle { self.auto_rotate = !auto_rotate; }
+                if let Some(rm) = req.render_mode {
+                    self.render_mode = rm;
+                }
+                if req.auto_rotate_toggle {
+                    self.auto_rotate = !auto_rotate;
+                }
                 if let Some(n) = req.supercell {
                     if let Some(gpu2) = &mut self.gpu {
                         gpu2.set_supercell(n);
@@ -3230,18 +3964,23 @@ impl ApplicationHandler<UserEvent> for App {
                     self.kpath_active = !cur_kpath_active;
                     if self.kpath_active {
                         if let Some(gpu2) = &mut self.gpu {
-                            if let Some(kp) = &mut gpu2.kpath { kp.reset(); }
+                            if let Some(kp) = &mut gpu2.kpath {
+                                kp.reset();
+                            }
                         }
                     }
                 }
                 if req.tour_toggle {
                     self.tour.active = !cur_tour_active;
+                    self.tour.reset_param_transition();
                     if self.tour.active {
                         self.render_mode = RenderMode::Field;
                         self.kpath_active = true;
                         self.lfo = tour_lfo_preset_for_level(self.trip_level);
                         if let Some(gpu2) = &mut self.gpu {
-                            if let Some(kp) = &mut gpu2.kpath { kp.reset(); }
+                            if let Some(kp) = &mut gpu2.kpath {
+                                kp.reset();
+                            }
                         }
                     }
                 }
@@ -3249,21 +3988,30 @@ impl ApplicationHandler<UserEvent> for App {
                     self.tour_style = self.tour_style.next();
                     self.lfo = match self.tour_style {
                         TourStyle::Curated => tour_lfo_preset_for_level(self.trip_level),
-                        TourStyle::Random  => tour_lfo_preset_fb_heavy(),
+                        TourStyle::Random => tour_lfo_preset_fb_heavy(),
                     };
                 }
                 // Trip-level requests: re-apply the curated preset so LFOs follow
                 // the new level immediately. (Random style keeps fb_heavy preset.)
-                let trip_changed = req.trip_level_inc || req.trip_level_dec || req.trip_level_set.is_some();
-                if req.trip_level_dec { self.trip_level = self.trip_level.dec(); }
-                if req.trip_level_inc { self.trip_level = self.trip_level.inc(); }
-                if let Some(v) = req.trip_level_set { self.trip_level = TripLevel::new(v); }
+                let trip_changed =
+                    req.trip_level_inc || req.trip_level_dec || req.trip_level_set.is_some();
+                if req.trip_level_dec {
+                    self.trip_level = self.trip_level.dec();
+                }
+                if req.trip_level_inc {
+                    self.trip_level = self.trip_level.inc();
+                }
+                if let Some(v) = req.trip_level_set {
+                    self.trip_level = TripLevel::new(v);
+                }
                 if trip_changed && self.tour.active && self.tour_style == TourStyle::Curated {
                     self.lfo = tour_lfo_preset_for_level(self.trip_level);
                 }
                 if req.seq_toggle {
                     self.sequencer.active = !cur_seq_active;
-                    if self.sequencer.active { self.render_mode = RenderMode::Field; }
+                    if self.sequencer.active {
+                        self.render_mode = RenderMode::Field;
+                    }
                 }
                 if req.seq_manual_toggle {
                     self.sequencer.manual = !cur_seq_manual;
@@ -3273,9 +4021,15 @@ impl ApplicationHandler<UserEvent> for App {
                         self.render_mode = RenderMode::Field;
                     }
                 }
-                if let Some(dir) = req.seq_manual_step { self.sequencer.manual_step(dir); }
+                if let Some(dir) = req.seq_manual_step {
+                    self.sequencer.manual_step(dir);
+                }
                 if let Some(i) = req.seq_select_step {
-                    self.sequencer.selected = if self.sequencer.selected == Some(i) { None } else { Some(i) };
+                    self.sequencer.selected = if self.sequencer.selected == Some(i) {
+                        None
+                    } else {
+                        Some(i)
+                    };
                 }
                 if let Some(i) = req.seq_mute_step {
                     if i < self.sequencer.steps.len() {
@@ -3332,7 +4086,11 @@ impl ApplicationHandler<UserEvent> for App {
                 if req.preset_random {
                     // Seed off the wall clock so each click is a fresh roll;
                     // remember the seed so the user can paste it / reproduce.
-                    let seed = (t * 1_000_000.0) as u32 ^ self.preset_random_seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                    let seed = (t * 1_000_000.0) as u32
+                        ^ self
+                            .preset_random_seed
+                            .wrapping_mul(1664525)
+                            .wrapping_add(1013904223);
                     self.preset_random_seed = seed;
                     let p = preset::random_preset(seed);
                     self.preset_status = format!("Rolled '{}' (seed 0x{seed:08x})", p.name);
@@ -3361,7 +4119,8 @@ impl ApplicationHandler<UserEvent> for App {
                         self.trip_level,
                     );
                     self.preset_editor_text = cur.to_pretty_json();
-                    self.preset_status = "Preset JSON ready in the editor — Ctrl-C to copy".to_string();
+                    self.preset_status =
+                        "Preset JSON ready in the editor — Ctrl-C to copy".to_string();
                     self.preset_editor_open = true;
                 }
                 if req.preset_generate_loop {
@@ -3371,9 +4130,16 @@ impl ApplicationHandler<UserEvent> for App {
                     }
                     #[cfg(not(target_arch = "wasm32"))]
                     {
-                        match spawn_loop_render(&self.sequencer, &self.lfo, self.trip_level, cur_surface_size.width, cur_surface_size.height) {
+                        match spawn_loop_render(
+                            &self.sequencer,
+                            &self.lfo,
+                            self.trip_level,
+                            cur_surface_size.width,
+                            cur_surface_size.height,
+                        ) {
                             Ok(path) => {
-                                self.preset_status = format!("Loop render started: {}", path.display());
+                                self.preset_status =
+                                    format!("Loop render started: {}", path.display());
                             }
                             Err(e) => {
                                 self.preset_status = format!("Loop render failed: {e}");
@@ -3398,11 +4164,15 @@ impl ApplicationHandler<UserEvent> for App {
                     if let Some(path) = req.preset_save_path {
                         let cur = preset::Preset::from_state(
                             std::path::Path::new(&path)
-                                .file_stem().and_then(|s| s.to_str()).unwrap_or("preset"),
-                            &self.sequencer, &self.lfo, self.trip_level,
+                                .file_stem()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("preset"),
+                            &self.sequencer,
+                            &self.lfo,
+                            self.trip_level,
                         );
                         self.preset_status = match std::fs::write(&path, cur.to_pretty_json()) {
-                            Ok(_)  => format!("Saved → {path}"),
+                            Ok(_) => format!("Saved → {path}"),
                             Err(e) => format!("Save failed: {e}"),
                         };
                     }
@@ -3422,8 +4192,12 @@ impl ApplicationHandler<UserEvent> for App {
                         };
                     }
                 }
-                if let Some(c) = req.seq_curve { self.sequencer.curve = c; }
-                if let Some(d) = req.seq_dur { self.sequencer.step_dur = d; }
+                if let Some(c) = req.seq_curve {
+                    self.sequencer.curve = c;
+                }
+                if let Some(d) = req.seq_dur {
+                    self.sequencer.step_dur = d;
+                }
                 if req.seq_play_mode_toggle {
                     self.sequencer.play_mode = self.sequencer.play_mode.next();
                     self.sequencer.pp_dir = 1; // reset PingPong direction on mode change
@@ -3442,9 +4216,9 @@ impl ApplicationHandler<UserEvent> for App {
                 if let Some(i) = req.seq_step_curve_cycle {
                     if let Some(s) = self.sequencer.steps.get_mut(i) {
                         s.curve_override = match s.curve_override {
-                            None            => Some(TranCurve::Linear),
+                            None => Some(TranCurve::Linear),
                             Some(c) if c == TranCurve::Over => None,
-                            Some(c)         => Some(c.next()),
+                            Some(c) => Some(c.next()),
                         };
                     }
                 }
@@ -3466,7 +4240,9 @@ impl ApplicationHandler<UserEvent> for App {
                     self.sequencer.drift = v.clamp(0.0, 1.0);
                 }
                 if req.fb_reset {
-                    if let Some(gpu) = &mut self.gpu { gpu.fb_clear = true; }
+                    if let Some(gpu) = &mut self.gpu {
+                        gpu.fb_clear = true;
+                    }
                 }
                 if req.prev {
                     self.tour.active = false;
@@ -3505,7 +4281,10 @@ impl ApplicationHandler<UserEvent> for App {
 #[cfg(not(target_arch = "wasm32"))]
 fn chrono_stamp() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
     format!("{secs}")
 }
 
@@ -3520,8 +4299,7 @@ fn spawn_loop_render(
     let stamp = chrono_stamp();
     let root = std::path::PathBuf::from("loops").join(format!("loop-{stamp}"));
     let frames = root.join("frames");
-    std::fs::create_dir_all(&frames)
-        .map_err(|e| format!("create {}: {e}", frames.display()))?;
+    std::fs::create_dir_all(&frames).map_err(|e| format!("create {}: {e}", frames.display()))?;
 
     let full_duration = 8.0_f32;
     let half_duration = full_duration * 0.5;
@@ -3541,17 +4319,26 @@ fn spawn_loop_render(
     let even = |v: u32, min: u32| (v.max(min) & !1).max(min);
     let res = format!("{}x{}", even(width, 320), even(height, 180));
     let child = std::process::Command::new(exe)
-        .arg("--render").arg(&preset_path)
-        .arg("--out").arg(&frames)
-        .arg("--res").arg(res)
-        .arg("--fps").arg("60")
-        .arg("--duration").arg(format!("{full_duration:.3}"))
+        .arg("--render")
+        .arg(&preset_path)
+        .arg("--out")
+        .arg(&frames)
+        .arg("--res")
+        .arg(res)
+        .arg("--fps")
+        .arg("60")
+        .arg("--duration")
+        .arg(format!("{full_duration:.3}"))
         .arg("--pingpong-loop")
         .arg("--encode")
         .spawn()
         .map_err(|e| format!("spawn renderer: {e}"))?;
 
-    log::info!("Started loop renderer pid {} -> {}", child.id(), frames.display());
+    log::info!(
+        "Started loop renderer pid {} -> {}",
+        child.id(),
+        frames.display()
+    );
     Ok(root)
 }
 
@@ -3572,13 +4359,18 @@ fn main() {
     // Reads the preset, advances the sequencer at every 1/fps tick, and writes
     // one PNG per frame. Prints an ffmpeg encode command at the end.
     if args.iter().any(|a| a == "--list-crystals") {
-        for c in crystals::all_crystals() { println!("{}", c.name); }
+        for c in crystals::all_crystals() {
+            println!("{}", c.name);
+        }
         std::process::exit(0);
     }
     if args.iter().any(|a| a == "--render") {
         match run_render_cli(&args) {
-            Ok(_)  => std::process::exit(0),
-            Err(e) => { eprintln!("render: {e}"); std::process::exit(1); }
+            Ok(_) => std::process::exit(0),
+            Err(e) => {
+                eprintln!("render: {e}");
+                std::process::exit(1);
+            }
         }
     }
 
@@ -3616,30 +4408,40 @@ fn run_render_cli(args: &[String]) -> Result<(), String> {
 
     // Tiny ad-hoc CLI parser — we only have a handful of flags.
     fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
-        args.windows(2).find_map(|w| (w[0] == name).then_some(w[1].as_str()))
+        args.windows(2)
+            .find_map(|w| (w[0] == name).then_some(w[1].as_str()))
     }
-    let preset_path = flag(args, "--render")
-        .ok_or_else(|| "missing --render <preset.json>".to_string())?;
-    let out_dir     = flag(args, "--out")
-        .ok_or_else(|| "missing --out <dir>".to_string())?;
-    let res         = flag(args, "--res").unwrap_or("1280x720");
-    let fps: u32    = flag(args, "--fps").unwrap_or("60")
-        .parse().map_err(|e| format!("--fps not a number: {e}"))?;
-    let start: f32  = flag(args, "--start").unwrap_or("0.0")
-        .parse().map_err(|e| format!("--start not a number: {e}"))?;
+    let preset_path =
+        flag(args, "--render").ok_or_else(|| "missing --render <preset.json>".to_string())?;
+    let out_dir = flag(args, "--out").ok_or_else(|| "missing --out <dir>".to_string())?;
+    let res = flag(args, "--res").unwrap_or("1280x720");
+    let fps: u32 = flag(args, "--fps")
+        .unwrap_or("60")
+        .parse()
+        .map_err(|e| format!("--fps not a number: {e}"))?;
+    let start: f32 = flag(args, "--start")
+        .unwrap_or("0.0")
+        .parse()
+        .map_err(|e| format!("--start not a number: {e}"))?;
     let poscar_path = flag(args, "--poscar");
     let crystal_name = flag(args, "--crystal");
-    let bpm  = flag(args, "--bpm").map(|s| s.parse::<f32>()).transpose()
+    let bpm = flag(args, "--bpm")
+        .map(|s| s.parse::<f32>())
+        .transpose()
         .map_err(|e| format!("--bpm not a number: {e}"))?;
-    let bars = flag(args, "--bars").map(|s| s.parse::<f32>()).transpose()
+    let bars = flag(args, "--bars")
+        .map(|s| s.parse::<f32>())
+        .transpose()
         .map_err(|e| format!("--bars not a number: {e}"))?;
     let pingpong_loop = args.iter().any(|a| a == "--pingpong-loop");
     let encode = args.iter().any(|a| a == "--encode");
     // --bpm + --bars together override --duration and trigger loop-snap.
     let duration: f32 = match (bpm, bars) {
         (Some(b), Some(n)) if b > 0.0 && n > 0.0 => n * 4.0 * 60.0 / b,
-        _ => flag(args, "--duration").unwrap_or("10.0")
-                .parse().map_err(|e| format!("--duration not a number: {e}"))?,
+        _ => flag(args, "--duration")
+            .unwrap_or("10.0")
+            .parse()
+            .map_err(|e| format!("--duration not a number: {e}"))?,
     };
     let loop_snap = bpm.is_some() && bars.is_some();
     let final_frames = (duration * fps as f32).round().max(2.0) as u32;
@@ -3650,13 +4452,15 @@ fn run_render_cli(args: &[String]) -> Result<(), String> {
         duration
     };
 
-    let (width, height): (u32, u32) = res.split_once('x')
+    let (width, height): (u32, u32) = res
+        .split_once('x')
         .and_then(|(w, h)| Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?)))
         .ok_or_else(|| format!("--res must be WxH, got '{res}'"))?;
 
     let crystal = if let Some(name) = crystal_name {
         let needle = name.to_lowercase();
-        let pick = crystals::all_crystals().into_iter()
+        let pick = crystals::all_crystals()
+            .into_iter()
             .find(|c| c.name.to_lowercase().contains(&needle))
             .ok_or_else(|| format!("--crystal '{name}' not found (try --list-crystals)"))?;
         eprintln!("Crystal: '{}'", pick.name);
@@ -3667,15 +4471,20 @@ fn run_render_cli(args: &[String]) -> Result<(), String> {
         default_crystal()
     };
 
-    let json = std::fs::read_to_string(preset_path)
-        .map_err(|e| format!("read {preset_path}: {e}"))?;
+    let json =
+        std::fs::read_to_string(preset_path).map_err(|e| format!("read {preset_path}: {e}"))?;
     let p = preset::Preset::from_json(&json)?;
 
-    eprintln!("Preset: '{}' — {} steps, trip {}", p.name, p.steps.len(), p.trip_level.get());
+    eprintln!(
+        "Preset: '{}' — {} steps, trip {}",
+        p.name,
+        p.steps.len(),
+        p.trip_level.get()
+    );
 
     // Build a sequencer + LFO state from the preset and tick it as we render.
-    let mut seq   = Sequencer::new();
-    let mut lfo   = LfoParams::default();
+    let mut seq = Sequencer::new();
+    let mut lfo = LfoParams::default();
     let mut level = TripLevel::default();
     p.apply(&mut seq, &mut lfo, &mut level);
     seq.active = true;
@@ -3696,9 +4505,12 @@ fn run_render_cli(args: &[String]) -> Result<(), String> {
         lfo.b.rate = snap(lfo.b.rate);
         eprintln!(
             "Loop snap: dur {:.3}s, step_dur {:.3}s, LFO A {:.4}Hz ({} cyc), B {:.4}Hz ({} cyc)",
-            duration, seq.step_dur,
-            lfo.a.rate, (lfo.a.rate * duration).round() as i32,
-            lfo.b.rate, (lfo.b.rate * duration).round() as i32,
+            duration,
+            seq.step_dur,
+            lfo.a.rate,
+            (lfo.a.rate * duration).round() as i32,
+            lfo.b.rate,
+            (lfo.b.rate * duration).round() as i32,
         );
     }
 
@@ -3723,7 +4535,11 @@ fn run_render_cli(args: &[String]) -> Result<(), String> {
     };
 
     let opts = bench::ClipOpts {
-        width, height, fps, duration: render_duration, start,
+        width,
+        height,
+        fps,
+        duration: render_duration,
+        start,
         out_dir: std::path::PathBuf::from(out_dir),
     };
     let out_path = opts.out_dir.clone();
@@ -3752,29 +4568,41 @@ fn mirror_pingpong_frames(out_dir: &std::path::Path, final_frames: u32) -> Resul
         let src = forward_frames.saturating_sub(1 + mirror_offset);
         let src_path = out_dir.join(format!("frame_{src:06}.png"));
         let dst_path = out_dir.join(format!("frame_{dst:06}.png"));
-        std::fs::copy(&src_path, &dst_path)
-            .map_err(|e| format!("mirror {} -> {}: {e}", src_path.display(), dst_path.display()))?;
+        std::fs::copy(&src_path, &dst_path).map_err(|e| {
+            format!(
+                "mirror {} -> {}: {e}",
+                src_path.display(),
+                dst_path.display()
+            )
+        })?;
     }
     Ok(())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn encode_frame_sequence(out_dir: &std::path::Path, fps: u32) -> Result<(), String> {
-    let output = out_dir.parent()
-        .unwrap_or(out_dir)
-        .join("loop.mp4");
+    let output = out_dir.parent().unwrap_or(out_dir).join("loop.mp4");
     let input = out_dir.join("frame_%06d.png");
     let status = std::process::Command::new("ffmpeg")
         .arg("-y")
-        .arg("-loglevel").arg("error")
-        .arg("-framerate").arg(fps.to_string())
-        .arg("-i").arg(&input)
-        .arg("-c:v").arg("libx264")
-        .arg("-vf").arg("scale=trunc(iw/2)*2:trunc(ih/2)*2")
-        .arg("-pix_fmt").arg("yuv420p")
-        .arg("-crf").arg("18")
-        .arg("-preset").arg("slow")
-        .arg("-movflags").arg("+faststart")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-framerate")
+        .arg(fps.to_string())
+        .arg("-i")
+        .arg(&input)
+        .arg("-c:v")
+        .arg("libx264")
+        .arg("-vf")
+        .arg("scale=trunc(iw/2)*2:trunc(ih/2)*2")
+        .arg("-pix_fmt")
+        .arg("yuv420p")
+        .arg("-crf")
+        .arg("18")
+        .arg("-preset")
+        .arg("slow")
+        .arg("-movflags")
+        .arg("+faststart")
         .arg(&output)
         .status();
 
@@ -3785,11 +4613,17 @@ fn encode_frame_sequence(out_dir: &std::path::Path, fps: u32) -> Result<(), Stri
             Ok(())
         }
         Ok(s) => {
-            eprintln!("ffmpeg exited with status {s}; PNG frames remain at {}", out_dir.display());
+            eprintln!(
+                "ffmpeg exited with status {s}; PNG frames remain at {}",
+                out_dir.display()
+            );
             Ok(())
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            eprintln!("ffmpeg not found; PNG frames remain at {}", out_dir.display());
+            eprintln!(
+                "ffmpeg not found; PNG frames remain at {}",
+                out_dir.display()
+            );
             Ok(())
         }
         Err(e) => Err(format!("ffmpeg: {e}")),
@@ -3798,8 +4632,11 @@ fn encode_frame_sequence(out_dir: &std::path::Path, fps: u32) -> Result<(), Stri
 
 #[cfg(not(target_arch = "wasm32"))]
 fn write_loop_preview(video_path: &std::path::Path) -> Result<(), String> {
-    let dir = video_path.parent().unwrap_or_else(|| std::path::Path::new("."));
-    let file = video_path.file_name()
+    let dir = video_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let file = video_path
+        .file_name()
         .and_then(|s| s.to_str())
         .ok_or_else(|| format!("bad video path: {}", video_path.display()))?;
     let html = format!(
@@ -3816,8 +4653,7 @@ fn write_loop_preview(video_path: &std::path::Path) -> Result<(), String> {
 "#
     );
     let preview = dir.join("loop-preview.html");
-    std::fs::write(&preview, html)
-        .map_err(|e| format!("write {}: {e}", preview.display()))?;
+    std::fs::write(&preview, html).map_err(|e| format!("write {}: {e}", preview.display()))?;
     eprintln!("Loop preview page: {}", preview.display());
     Ok(())
 }
@@ -3829,20 +4665,34 @@ fn crystal_color(_c: &Crystal) -> [f32; 4] {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn field_params_to_uniform(fp: &FieldParams, t: f32, aspect: f32, crystal_color: &[f32; 4]) -> FieldUniform {
+fn field_params_to_uniform(
+    fp: &FieldParams,
+    t: f32,
+    aspect: f32,
+    crystal_color: &[f32; 4],
+) -> FieldUniform {
     FieldUniform {
         mp: renderer::pack_mp(&fp.mp),
         time: t,
-        mode: fp.mode, num_g: 0,        // num_g is populated by GpuField at upload — keep 0 here; the shader uses textureLoad with bounds-check loops
+        mode: fp.mode,
+        num_g: 0, // num_g is populated by GpuField at upload — keep 0 here; the shader uses textureLoad with bounds-check loops
         aspect,
         crystal_color: *crystal_color,
-        mouse: [0.5, 0.5], mouse_down: 0.0,
-        fb_enabled: 0, fb_mirror: 0,
-        fb_zoom: fp.fb_zoom, fb_offset_x: fp.fb_offset_x, fb_offset_y: fp.fb_offset_y,
-        fb_rotation: fp.fb_rotation, fb_decay: fp.fb_decay,
-        fb_color_shift: fp.fb_color_shift, fb_inject: fp.fb_inject,
-        fb_fold_angle: fp.fb_fold_angle, fb_saturation: fp.fb_saturation,
-        fb_brightness: fp.fb_brightness, fb_blend_mode: fp.fb_blend_mode,
+        mouse: [0.5, 0.5],
+        mouse_down: 0.0,
+        fb_enabled: 0,
+        fb_mirror: 0,
+        fb_zoom: fp.fb_zoom,
+        fb_offset_x: fp.fb_offset_x,
+        fb_offset_y: fp.fb_offset_y,
+        fb_rotation: fp.fb_rotation,
+        fb_decay: fp.fb_decay,
+        fb_color_shift: fp.fb_color_shift,
+        fb_inject: fp.fb_inject,
+        fb_fold_angle: fp.fb_fold_angle,
+        fb_saturation: fp.fb_saturation,
+        fb_brightness: fp.fb_brightness,
+        fb_blend_mode: fp.fb_blend_mode,
         fb_motion_blur: fp.fb_motion_blur,
         _pad: [0.0; 3],
     }
@@ -3870,24 +4720,41 @@ mod seq_tests {
     use super::*;
 
     fn make_seq(n: usize) -> Sequencer {
-        let steps = (0..n).map(|i| sp(
-            i as u32 % MODE_NAMES.len() as u32,
-            1.0 + i as f32 * 0.1, 0.5, i as f32 / n as f32, 0.5,
-            i as f32 / n as f32, 1.0, 1.0, 0.5, 0.5,
-        )).collect::<Vec<_>>();
+        let steps = (0..n)
+            .map(|i| {
+                sp(
+                    i as u32 % MODE_NAMES.len() as u32,
+                    1.0 + i as f32 * 0.1,
+                    0.5,
+                    i as f32 / n as f32,
+                    0.5,
+                    i as f32 / n as f32,
+                    1.0,
+                    1.0,
+                    0.5,
+                    0.5,
+                )
+            })
+            .collect::<Vec<_>>();
         let from_params = steps[0].params.clone();
         Sequencer {
-            active: true, manual: true,
-            cur: 0, step_dur: 2.0, step_timer: 2.0, // fully arrived at step 0
+            active: true,
+            manual: true,
+            cur: 0,
+            step_dur: 2.0,
+            step_timer: 2.0, // fully arrived at step 0
             curve: TranCurve::Linear,
             selected: None,
             play_mode: SeqPlayMode::Forward,
-            pp_dir: 1, rng_seed: 0x9E3779B9,
+            pp_dir: 1,
+            rng_seed: 0x9E3779B9,
             steps,
             from_params,
             // Legacy semantics for the existing invariants: wall-to-wall
             // glide, no drift lane. Dedicated tests cover morph/drift.
-            morph: 1.0, drift: 0.0, clock: 0.0,
+            morph: 1.0,
+            drift: 0.0,
+            clock: 0.0,
         }
     }
 
@@ -3935,7 +4802,10 @@ mod seq_tests {
         seq.cur = 2;
         seq.steps[1].muted = true;
         seq.manual_step(-1);
-        assert_eq!(seq.cur, 0, "going back from 2, step 1 muted, should land on 0");
+        assert_eq!(
+            seq.cur, 0,
+            "going back from 2, step 1 muted, should land on 0"
+        );
     }
 
     // tick in manual mode clamps timer, never auto-advances cur
@@ -3948,7 +4818,10 @@ mod seq_tests {
         assert!((seq.step_timer - 1.0).abs() < 1e-6);
         seq.tick(5.0); // big dt — should clamp, not overflow
         assert_eq!(seq.cur, 0);
-        assert!((seq.step_timer - 2.0).abs() < 1e-6, "should clamp at step_dur");
+        assert!(
+            (seq.step_timer - 2.0).abs() < 1e-6,
+            "should clamp at step_dur"
+        );
     }
 
     // tick in auto mode advances cur when timer expires
@@ -3983,8 +4856,10 @@ mod seq_tests {
         // After manual_step: from=steps[0], cur=1, timer=0 → lerp at t=0 = from
         seq.manual_step(1);
         let p = seq.current_params();
-        assert!((p.mp[crate::MP_KSCALE] - seq.from_params.mp[crate::MP_KSCALE]).abs() < 1e-5,
-            "at t=0 current_params should equal from_params");
+        assert!(
+            (p.mp[crate::MP_KSCALE] - seq.from_params.mp[crate::MP_KSCALE]).abs() < 1e-5,
+            "at t=0 current_params should equal from_params"
+        );
     }
 
     // Digitakt sync: when the sequencer advances to step N (manually or via tick),
@@ -3996,13 +4871,17 @@ mod seq_tests {
         // Manually step from 0 → 1 (cur=1, timer=0).
         seq.manual_step(1);
         let p_just_after = seq.current_params();
-        assert_eq!(p_just_after.mode, seq.steps[1].params.mode,
-            "after manual_step, mode must match new cur immediately (t=0)");
+        assert_eq!(
+            p_just_after.mode, seq.steps[1].params.mode,
+            "after manual_step, mode must match new cur immediately (t=0)"
+        );
         // Mid-step (t=0.4): same mode.
         seq.step_timer = seq.step_dur * 0.4;
         let p_mid = seq.current_params();
-        assert_eq!(p_mid.mode, seq.steps[1].params.mode,
-            "mid-step mode must equal cur's mode (no half-step lag)");
+        assert_eq!(
+            p_mid.mode, seq.steps[1].params.mode,
+            "mid-step mode must equal cur's mode (no half-step lag)"
+        );
     }
 
     // Same property when auto-tick crosses a step boundary.
@@ -4017,8 +4896,10 @@ mod seq_tests {
         seq.tick(seq.step_dur + 0.001);
         assert_eq!(seq.cur, 1);
         let p = seq.current_params();
-        assert_eq!(p.mode, seq.steps[1].params.mode,
-            "after auto-tick crossing boundary, mode must equal new cur's mode");
+        assert_eq!(
+            p.mode, seq.steps[1].params.mode,
+            "after auto-tick crossing boundary, mode must equal new cur's mode"
+        );
     }
 
     // current_params at step_timer=step_dur returns the destination (t=1)
@@ -4029,8 +4910,10 @@ mod seq_tests {
         seq.step_timer = seq.step_dur; // t=1
         let p = seq.current_params();
         let target = &seq.steps[seq.cur].params;
-        assert!((p.mp[crate::MP_KSCALE] - target.mp[crate::MP_KSCALE]).abs() < 1e-5,
-            "at t=1 current_params should equal target step params");
+        assert!(
+            (p.mp[crate::MP_KSCALE] - target.mp[crate::MP_KSCALE]).abs() < 1e-5,
+            "at t=1 current_params should equal target step params"
+        );
     }
 
     // add_step_after inserts at correct position and adjusts cur
@@ -4063,16 +4946,21 @@ mod seq_tests {
         let mut seq = make_seq(4);
         seq.selected = Some(1);
         seq.remove_step(1);
-        assert_eq!(seq.selected, None, "removing selected step clears selection");
+        assert_eq!(
+            seq.selected, None,
+            "removing selected step clears selection"
+        );
     }
 
     // All-muted: advance_next should not infinite-loop
     #[test]
     fn advance_next_all_muted_no_infinite_loop() {
         let mut seq = make_seq(3);
-        for s in seq.steps.iter_mut() { s.muted = true; }
+        for s in seq.steps.iter_mut() {
+            s.muted = true;
+        }
         seq.advance_next(); // should terminate
-        // cur ends up at (0+1)%3=1 (muted, but no hang)
+                            // cur ends up at (0+1)%3=1 (muted, but no hang)
         assert!(seq.cur < seq.steps.len());
     }
 
@@ -4144,8 +5032,10 @@ mod seq_tests {
         seq.step_timer = seq.step_dur * 0.5;
         let p = seq.current_params();
         // SNAP returns from until t >= 1.0
-        assert!((p.mp[crate::MP_KSCALE] - seq.from_params.mp[crate::MP_KSCALE]).abs() < 1e-5,
-            "snap override at t=0.5 should output from_params");
+        assert!(
+            (p.mp[crate::MP_KSCALE] - seq.from_params.mp[crate::MP_KSCALE]).abs() < 1e-5,
+            "snap override at t=0.5 should output from_params"
+        );
     }
 
     #[test]
@@ -4155,9 +5045,13 @@ mod seq_tests {
         seq.manual_step(1);
         seq.step_timer = seq.step_dur * 0.5;
         let p = seq.current_params();
-        let expected = (seq.from_params.mp[crate::MP_KSCALE] + seq.steps[seq.cur].params.mp[crate::MP_KSCALE]) * 0.5;
-        assert!((p.mp[crate::MP_KSCALE] - expected).abs() < 1e-5,
-            "linear at t=0.5 should be exact midpoint");
+        let expected = (seq.from_params.mp[crate::MP_KSCALE]
+            + seq.steps[seq.cur].params.mp[crate::MP_KSCALE])
+            * 0.5;
+        assert!(
+            (p.mp[crate::MP_KSCALE] - expected).abs() < 1e-5,
+            "linear at t=0.5 should be exact midpoint"
+        );
     }
 
     // ── Play modes ────────────────────────────────────────────────────────
@@ -4180,11 +5074,16 @@ mod seq_tests {
         seq.play_mode = SeqPlayMode::PingPong;
         seq.pp_dir = 1;
         seq.cur = 0;
-        seq.advance_next(); assert_eq!(seq.cur, 1);
-        seq.advance_next(); assert_eq!(seq.cur, 2);
-        seq.advance_next(); assert_eq!(seq.cur, 1, "should reverse off the end");
-        seq.advance_next(); assert_eq!(seq.cur, 0);
-        seq.advance_next(); assert_eq!(seq.cur, 1, "should reverse off the start");
+        seq.advance_next();
+        assert_eq!(seq.cur, 1);
+        seq.advance_next();
+        assert_eq!(seq.cur, 2);
+        seq.advance_next();
+        assert_eq!(seq.cur, 1, "should reverse off the end");
+        seq.advance_next();
+        assert_eq!(seq.cur, 0);
+        seq.advance_next();
+        assert_eq!(seq.cur, 1, "should reverse off the start");
     }
 
     #[test]
@@ -4218,7 +5117,10 @@ mod seq_tests {
             visited[seq.cur] = true;
         }
         let count = visited.iter().filter(|&&v| v).count();
-        assert!(count >= 6, "Random should hit at least 6/8 steps, hit {count}");
+        assert!(
+            count >= 6,
+            "Random should hit at least 6/8 steps, hit {count}"
+        );
     }
 
     // ── Probability gating ────────────────────────────────────────────────
@@ -4251,19 +5153,25 @@ mod seq_tests {
             seq.cur = 0;
             seq.play_mode = SeqPlayMode::Forward;
             seq.advance_next();
-            if seq.cur == 1 { plays += 1; }
+            if seq.cur == 1 {
+                plays += 1;
+            }
         }
         // generous bounds — just rules out 0% and 100%
-        assert!(plays > 30 && plays < 170,
-            "prob=0.5 should fire roughly half the time (got {plays}/200)");
+        assert!(
+            plays > 30 && plays < 170,
+            "prob=0.5 should fire roughly half the time (got {plays}/200)"
+        );
     }
 
     #[test]
     fn all_prob_zero_does_not_hang() {
         let mut seq = make_seq(3);
-        for s in seq.steps.iter_mut() { s.prob = 0.0; }
+        for s in seq.steps.iter_mut() {
+            s.prob = 0.0;
+        }
         seq.advance_next(); // must terminate
-        // cur may be anywhere; the contract is "no hang"
+                            // cur may be anywhere; the contract is "no hang"
         assert!(seq.cur < seq.steps.len());
     }
 
@@ -4273,8 +5181,10 @@ mod seq_tests {
         let mut seq = make_seq(1);
         seq.step_dur = 0.001;
         seq.steps[0].dur_mul = 0.001;
-        assert!(seq.effective_step_dur() >= 0.05,
-            "effective_step_dur must clamp above 0.05 to avoid /0");
+        assert!(
+            seq.effective_step_dur() >= 0.05,
+            "effective_step_dur must clamp above 0.05 to avoid /0"
+        );
     }
 
     // ── CAPTURE ───────────────────────────────────────────────────────────
@@ -4308,12 +5218,14 @@ mod seq_tests {
     fn morph_holds_destination_after_window() {
         let mut seq = make_seq(4);
         seq.morph = 0.5;
-        seq.manual_step(1);                      // cur=1, from=arrived step 0
-        seq.step_timer = seq.step_dur * 0.75;    // past the 50 % morph point
+        seq.manual_step(1); // cur=1, from=arrived step 0
+        seq.step_timer = seq.step_dur * 0.75; // past the 50 % morph point
         let got = seq.current_params();
         let want = &seq.steps[1].params;
-        assert!((got.mp[crate::MP_KSCALE] - want.mp[crate::MP_KSCALE]).abs() < 1e-4,
-            "kscale must sit exactly on the destination during the hold");
+        assert!(
+            (got.mp[crate::MP_KSCALE] - want.mp[crate::MP_KSCALE]).abs() < 1e-4,
+            "kscale must sit exactly on the destination during the hold"
+        );
         assert!((got.mp[crate::MP_W_BAND] - want.mp[crate::MP_W_BAND]).abs() < 1e-4);
     }
 
@@ -4323,7 +5235,8 @@ mod seq_tests {
         let mut b = make_seq(4);
         a.morph = 1.0;
         b.morph = 1.0;
-        a.manual_step(1); b.manual_step(1);
+        a.manual_step(1);
+        b.manual_step(1);
         a.step_timer = a.step_dur * 0.5;
         b.step_timer = b.step_dur * 0.5;
         let pa = a.current_params();
@@ -4331,9 +5244,12 @@ mod seq_tests {
         assert!((pa.mp[crate::MP_KSCALE] - pb.mp[crate::MP_KSCALE]).abs() < 1e-6);
         // And mid-glide is strictly between the endpoints.
         let from = a.from_params.mp[crate::MP_KSCALE];
-        let to   = a.steps[1].params.mp[crate::MP_KSCALE];
-        let mid  = pa.mp[crate::MP_KSCALE];
-        assert!((mid - from) * (to - mid) > 0.0, "mid-glide must sit between endpoints");
+        let to = a.steps[1].params.mp[crate::MP_KSCALE];
+        let mid = pa.mp[crate::MP_KSCALE];
+        assert!(
+            (mid - from) * (to - mid) > 0.0,
+            "mid-glide must sit between endpoints"
+        );
     }
 
     // ── Trig conditions ──────────────────────────────────────────────────
@@ -4378,12 +5294,16 @@ mod seq_tests {
             || (alive.mp[crate::MP_COLOR_SHIFT] - still.mp[crate::MP_COLOR_SHIFT]).abs() > 1e-6;
         assert!(moved, "drift at full depth must actually move the image");
         // …but stays near the base: bounded micro-motion, not chaos.
-        assert!((alive.mp[crate::MP_ZOOM] - still.mp[crate::MP_ZOOM]).abs()
-            <= still.mp[crate::MP_ZOOM] * 0.05 + 1e-4,
-            "zoom drift must stay within ~5 %");
-        assert!((alive.mp[crate::MP_KSCALE] - still.mp[crate::MP_KSCALE]).abs()
-            <= still.mp[crate::MP_KSCALE] * 0.04 + 1e-4,
-            "kscale drift must stay within ~3 %");
+        assert!(
+            (alive.mp[crate::MP_ZOOM] - still.mp[crate::MP_ZOOM]).abs()
+                <= still.mp[crate::MP_ZOOM] * 0.05 + 1e-4,
+            "zoom drift must stay within ~5 %"
+        );
+        assert!(
+            (alive.mp[crate::MP_KSCALE] - still.mp[crate::MP_KSCALE]).abs()
+                <= still.mp[crate::MP_KSCALE] * 0.04 + 1e-4,
+            "kscale drift must stay within ~3 %"
+        );
     }
 
     #[test]
@@ -4401,10 +5321,20 @@ mod seq_tests {
     // ── Curves ───────────────────────────────────────────────────────────
     #[test]
     fn curves_settle_exactly_at_endpoints() {
-        for c in [TranCurve::Linear, TranCurve::EaseInOut, TranCurve::Silk,
-                  TranCurve::Snap, TranCurve::Bounce, TranCurve::Over] {
+        for c in [
+            TranCurve::Linear,
+            TranCurve::EaseInOut,
+            TranCurve::Silk,
+            TranCurve::Snap,
+            TranCurve::Bounce,
+            TranCurve::Over,
+        ] {
             assert!((c.apply(0.0)).abs() < 1e-4, "{} must start at 0", c.label());
-            assert!((c.apply(1.0) - 1.0).abs() < 1e-4, "{} must end at 1", c.label());
+            assert!(
+                (c.apply(1.0) - 1.0).abs() < 1e-4,
+                "{} must end at 1",
+                c.label()
+            );
         }
     }
 
@@ -4413,8 +5343,10 @@ mod seq_tests {
         let peak = (0..100)
             .map(|i| TranCurve::Over.apply(i as f32 / 99.0))
             .fold(f32::MIN, f32::max);
-        assert!(peak > 1.02 && peak < 1.25,
-            "OVER must overshoot a bounded amount, got peak {peak}");
+        assert!(
+            peak > 1.02 && peak < 1.25,
+            "OVER must overshoot a bounded amount, got peak {peak}"
+        );
     }
 }
 
@@ -4423,18 +5355,29 @@ mod seq_tests {
 mod routing_tests {
     use super::*;
 
-    fn approx_eq(a: f32, b: f32, eps: f32) -> bool { (a - b).abs() < eps }
+    fn approx_eq(a: f32, b: f32, eps: f32) -> bool {
+        (a - b).abs() < eps
+    }
 
     // LfoWave::sample must stay in [-1, 1] for every wave at any phase.
     #[test]
     fn lfo_wave_sample_in_bipolar_range() {
-        for w in [LfoWave::Sine, LfoWave::Triangle, LfoWave::Saw,
-                   LfoWave::Square, LfoWave::Pulse, LfoWave::Steps] {
+        for w in [
+            LfoWave::Sine,
+            LfoWave::Triangle,
+            LfoWave::Saw,
+            LfoWave::Square,
+            LfoWave::Pulse,
+            LfoWave::Steps,
+        ] {
             for k in 0..1000 {
                 let p = (k as f32) * 0.013;
                 let s = w.sample(p);
-                assert!(s >= -1.0 - 1e-4 && s <= 1.0 + 1e-4,
-                    "{:?} out of range at phase {p}: {s}", w);
+                assert!(
+                    s >= -1.0 - 1e-4 && s <= 1.0 + 1e-4,
+                    "{:?} out of range at phase {p}: {s}",
+                    w
+                );
             }
         }
     }
@@ -4481,13 +5424,22 @@ mod routing_tests {
         // Crank everything: route all targets to LFO A, huge depth, square wave (±1).
         lfo.mp = [LfoSrc::A; MP_SLOTS];
         for src in [
-            &mut lfo.fb_zoom, &mut lfo.fb_decay, &mut lfo.fb_offset_x,
-            &mut lfo.fb_offset_y, &mut lfo.fb_rotation, &mut lfo.fb_color_shift,
-            &mut lfo.fb_saturation, &mut lfo.fb_brightness, &mut lfo.fb_inject,
-            &mut lfo.fb_fold_angle, &mut lfo.fb_motion_blur,
-        ] { *src = LfoSrc::A; }
-        lfo.a.depth = 10.0;             // wildly more than any param range
-        lfo.a.wave = LfoWave::Square;   // always ±1
+            &mut lfo.fb_zoom,
+            &mut lfo.fb_decay,
+            &mut lfo.fb_offset_x,
+            &mut lfo.fb_offset_y,
+            &mut lfo.fb_rotation,
+            &mut lfo.fb_color_shift,
+            &mut lfo.fb_saturation,
+            &mut lfo.fb_brightness,
+            &mut lfo.fb_inject,
+            &mut lfo.fb_fold_angle,
+            &mut lfo.fb_motion_blur,
+        ] {
+            *src = LfoSrc::A;
+        }
+        lfo.a.depth = 10.0; // wildly more than any param range
+        lfo.a.wave = LfoWave::Square; // always ±1
         lfo.a.phase = 0.0;
 
         // phase=0 → square at t=0 is +1
@@ -4497,7 +5449,10 @@ mod routing_tests {
         let eff_neg = apply_modulation(&fp, &lfo, &mic, &bands, t_neg);
 
         let check = |label: &str, v: f32, lo: f32, hi: f32| {
-            assert!(v >= lo - 1e-4 && v <= hi + 1e-4, "{label}={v} outside [{lo},{hi}]");
+            assert!(
+                v >= lo - 1e-4 && v <= hi + 1e-4,
+                "{label}={v} outside [{lo},{hi}]"
+            );
         };
         for eff in [&eff_pos, &eff_neg] {
             check("kscale", eff.mp[crate::MP_KSCALE], 0.1, 5.0);
@@ -4507,18 +5462,18 @@ mod routing_tests {
             check("color_shift", eff.mp[crate::MP_COLOR_SHIFT], 0.0, 1.0);
             check("zoom", eff.mp[crate::MP_ZOOM], 0.2, 5.0);
             check("w_lattice", eff.mp[crate::MP_W_LATTICE], 0.0, 2.0);
-            check("w_motif",   eff.mp[crate::MP_W_MOTIF],   0.0, 2.0);
-            check("w_band",    eff.mp[crate::MP_W_BAND],    0.0, 2.0);
-            check("fb_zoom",        eff.fb_zoom,        0.90, 1.10);
-            check("fb_decay",       eff.fb_decay,       0.30, 0.99);
-            check("fb_offset_x",    eff.fb_offset_x,   -0.10, 0.10);
-            check("fb_offset_y",    eff.fb_offset_y,   -0.10, 0.10);
-            check("fb_rotation",    eff.fb_rotation,   -0.30, 0.30);
-            check("fb_color_shift", eff.fb_color_shift,-1.00, 1.00);
-            check("fb_saturation",  eff.fb_saturation,  0.00, 2.00);
-            check("fb_brightness",  eff.fb_brightness,  0.00, 2.00);
-            check("fb_inject",      eff.fb_inject,      0.00, 1.00);
-            check("fb_fold_angle",  eff.fb_fold_angle, -3.14, 3.14);
+            check("w_motif", eff.mp[crate::MP_W_MOTIF], 0.0, 2.0);
+            check("w_band", eff.mp[crate::MP_W_BAND], 0.0, 2.0);
+            check("fb_zoom", eff.fb_zoom, 0.90, 1.10);
+            check("fb_decay", eff.fb_decay, 0.30, 0.99);
+            check("fb_offset_x", eff.fb_offset_x, -0.10, 0.10);
+            check("fb_offset_y", eff.fb_offset_y, -0.10, 0.10);
+            check("fb_rotation", eff.fb_rotation, -0.30, 0.30);
+            check("fb_color_shift", eff.fb_color_shift, -1.00, 1.00);
+            check("fb_saturation", eff.fb_saturation, 0.00, 2.00);
+            check("fb_brightness", eff.fb_brightness, 0.00, 2.00);
+            check("fb_inject", eff.fb_inject, 0.00, 1.00);
+            check("fb_fold_angle", eff.fb_fold_angle, -3.14, 3.14);
             check("fb_motion_blur", eff.fb_motion_blur, 0.00, 0.95);
         }
     }
@@ -4527,26 +5482,44 @@ mod routing_tests {
     #[test]
     fn apply_modulation_passes_through_when_off() {
         let mut fp = FieldParams::default();
-        fp.mp[crate::MP_KSCALE]      = 1.7;
-        fp.mp[crate::MP_SPEED]       = 0.42;
-        fp.mp[crate::MP_FIELD_MIX]   = 0.6;
-        fp.mp[crate::MP_ISO_LEVEL]   = 0.31;
+        fp.mp[crate::MP_KSCALE] = 1.7;
+        fp.mp[crate::MP_SPEED] = 0.42;
+        fp.mp[crate::MP_FIELD_MIX] = 0.6;
+        fp.mp[crate::MP_ISO_LEVEL] = 0.31;
         fp.mp[crate::MP_COLOR_SHIFT] = 0.77;
         let lfo = LfoParams::unrouted();
         let mic = MicParams::default();
         let bands = audio::AudioBands::default();
         let eff = apply_modulation(&fp, &lfo, &mic, &bands, 1.23);
-        assert!(approx_eq(eff.mp[crate::MP_KSCALE], fp.mp[crate::MP_KSCALE], 1e-5));
-        assert!(approx_eq(eff.mp[crate::MP_SPEED],  fp.mp[crate::MP_SPEED],  1e-5));
-        assert!(approx_eq(eff.mp[crate::MP_FIELD_MIX], fp.mp[crate::MP_FIELD_MIX], 1e-5));
-        assert!(approx_eq(eff.mp[crate::MP_COLOR_SHIFT], fp.mp[crate::MP_COLOR_SHIFT], 1e-5));
+        assert!(approx_eq(
+            eff.mp[crate::MP_KSCALE],
+            fp.mp[crate::MP_KSCALE],
+            1e-5
+        ));
+        assert!(approx_eq(
+            eff.mp[crate::MP_SPEED],
+            fp.mp[crate::MP_SPEED],
+            1e-5
+        ));
+        assert!(approx_eq(
+            eff.mp[crate::MP_FIELD_MIX],
+            fp.mp[crate::MP_FIELD_MIX],
+            1e-5
+        ));
+        assert!(approx_eq(
+            eff.mp[crate::MP_COLOR_SHIFT],
+            fp.mp[crate::MP_COLOR_SHIFT],
+            1e-5
+        ));
     }
 
     // lerp_fp must wrap color_shift via the *short* arc (hue is circular).
     #[test]
     fn lerp_fp_color_shift_takes_short_arc_forward() {
-        let mut a = FieldParams::default(); a.mp[crate::MP_COLOR_SHIFT] = 0.9;
-        let mut b = FieldParams::default(); b.mp[crate::MP_COLOR_SHIFT] = 0.1;
+        let mut a = FieldParams::default();
+        a.mp[crate::MP_COLOR_SHIFT] = 0.9;
+        let mut b = FieldParams::default();
+        b.mp[crate::MP_COLOR_SHIFT] = 0.1;
         // Short path: 0.9 → 1.0/0.0 → 0.1 (forward through hue wheel).
         // At t=0.25 the unwrapped delta is (b - a) - 1.0 = -0.8, so
         // result = 0.9 + 0.25*(-0.8 + 1.0) = 0.9 + 0.05 = 0.95... wait the implementation
@@ -4557,16 +5530,24 @@ mod routing_tests {
         // And at t=0.75: 0.9 + 0.2*0.75 = 1.05 → rem_euclid → 0.05.
         let r25 = lerp_fp(&a, &b, 0.25);
         let r75 = lerp_fp(&a, &b, 0.75);
-        assert!(approx_eq(r25.mp[crate::MP_COLOR_SHIFT], 0.95, 1e-4),
-            "forward wrap @t=0.25 should be ~0.95, got {}", r25.mp[crate::MP_COLOR_SHIFT]);
-        assert!(approx_eq(r75.mp[crate::MP_COLOR_SHIFT], 0.05, 1e-4),
-            "forward wrap @t=0.75 should be ~0.05, got {}", r75.mp[crate::MP_COLOR_SHIFT]);
+        assert!(
+            approx_eq(r25.mp[crate::MP_COLOR_SHIFT], 0.95, 1e-4),
+            "forward wrap @t=0.25 should be ~0.95, got {}",
+            r25.mp[crate::MP_COLOR_SHIFT]
+        );
+        assert!(
+            approx_eq(r75.mp[crate::MP_COLOR_SHIFT], 0.05, 1e-4),
+            "forward wrap @t=0.75 should be ~0.05, got {}",
+            r75.mp[crate::MP_COLOR_SHIFT]
+        );
     }
 
     #[test]
     fn lerp_fp_color_shift_no_wrap_for_short_delta() {
-        let mut a = FieldParams::default(); a.mp[crate::MP_COLOR_SHIFT] = 0.2;
-        let mut b = FieldParams::default(); b.mp[crate::MP_COLOR_SHIFT] = 0.4;
+        let mut a = FieldParams::default();
+        a.mp[crate::MP_COLOR_SHIFT] = 0.2;
+        let mut b = FieldParams::default();
+        b.mp[crate::MP_COLOR_SHIFT] = 0.4;
         let r = lerp_fp(&a, &b, 0.5);
         // Plain linear mid: 0.3
         assert!(approx_eq(r.mp[crate::MP_COLOR_SHIFT], 0.3, 1e-5));
@@ -4574,14 +5555,18 @@ mod routing_tests {
 
     #[test]
     fn lerp_fp_endpoints() {
-        let mut a = FieldParams::default(); a.mp[crate::MP_KSCALE] = 1.0; a.mp[crate::MP_ZOOM] = 0.5;
-        let mut b = FieldParams::default(); b.mp[crate::MP_KSCALE] = 5.0; b.mp[crate::MP_ZOOM] = 2.0;
+        let mut a = FieldParams::default();
+        a.mp[crate::MP_KSCALE] = 1.0;
+        a.mp[crate::MP_ZOOM] = 0.5;
+        let mut b = FieldParams::default();
+        b.mp[crate::MP_KSCALE] = 5.0;
+        b.mp[crate::MP_ZOOM] = 2.0;
         let r0 = lerp_fp(&a, &b, 0.0);
         let r1 = lerp_fp(&a, &b, 1.0);
         assert!(approx_eq(r0.mp[crate::MP_KSCALE], 1.0, 1e-5));
-        assert!(approx_eq(r0.mp[crate::MP_ZOOM],   0.5, 1e-5));
+        assert!(approx_eq(r0.mp[crate::MP_ZOOM], 0.5, 1e-5));
         assert!(approx_eq(r1.mp[crate::MP_KSCALE], 5.0, 1e-5));
-        assert!(approx_eq(r1.mp[crate::MP_ZOOM],   2.0, 1e-5));
+        assert!(approx_eq(r1.mp[crate::MP_ZOOM], 2.0, 1e-5));
     }
 
     #[test]
@@ -4591,34 +5576,78 @@ mod routing_tests {
         // must equal `b` from t=0, so the rendered mode matches the highlighted
         // step in the sequencer dock without a half-step lag.
         let mut a = FieldParams::default();
-        a.mode = 1; a.fb_blend_mode = 0; a.fb_mirror = 0; a.fb_enabled = false;
+        a.mode = 1;
+        a.fb_blend_mode = 0;
+        a.fb_mirror = 0;
+        a.fb_enabled = false;
         let mut b = FieldParams::default();
-        b.mode = 7; b.fb_blend_mode = 3; b.fb_mirror = 5; b.fb_enabled = true;
+        b.mode = 7;
+        b.fb_blend_mode = 3;
+        b.fb_mirror = 5;
+        b.fb_enabled = true;
         for t in [0.0_f32, 0.25, 0.5, 0.75, 1.0] {
             let r = lerp_fp(&a, &b, t);
-            assert_eq!(r.mode,          7, "mode must snap to b at t={t}");
+            assert_eq!(r.mode, 7, "mode must snap to b at t={t}");
             assert_eq!(r.fb_blend_mode, 3, "fb_blend_mode must snap to b at t={t}");
-            assert_eq!(r.fb_mirror,     5, "fb_mirror must snap to b at t={t}");
-            assert!(r.fb_enabled,          "fb_enabled must snap to b at t={t}");
+            assert_eq!(r.fb_mirror, 5, "fb_mirror must snap to b at t={t}");
+            assert!(r.fb_enabled, "fb_enabled must snap to b at t={t}");
         }
     }
 
     // fb_auto_params must override every fb_* field of base, and only those.
     #[test]
     fn fb_auto_overrides_only_fb_fields() {
-        let base = sp(5, 2.5, 0.7, 0.6, 0.4, 0.3, 1.5, 1.7, 0.9, 0.6).params.clone();
+        let base = sp(5, 2.5, 0.7, 0.6, 0.4, 0.3, 1.5, 1.7, 0.9, 0.6)
+            .params
+            .clone();
         let auto = fb_auto_params(3.7, &base);
         // Non-feedback fields preserved exactly:
         assert_eq!(auto.mode, base.mode);
-        assert!(approx_eq(auto.mp[crate::MP_KSCALE],    base.mp[crate::MP_KSCALE],    1e-5));
-        assert!(approx_eq(auto.mp[crate::MP_SPEED],     base.mp[crate::MP_SPEED],     1e-5));
-        assert!(approx_eq(auto.mp[crate::MP_FIELD_MIX], base.mp[crate::MP_FIELD_MIX], 1e-5));
-        assert!(approx_eq(auto.mp[crate::MP_ISO_LEVEL], base.mp[crate::MP_ISO_LEVEL], 1e-5));
-        assert!(approx_eq(auto.mp[crate::MP_COLOR_SHIFT], base.mp[crate::MP_COLOR_SHIFT], 1e-5));
-        assert!(approx_eq(auto.mp[crate::MP_ZOOM],      base.mp[crate::MP_ZOOM],      1e-5));
-        assert!(approx_eq(auto.mp[crate::MP_W_LATTICE], base.mp[crate::MP_W_LATTICE], 1e-5));
-        assert!(approx_eq(auto.mp[crate::MP_W_MOTIF],   base.mp[crate::MP_W_MOTIF],   1e-5));
-        assert!(approx_eq(auto.mp[crate::MP_W_BAND],    base.mp[crate::MP_W_BAND],    1e-5));
+        assert!(approx_eq(
+            auto.mp[crate::MP_KSCALE],
+            base.mp[crate::MP_KSCALE],
+            1e-5
+        ));
+        assert!(approx_eq(
+            auto.mp[crate::MP_SPEED],
+            base.mp[crate::MP_SPEED],
+            1e-5
+        ));
+        assert!(approx_eq(
+            auto.mp[crate::MP_FIELD_MIX],
+            base.mp[crate::MP_FIELD_MIX],
+            1e-5
+        ));
+        assert!(approx_eq(
+            auto.mp[crate::MP_ISO_LEVEL],
+            base.mp[crate::MP_ISO_LEVEL],
+            1e-5
+        ));
+        assert!(approx_eq(
+            auto.mp[crate::MP_COLOR_SHIFT],
+            base.mp[crate::MP_COLOR_SHIFT],
+            1e-5
+        ));
+        assert!(approx_eq(
+            auto.mp[crate::MP_ZOOM],
+            base.mp[crate::MP_ZOOM],
+            1e-5
+        ));
+        assert!(approx_eq(
+            auto.mp[crate::MP_W_LATTICE],
+            base.mp[crate::MP_W_LATTICE],
+            1e-5
+        ));
+        assert!(approx_eq(
+            auto.mp[crate::MP_W_MOTIF],
+            base.mp[crate::MP_W_MOTIF],
+            1e-5
+        ));
+        assert!(approx_eq(
+            auto.mp[crate::MP_W_BAND],
+            base.mp[crate::MP_W_BAND],
+            1e-5
+        ));
         // Feedback always enabled in auto mode:
         assert!(auto.fb_enabled, "fb_auto must force fb_enabled");
         // fb_* must stay in valid UI ranges (smoke-check a few)
@@ -4639,8 +5668,12 @@ mod routing_tests {
         let differs = a.fb_mirror != b.fb_mirror
             || !approx_eq(a.fb_zoom, b.fb_zoom, 1e-3)
             || !approx_eq(a.fb_decay, b.fb_decay, 1e-3);
-        assert!(differs, "fb_auto must evolve across scenes (a={:?}, b={:?})",
-            (a.fb_mirror, a.fb_zoom, a.fb_decay), (b.fb_mirror, b.fb_zoom, b.fb_decay));
+        assert!(
+            differs,
+            "fb_auto must evolve across scenes (a={:?}, b={:?})",
+            (a.fb_mirror, a.fb_zoom, a.fb_decay),
+            (b.fb_mirror, b.fb_zoom, b.fb_decay)
+        );
     }
 
     #[test]
@@ -4649,9 +5682,19 @@ mod routing_tests {
         for k in 0..500 {
             let t = (k as f32) * 0.13;
             let a = fb_auto_params(t, &base);
-            for v in [a.fb_zoom, a.fb_decay, a.fb_offset_x, a.fb_offset_y,
-                      a.fb_rotation, a.fb_color_shift, a.fb_saturation,
-                      a.fb_brightness, a.fb_inject, a.fb_fold_angle, a.fb_motion_blur] {
+            for v in [
+                a.fb_zoom,
+                a.fb_decay,
+                a.fb_offset_x,
+                a.fb_offset_y,
+                a.fb_rotation,
+                a.fb_color_shift,
+                a.fb_saturation,
+                a.fb_brightness,
+                a.fb_inject,
+                a.fb_fold_angle,
+                a.fb_motion_blur,
+            ] {
                 assert!(v.is_finite(), "fb_auto produced non-finite value at t={t}");
             }
         }
@@ -4661,19 +5704,32 @@ mod routing_tests {
     #[test]
     fn lfo_src_cycles_off_a_b() {
         let mut s = LfoSrc::Off;
-        s = s.next(); assert_eq!(s, LfoSrc::A);
-        s = s.next(); assert_eq!(s, LfoSrc::B);
-        s = s.next(); assert_eq!(s, LfoSrc::Off);
+        s = s.next();
+        assert_eq!(s, LfoSrc::A);
+        s = s.next();
+        assert_eq!(s, LfoSrc::B);
+        s = s.next();
+        assert_eq!(s, LfoSrc::Off);
     }
 
     // ── LfoEngine sampling ────────────────────────────────────────────────
     #[test]
     fn lfo_engine_phase_offset_shifts_sample() {
-        let e0 = LfoEngine { rate: 1.0, depth: 1.0, wave: LfoWave::Sine, phase: 0.0 };
-        let e1 = LfoEngine { rate: 1.0, depth: 1.0, wave: LfoWave::Sine, phase: 0.25 };
+        let e0 = LfoEngine {
+            rate: 1.0,
+            depth: 1.0,
+            wave: LfoWave::Sine,
+            phase: 0.0,
+        };
+        let e1 = LfoEngine {
+            rate: 1.0,
+            depth: 1.0,
+            wave: LfoWave::Sine,
+            phase: 0.25,
+        };
         // sin(2π·0) = 0; sin(2π·0.25) = 1.
-        assert!(approx_eq(e0.sample(0.0),  0.0, 1e-4));
-        assert!(approx_eq(e1.sample(0.0),  1.0, 1e-4));
+        assert!(approx_eq(e0.sample(0.0), 0.0, 1e-4));
+        assert!(approx_eq(e1.sample(0.0), 1.0, 1e-4));
     }
 
     // ── Two independent LFOs combine in apply_modulation ──────────────────
@@ -4684,17 +5740,35 @@ mod routing_tests {
         let bands = audio::AudioBands::default();
         let mut lfo = LfoParams::unrouted();
         lfo.flux = 1.0; // generous budget: this test is about routing, not the cap
-        // LFO A: square at +1 → bumps kscale upward; LFO B: square at -1 → pulls speed down.
-        lfo.a = LfoEngine { rate: 0.5, depth: 1.0, wave: LfoWave::Square, phase: 0.0 };
-        lfo.b = LfoEngine { rate: 0.5, depth: 1.0, wave: LfoWave::Square, phase: 0.5 };
+                        // LFO A: square at +1 → bumps kscale upward; LFO B: square at -1 → pulls speed down.
+        lfo.a = LfoEngine {
+            rate: 0.5,
+            depth: 1.0,
+            wave: LfoWave::Square,
+            phase: 0.0,
+        };
+        lfo.b = LfoEngine {
+            rate: 0.5,
+            depth: 1.0,
+            wave: LfoWave::Square,
+            phase: 0.5,
+        };
         lfo.mp[crate::MP_KSCALE] = LfoSrc::A;
-        lfo.mp[crate::MP_SPEED]  = LfoSrc::B;
+        lfo.mp[crate::MP_SPEED] = LfoSrc::B;
         let eff = apply_modulation(&fp, &lfo, &mic, &bands, 0.0);
         // A at t=0 → +1. B at t=0 with phase 0.5 → -1.
         // kscale base 1.4 + 1.0*range(4.9) clamped to 5.0
-        assert!(eff.mp[crate::MP_KSCALE] > 4.5, "LFO A (square +1) should pull kscale to max; got {}", eff.mp[crate::MP_KSCALE]);
+        assert!(
+            eff.mp[crate::MP_KSCALE] > 4.5,
+            "LFO A (square +1) should pull kscale to max; got {}",
+            eff.mp[crate::MP_KSCALE]
+        );
         // speed base 0.3 − range(2.0) → clamped to 0.0
-        assert!(eff.mp[crate::MP_SPEED] < 0.05, "LFO B (square -1) should pull speed to min; got {}", eff.mp[crate::MP_SPEED]);
+        assert!(
+            eff.mp[crate::MP_SPEED] < 0.05,
+            "LFO B (square -1) should pull speed to min; got {}",
+            eff.mp[crate::MP_SPEED]
+        );
     }
 
     #[test]
@@ -4704,11 +5778,15 @@ mod routing_tests {
         let mic = MicParams::default();
         let bands = audio::AudioBands::default();
         let mut lfo = LfoParams::default();
-        lfo.a.depth = 1.0; lfo.a.wave = LfoWave::Square; lfo.a.phase = 0.0;
+        lfo.a.depth = 1.0;
+        lfo.a.wave = LfoWave::Square;
+        lfo.a.phase = 0.0;
         lfo.mp[crate::MP_KSCALE] = LfoSrc::Off; // explicitly off
         let eff = apply_modulation(&fp, &lfo, &mic, &bands, 0.0);
-        assert!((eff.mp[crate::MP_KSCALE] - 2.0).abs() < 1e-5,
-            "LfoSrc::Off must not change the param");
+        assert!(
+            (eff.mp[crate::MP_KSCALE] - 2.0).abs() < 1e-5,
+            "LfoSrc::Off must not change the param"
+        );
     }
 
     // ── Flux budget ──────────────────────────────────────────────────────
@@ -4720,16 +5798,27 @@ mod routing_tests {
         let mic = MicParams::default();
         let bands = audio::AudioBands::default();
         let mut lfo = LfoParams::unrouted();
-        lfo.a = LfoEngine { rate: 0.5, depth: 1.0, wave: LfoWave::Square, phase: 0.0 };
+        lfo.a = LfoEngine {
+            rate: 0.5,
+            depth: 1.0,
+            wave: LfoWave::Square,
+            phase: 0.0,
+        };
         lfo.mp = [LfoSrc::A; MP_SLOTS]; // 16 routes × depth 1.0 = 16 units requested
-        lfo.flux = 0.5;                 // budget = 1.5 units
+        lfo.flux = 0.5; // budget = 1.5 units
         let (eff, load) = apply_modulation_ex(&fp, &lfo, &mic, &bands, 0.0);
-        assert!(load > 1.0, "16 maxed routes must overload a 0.5 flux budget, got {load}");
+        assert!(
+            load > 1.0,
+            "16 maxed routes must overload a 0.5 flux budget, got {load}"
+        );
         // kscale asked for a full-range swing (+4.9) but the budget admits
         // only 1.5/16 of it per route ≈ 0.46 — far from the 5.0 rail.
         let delta = eff.mp[crate::MP_KSCALE] - fp.mp[crate::MP_KSCALE];
         assert!(delta > 0.0, "scaled route must still move in its direction");
-        assert!(delta < 1.0, "budget must prevent the full-range jump, got +{delta}");
+        assert!(
+            delta < 1.0,
+            "budget must prevent the full-range jump, got +{delta}"
+        );
     }
 
     #[test]
@@ -4738,15 +5827,25 @@ mod routing_tests {
         let mic = MicParams::default();
         let bands = audio::AudioBands::default();
         let mut lfo = LfoParams::unrouted();
-        lfo.a = LfoEngine { rate: 0.5, depth: 0.2, wave: LfoWave::Square, phase: 0.0 };
+        lfo.a = LfoEngine {
+            rate: 0.5,
+            depth: 0.2,
+            wave: LfoWave::Square,
+            phase: 0.0,
+        };
         lfo.mp[crate::MP_KSCALE] = LfoSrc::A; // one small route: 0.2 units
-        lfo.flux = 0.5;                       // budget 1.5 — plenty
+        lfo.flux = 0.5; // budget 1.5 — plenty
         let (eff, load) = apply_modulation_ex(&fp, &lfo, &mic, &bands, 0.0);
-        assert!(load < 1.0, "a single 0.2-unit route must not saturate, got {load}");
+        assert!(
+            load < 1.0,
+            "a single 0.2-unit route must not saturate, got {load}"
+        );
         let (lo, hi) = slot_range(fp.mode, crate::MP_KSCALE);
         let want = fp.mp[crate::MP_KSCALE] + 0.2 * (hi - lo);
-        assert!((eff.mp[crate::MP_KSCALE] - want.min(hi)).abs() < 1e-4,
-            "under budget the delta must be applied unscaled");
+        assert!(
+            (eff.mp[crate::MP_KSCALE] - want.min(hi)).abs() < 1e-4,
+            "under budget the delta must be applied unscaled"
+        );
     }
 
     #[test]
@@ -4755,13 +5854,20 @@ mod routing_tests {
         let mic = MicParams::default();
         let bands = audio::AudioBands::default();
         let mut lfo = LfoParams::unrouted();
-        lfo.a = LfoEngine { rate: 0.5, depth: 1.0, wave: LfoWave::Square, phase: 0.0 };
+        lfo.a = LfoEngine {
+            rate: 0.5,
+            depth: 1.0,
+            wave: LfoWave::Square,
+            phase: 0.0,
+        };
         lfo.mp = [LfoSrc::A; MP_SLOTS];
         lfo.flux = 0.0;
         let eff = apply_modulation(&fp, &lfo, &mic, &bands, 0.0);
         for i in 0..MP_SLOTS {
-            assert!((eff.mp[i] - fp.mp[i]).abs() < 1e-5,
-                "flux 0 must freeze slot {i}");
+            assert!(
+                (eff.mp[i] - fp.mp[i]).abs() < 1e-5,
+                "flux 0 must freeze slot {i}"
+            );
         }
     }
 
@@ -4772,32 +5878,67 @@ mod routing_tests {
         assert!(p.a.depth > 0.0 && p.a.rate > 0.0);
         assert!(p.b.depth > 0.0 && p.b.rate > 0.0);
         // At least one target routed to A and one to B
-        let any_a = [p.mp[crate::MP_KSCALE], p.fb_saturation, p.mp[crate::MP_COLOR_SHIFT]].into_iter().any(|s| s == LfoSrc::A);
-        let any_b = [p.fb_zoom, p.fb_color_shift, p.fb_fold_angle].into_iter().any(|s| s == LfoSrc::B);
-        assert!(any_a && any_b,
-            "tour_lfo_preset should route some targets to A and some to B");
+        let any_a = [
+            p.mp[crate::MP_KSCALE],
+            p.fb_saturation,
+            p.mp[crate::MP_COLOR_SHIFT],
+        ]
+        .into_iter()
+        .any(|s| s == LfoSrc::A);
+        let any_b = [p.fb_zoom, p.fb_color_shift, p.fb_fold_angle]
+            .into_iter()
+            .any(|s| s == LfoSrc::B);
+        assert!(
+            any_a && any_b,
+            "tour_lfo_preset should route some targets to A and some to B"
+        );
     }
 
     #[test]
     fn tour_lfo_preset_fb_heavy_drives_feedback() {
         let p = tour_lfo_preset_fb_heavy();
         let fb_targets = [
-            p.fb_zoom, p.fb_decay, p.fb_color_shift, p.fb_saturation, p.fb_brightness,
-            p.fb_rotation, p.fb_offset_x, p.fb_offset_y, p.fb_fold_angle, p.fb_motion_blur,
+            p.fb_zoom,
+            p.fb_decay,
+            p.fb_color_shift,
+            p.fb_saturation,
+            p.fb_brightness,
+            p.fb_rotation,
+            p.fb_offset_x,
+            p.fb_offset_y,
+            p.fb_fold_angle,
+            p.fb_motion_blur,
         ];
         let active = fb_targets.iter().filter(|&&s| s != LfoSrc::Off).count();
-        assert!(active >= 6,
-            "fb_heavy preset should route at least 6 feedback params to an LFO, got {active}");
+        assert!(
+            active >= 6,
+            "fb_heavy preset should route at least 6 feedback params to an LFO, got {active}"
+        );
     }
 
     // Number of LFO targets routed in a preset (anything not Off).
     fn routed_count(p: &LfoParams) -> usize {
         let targets = [
-            p.mp[crate::MP_KSCALE], p.mp[crate::MP_SPEED], p.mp[crate::MP_FIELD_MIX], p.mp[crate::MP_ISO_LEVEL], p.mp[crate::MP_COLOR_SHIFT], p.mp[crate::MP_ZOOM],
-            p.mp[crate::MP_W_LATTICE], p.mp[crate::MP_W_MOTIF], p.mp[crate::MP_W_BAND],
-            p.fb_zoom, p.fb_decay, p.fb_offset_x, p.fb_offset_y, p.fb_rotation,
-            p.fb_color_shift, p.fb_saturation, p.fb_brightness, p.fb_inject,
-            p.fb_fold_angle, p.fb_motion_blur,
+            p.mp[crate::MP_KSCALE],
+            p.mp[crate::MP_SPEED],
+            p.mp[crate::MP_FIELD_MIX],
+            p.mp[crate::MP_ISO_LEVEL],
+            p.mp[crate::MP_COLOR_SHIFT],
+            p.mp[crate::MP_ZOOM],
+            p.mp[crate::MP_W_LATTICE],
+            p.mp[crate::MP_W_MOTIF],
+            p.mp[crate::MP_W_BAND],
+            p.fb_zoom,
+            p.fb_decay,
+            p.fb_offset_x,
+            p.fb_offset_y,
+            p.fb_rotation,
+            p.fb_color_shift,
+            p.fb_saturation,
+            p.fb_brightness,
+            p.fb_inject,
+            p.fb_fold_angle,
+            p.fb_motion_blur,
         ];
         targets.iter().filter(|&&s| s != LfoSrc::Off).count()
     }
@@ -4815,8 +5956,12 @@ mod routing_tests {
     #[test]
     fn trip_level_zero_is_silent() {
         let p = tour_lfo_preset_for_level(TripLevel::new(0));
-        assert_eq!(routed_count(&p), 0,
-            "level 0 must not route any LFO target — got {} routed", routed_count(&p));
+        assert_eq!(
+            routed_count(&p),
+            0,
+            "level 0 must not route any LFO target — got {} routed",
+            routed_count(&p)
+        );
         assert_eq!(p.a.depth, 0.0, "level 0 LFO A depth should be 0");
         assert_eq!(p.b.depth, 0.0, "level 0 LFO B depth should be 0");
         let lvl0 = TripLevel::new(0);
@@ -4828,8 +5973,10 @@ mod routing_tests {
         let p = tour_lfo_preset_for_level(TripLevel::new(9));
         let r = routed_count(&p);
         assert!(r >= 15, "level 9 should route >=15 LFO targets, got {r}");
-        assert!(p.a.depth > 0.5 && p.b.depth > 0.4,
-            "level 9 depths should be near max");
+        assert!(
+            p.a.depth > 0.5 && p.b.depth > 0.4,
+            "level 9 depths should be near max"
+        );
         let lvl9 = TripLevel::new(9);
         assert!(lvl9.fb_enabled(), "level 9 enables feedback layer");
         // Madness wave choices: steps on A, square on B.
@@ -4843,8 +5990,10 @@ mod routing_tests {
         let mut prev = 0;
         for l in 0..=9u8 {
             let r = routed_count(&tour_lfo_preset_for_level(TripLevel::new(l)));
-            assert!(r >= prev,
-                "routed-target count must be monotonic — level {l} got {r} after {prev}");
+            assert!(
+                r >= prev,
+                "routed-target count must be monotonic — level {l} got {r} after {prev}"
+            );
             prev = r;
         }
     }
@@ -4855,28 +6004,40 @@ mod routing_tests {
         for l in 0..9u8 {
             let lo = TripLevel::new(l);
             let hi = TripLevel::new(l + 1);
-            assert!(lo.scene_len() > hi.scene_len(),
+            assert!(
+                lo.scene_len() > hi.scene_len(),
                 "scene_len must shrink with level — level {l}: {} vs level {}: {}",
-                lo.scene_len(), l + 1, hi.scene_len());
-            assert!(lo.walk_dur() > hi.walk_dur(),
-                "walk_dur must shrink with level");
+                lo.scene_len(),
+                l + 1,
+                hi.scene_len()
+            );
+            assert!(
+                lo.walk_dur() > hi.walk_dur(),
+                "walk_dur must shrink with level"
+            );
         }
     }
 
     #[test]
     fn trip_level_feedback_gated_by_level() {
-        for l in 0..=2u8 { assert!(!TripLevel::new(l).fb_enabled()); }
-        for l in 3..=9u8 { assert!( TripLevel::new(l).fb_enabled()); }
+        for l in 0..=2u8 {
+            assert!(!TripLevel::new(l).fb_enabled());
+        }
+        for l in 3..=9u8 {
+            assert!(TripLevel::new(l).fb_enabled());
+        }
     }
 
     #[test]
     fn tour_field_params_level_zero_holds_mode_steady() {
         let lvl0 = TripLevel::new(0);
         // Two times far apart should yield the SAME mode at level 0 (no scene rotation).
-        let a = tour_field_params(0.5,   3, TourStyle::Curated, lvl0);
+        let a = tour_field_params(0.5, 3, TourStyle::Curated, lvl0);
         let b = tour_field_params(120.0, 3, TourStyle::Curated, lvl0);
-        assert_eq!(a.mode, b.mode,
-            "level 0 should keep a single mode per crystal across time");
+        assert_eq!(
+            a.mode, b.mode,
+            "level 0 should keep a single mode per crystal across time"
+        );
         assert!(!a.fb_enabled, "level 0 should disable the feedback layer");
     }
 
@@ -4888,7 +6049,101 @@ mod routing_tests {
             .map(|i| tour_field_params(i as f32 * 0.4, 0, TourStyle::Curated, lvl9).mode)
             .collect();
         let distinct: std::collections::HashSet<_> = modes.iter().copied().collect();
-        assert!(distinct.len() >= 3,
-            "level 9 should swap modes rapidly — got distinct={:?}", distinct);
+        assert!(
+            distinct.len() >= 3,
+            "level 9 should swap modes rapidly — got distinct={:?}",
+            distinct
+        );
+    }
+    #[test]
+    fn tour_mode_switch_keeps_previous_image_until_fade_completes() {
+        let level = TripLevel::new(6);
+        let mut tour = Tour::new();
+        let mut from = FieldParams::default();
+        from.mode = 4;
+        let mut to = FieldParams::default();
+        to.mode = 22;
+
+        assert!(tour.transition_params(from.clone(), 0.0, level).is_none());
+
+        let (previous, at_start) = tour
+            .transition_params(to.clone(), 0.0, level)
+            .expect("a changed mode must begin a transition");
+        assert_eq!(previous.mode, from.mode);
+        assert_eq!(
+            at_start, 0.0,
+            "outgoing image must be fully visible at the cut"
+        );
+
+        let duration = (level.scene_len() * 0.18).clamp(0.18, 0.75);
+        let (_, midpoint) = tour
+            .transition_params(to.clone(), duration * 0.5, level)
+            .expect("transition must remain active at its midpoint");
+        assert!(
+            midpoint > 0.0 && midpoint < 1.0,
+            "blend must progress continuously"
+        );
+
+        assert!(
+            tour.transition_params(to, duration, level).is_none(),
+            "completed fade must release the outgoing image"
+        );
+    }
+    #[test]
+    fn default_scene_transition_crossfades_every_mode_change() {
+        let color = [0.2, 0.4, 0.6, 0.0];
+        let mut from_params = FieldParams::default();
+        from_params.mode = 3;
+        let mut to_params = FieldParams::default();
+        to_params.mode = 27;
+        let from = field_params_to_uniform(&from_params, 1.0, 1.0, &color);
+        let to = field_params_to_uniform(&to_params, 2.0, 1.0, &color);
+        let mut transition = SceneTransition::new();
+
+        assert!(transition.track(from, 0.0).is_none());
+        let (outgoing, at_start) = transition
+            .track(to, 0.0)
+            .expect("mode changes must start the default crossfade");
+        assert_eq!(outgoing.mode, from.mode);
+        assert_eq!(outgoing.time, to.time, "outgoing animation stays live");
+        assert_eq!(at_start, 0.0);
+
+        let (_, midpoint) = transition
+            .track(to, DEFAULT_SCENE_FADE_DUR * 0.5)
+            .expect("crossfade must remain live at its midpoint");
+        assert!(midpoint > 0.0 && midpoint < 1.0);
+        assert!(transition.track(to, DEFAULT_SCENE_FADE_DUR).is_none());
+
+        // Randomized fields and k-point snaps retain the same mode but still
+        // request an explicit image bridge before their G-vectors change.
+        transition.begin(None);
+        assert!(
+            transition.track(to, 0.0).is_some(),
+            "explicit same-mode regeneration must crossfade"
+        );
+    }
+
+    #[test]
+    fn crossfade_styles_preserve_endpoints_and_vary_the_melt() {
+        let mids: Vec<f32> = CrossfadeStyle::ALL
+            .into_iter()
+            .map(|style| {
+                assert_eq!(
+                    style.apply(0.0),
+                    0.0,
+                    "{style:?} must retain outgoing image at start"
+                );
+                assert_eq!(
+                    style.apply(1.0),
+                    1.0,
+                    "{style:?} must fully reveal incoming image at end"
+                );
+                style.apply(0.5)
+            })
+            .collect();
+        assert!(
+            mids.windows(2).any(|pair| (pair[0] - pair[1]).abs() > 0.05),
+            "crossfade styles need visibly distinct midpoint timing: {mids:?}"
+        );
     }
 }
