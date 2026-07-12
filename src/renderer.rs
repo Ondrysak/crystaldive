@@ -7,7 +7,7 @@ use winit::window::Window;
 use winit::platform::web::WindowExtWebSys;
 
 use crate::camera::OrbitCamera;
-use crate::mesh::{cube_mesh, octahedron, uv_sphere, Vertex};
+use crate::mesh::{uv_sphere, Vertex};
 use crate::modes::FIELD_SHADER;
 use crate::poscar::{element_color, element_radius, Crystal};
 use crate::reciprocal::{GpuField, MAX_G};
@@ -137,23 +137,6 @@ impl FieldPipeline {
     }
 }
 
-// ── Shape assignment ──────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ShapeKind {
-    Sphere,
-    Octahedron,
-    Cube,
-}
-
-fn shape_for(sym: &str) -> ShapeKind {
-    let s: String = sym.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
-    match s.as_str() {
-        "F" | "Cl" | "Br" | "I" | "At"        => ShapeKind::Octahedron,
-        "O" | "S"  | "Se" | "Te"              => ShapeKind::Cube,
-        _                                      => ShapeKind::Sphere,
-    }
-}
 
 // ── Per-shape draw group ──────────────────────────────────────────────────
 
@@ -189,6 +172,34 @@ impl ShapeGroup {
         pass.draw_indexed(0..self.icnt, 0, 0..self.inst_cnt);
     }
 }
+struct BondMesh {
+    vbuf: wgpu::Buffer,
+    ibuf: wgpu::Buffer,
+    icnt: u32,
+}
+
+impl BondMesh {
+    fn new(device: &wgpu::Device, vertices: &[Vertex], indices: &[u32]) -> Self {
+        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("bond vertices"),
+            contents: bytemuck::cast_slice(vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let ibuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("bond indices"),
+            contents: bytemuck::cast_slice(indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        Self { vbuf, ibuf, icnt: indices.len() as u32 }
+    }
+
+    fn draw<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
+        pass.set_vertex_buffer(0, self.vbuf.slice(..));
+        pass.set_index_buffer(self.ibuf.slice(..), wgpu::IndexFormat::Uint32);
+        pass.draw_indexed(0..self.icnt, 0, 0..1);
+    }
+}
+
 
 // ── Post-processing (bloom) ───────────────────────────────────────────────
 
@@ -605,8 +616,10 @@ pub struct GpuState {
     atom_pl:      wgpu::RenderPipeline,
     cell_pl:      wgpu::RenderPipeline,
     depth_view:   wgpu::TextureView,
+    bond_pl:      wgpu::RenderPipeline,
 
     shapes:       Vec<ShapeGroup>,
+    bonds:        Option<BondMesh>,
     cell_vbuf:    wgpu::Buffer,
     cell_vcnt:    u32,
 
@@ -625,6 +638,11 @@ pub struct GpuState {
     // ── video-feedback self-similarity ────────────────────────────────
     feedback:        FeedbackPass,
     pub fb_clear:    bool,  // set to true to wipe accumulators next frame
+
+    #[cfg(not(target_arch = "wasm32"))]
+    capture_path:   Option<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    surface_capturable: bool,
 
     // ── egui overlay ──────────────────────────────────────────────────
     pub egui:        EguiRenderer,
@@ -656,8 +674,19 @@ impl GpuState {
 
         let caps = surface.get_capabilities(&adapter);
         let surface_fmt = caps.formats.iter().copied().find(|f| f.is_srgb()).unwrap_or(caps.formats[0]);
+        #[cfg(not(target_arch = "wasm32"))]
+        let surface_capturable = caps.usages.contains(wgpu::TextureUsages::COPY_SRC);
+        #[cfg(not(target_arch = "wasm32"))]
+        let surface_usage = wgpu::TextureUsages::RENDER_ATTACHMENT
+            | if surface_capturable {
+                wgpu::TextureUsages::COPY_SRC
+            } else {
+                wgpu::TextureUsages::empty()
+            };
+        #[cfg(target_arch = "wasm32")]
+        let surface_usage = wgpu::TextureUsages::RENDER_ATTACHMENT;
         let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: surface_usage,
             format: surface_fmt,
             width: size.width.max(1),
             height: size.height.max(1),
@@ -695,12 +724,13 @@ impl GpuState {
         // ── pipelines ─────────────────────────────────────────────────
         let atom_pl = build_atom_pl(&device, &scene_bgl, HDR_FORMAT);
         let cell_pl = build_cell_pl(&device, &scene_bgl, HDR_FORMAT);
+        let bond_pl = build_bond_pl(&device, &scene_bgl, HDR_FORMAT);
 
         // ── depth ─────────────────────────────────────────────────────
         let depth_view = make_depth(&device, &config);
 
         // ── scene geometry ────────────────────────────────────────────
-        let shapes  = build_shape_groups(&device, &crystal, 1);
+        let (shapes, bonds) = build_shape_groups(&device, &crystal, 1);
         let cell_verts = cell_lines(&crystal.lattice);
         let cell_vcnt  = cell_verts.len() as u32 / 3;
         let cell_vbuf  = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -725,11 +755,28 @@ impl GpuState {
         // ── egui ──────────────────────────────────────────────────────
         let egui = EguiRenderer::new(&device, surface_fmt, &window);
 
+        // A set delay hands the trigger to the app loop (mid-run capture).
+        #[cfg(not(target_arch = "wasm32"))]
+        let capture_path = if std::env::var("CRYSTALVIZ_SCREENSHOT_DELAY").is_ok() {
+            None
+        } else {
+            std::env::var("CRYSTALVIZ_SCREENSHOT").ok()
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let capture_path = if surface_capturable {
+            capture_path
+        } else {
+            if capture_path.is_some() {
+                log::warn!("Surface screenshots are unsupported by this GPU backend");
+            }
+            None
+        };
+
         Self {
             window, surface, device, queue, config, size,
             camera, scene_buf, scene_bg,
-            atom_pl, cell_pl, depth_view,
-            shapes, cell_vbuf, cell_vcnt,
+            atom_pl, cell_pl, bond_pl, depth_view,
+            shapes, bonds, cell_vbuf, cell_vcnt,
             post, surface_fmt,
             supercell: 1,
             crystal, crystal_sys,
@@ -737,6 +784,11 @@ impl GpuState {
             kpath: None, // set by caller after construction
             feedback,
             fb_clear: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            capture_path,
+            #[cfg(not(target_arch = "wasm32"))]
+            surface_capturable,
+
             egui,
         }
     }
@@ -751,10 +803,42 @@ impl GpuState {
     pub fn orbit(&mut self, dx: f32, dy: f32) { self.camera.orbit(dx, dy); }
     pub fn zoom(&mut self, d: f32)             { self.camera.zoom(d); }
 
+    fn frame_crystal(&mut self) {
+        let scale = self.supercell as f32;
+        let target = glam::Vec3::from(self.crystal.cell_center()) * scale;
+        let max_axis = self.crystal.lattice.iter()
+            .map(|axis| (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt())
+            .fold(0.0_f32, f32::max);
+        self.camera = OrbitCamera::new(target, max_axis * scale * 2.8);
+    }
+
+    pub fn set_crystal(&mut self, crystal: Crystal) {
+        self.crystal_sys = symmetry::detect(&crystal.lattice);
+        self.crystal = crystal;
+        (self.shapes, self.bonds) =
+            build_shape_groups(&self.device, &self.crystal, self.supercell);
+        let cell_vertices = supercell_lines(&self.crystal.lattice, self.supercell);
+        self.cell_vcnt = cell_vertices.len() as u32 / 3;
+        self.cell_vbuf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("cell vbuf"),
+            contents: bytemuck::cast_slice(&cell_vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        self.frame_crystal();
+    }
+
     pub fn set_supercell(&mut self, n: usize) {
         if n == self.supercell { return; }
         self.supercell = n;
-        self.shapes = build_shape_groups(&self.device, &self.crystal, n);
+        (self.shapes, self.bonds) = build_shape_groups(&self.device, &self.crystal, n);
+        let cell_vertices = supercell_lines(&self.crystal.lattice, n);
+        self.cell_vcnt = cell_vertices.len() as u32 / 3;
+        self.cell_vbuf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("cell vbuf"),
+            contents: bytemuck::cast_slice(&cell_vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        self.frame_crystal();
     }
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
@@ -776,6 +860,89 @@ impl GpuState {
         }
     }
 
+    /// Capture the next fully composed frame, including the egui overlay.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn request_screenshot(&mut self, path: String) {
+        if self.surface_capturable {
+            self.capture_path = Some(path);
+        } else {
+            log::warn!("Surface screenshots are unsupported by this GPU backend");
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn encode_surface_capture(
+        &mut self,
+        enc: &mut wgpu::CommandEncoder,
+        texture: &wgpu::Texture,
+    ) -> Option<(String, wgpu::Buffer, u32)> {
+        let path = self.capture_path.take()?;
+        let w = self.size.width.max(1);
+        let h = self.size.height.max(1);
+        let aligned_bytes_per_row = ((w * 4) + 255) & !255;
+        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("composed screenshot readback"),
+            size: (aligned_bytes_per_row * h) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        enc.copy_texture_to_buffer(
+            wgpu::ImageCopyTexture {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::ImageCopyBuffer {
+                buffer: &readback,
+                layout: wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: Some(aligned_bytes_per_row),
+                    rows_per_image: Some(h),
+                },
+            },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        Some((path, readback, aligned_bytes_per_row))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn save_surface_capture(&self, capture: Option<(String, wgpu::Buffer, u32)>) {
+        let Some((path, readback, aligned_bytes_per_row)) = capture else { return; };
+        let w = self.size.width.max(1);
+        let h = self.size.height.max(1);
+        let slice = readback.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        self.device.poll(wgpu::Maintain::Wait);
+        let raw = slice.get_mapped_range();
+        let mut pixels = Vec::with_capacity((w * h * 4) as usize);
+        let bgra = matches!(
+            self.surface_fmt,
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+        );
+        for row in 0..h as usize {
+            let start = row * aligned_bytes_per_row as usize;
+            let row_bytes = &raw[start..start + (w * 4) as usize];
+            if bgra {
+                for pixel in row_bytes.chunks_exact(4) {
+                    pixels.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
+                }
+            } else {
+                pixels.extend_from_slice(row_bytes);
+            }
+        }
+        drop(raw);
+        readback.unmap();
+        let Some(image) = image::RgbaImage::from_raw(w, h, pixels) else {
+            log::error!("Screenshot buffer size mismatch");
+            return;
+        };
+        match image.save(&path) {
+            Ok(()) => log::info!("Saved screenshot → {path}"),
+            Err(error) => log::error!("Screenshot save failed: {error}"),
+        }
+    }
+
     pub fn render(&mut self, time: f32, ui_fn: impl FnMut(&egui::Context)) -> Result<(), wgpu::SurfaceError> {
         self.sync_window_size();
         // Update scene uniform
@@ -794,7 +961,7 @@ impl GpuState {
                     view: &self.post.scene_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.04, g: 0.02, b: 0.10, a: 1.0 }),
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -811,7 +978,13 @@ impl GpuState {
             pass.set_bind_group(0, &self.scene_bg, &[]);
             pass.set_vertex_buffer(0, self.cell_vbuf.slice(..));
             pass.draw(0..self.cell_vcnt, 0..1);
-            // Atoms
+            // Nearest-neighbour bonds.
+            if let Some(bonds) = &self.bonds {
+                pass.set_pipeline(&self.bond_pl);
+                pass.set_bind_group(0, &self.scene_bg, &[]);
+                bonds.draw(&mut pass);
+            }
+            // Atoms are drawn last so sphere surfaces cleanly cap the bonds.
             pass.set_pipeline(&self.atom_pl);
             pass.set_bind_group(0, &self.scene_bg, &[]);
             for sg in &self.shapes { sg.draw(&mut pass); }
@@ -836,103 +1009,17 @@ impl GpuState {
         let window = Arc::clone(&self.window);
         self.egui.render(&self.device, &self.queue, &mut enc, &screen_view, &window, ppp, ui_fn);
 
+        #[cfg(not(target_arch = "wasm32"))]
+        let capture = self.encode_surface_capture(&mut enc, &output.texture);
         self.queue.submit(std::iter::once(enc.finish()));
+        #[cfg(not(target_arch = "wasm32"))]
+        self.save_surface_capture(capture);
         output.present();
         Ok(())
     }
 
     pub fn crystal_system(&self) -> CrystalSystem { self.crystal_sys }
 
-    /// Render the field to an offscreen Rgba8 texture and return the PNG bytes.
-    /// Call this instead of render_field when a screenshot is needed.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn screenshot_field(&mut self, params: &FieldUniform) -> Vec<u8> {
-        let w = self.size.width.max(1);
-        let h = self.size.height.max(1);
-        let aligned_bytes_per_row = ((w * 4) + 255) & !255; // align to 256
-
-        // Offscreen render target
-        let capture_tex = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("screenshot"),
-            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-            mip_level_count: 1, sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let capture_view = capture_tex.create_view(&Default::default());
-
-        // Readback buffer
-        let buf_size = (aligned_bytes_per_row * h) as u64;
-        let readback_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("readback"),
-            size: buf_size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-
-        // Need a sRGB-compatible field pipeline — the existing one might be surface_fmt.
-        // Use the existing pipeline; it writes to whatever target we give it.
-        self.queue.write_buffer(&self.field_pl.uniform_buf, 0, bytemuck::bytes_of(params));
-        let mut enc = self.device.create_command_encoder(&Default::default());
-        {
-            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("screenshot field"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &capture_view, resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                occlusion_query_set: None, timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.field_pl.field_pl);
-            pass.set_bind_group(0, &self.field_pl.uniform_bg, &[]);
-            pass.draw(0..3, 0..1);
-        }
-        enc.copy_texture_to_buffer(
-            wgpu::ImageCopyTexture {
-                texture: &capture_tex, mip_level: 0,
-                origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::ImageCopyBuffer {
-                buffer: &readback_buf,
-                layout: wgpu::ImageDataLayout {
-                    offset: 0,
-                    bytes_per_row: Some(aligned_bytes_per_row),
-                    rows_per_image: Some(h),
-                },
-            },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-        );
-        self.queue.submit([enc.finish()]);
-
-        // Synchronous readback
-        let slice = readback_buf.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |_| {});
-        self.device.poll(wgpu::Maintain::Wait);
-        let raw = slice.get_mapped_range();
-        // De-stripe: remove row padding
-        let mut pixels = Vec::with_capacity((w * h * 4) as usize);
-        for row in 0..h as usize {
-            let start = row * aligned_bytes_per_row as usize;
-            pixels.extend_from_slice(&raw[start..start + (w * 4) as usize]);
-        }
-        drop(raw);
-        readback_buf.unmap();
-
-        // Encode as PNG via DynamicImage
-        let img = image::RgbaImage::from_raw(w, h, pixels)
-            .expect("screenshot buffer size mismatch");
-        let mut png_bytes = Vec::new();
-        image::DynamicImage::ImageRgba8(img)
-            .write_to(&mut std::io::Cursor::new(&mut png_bytes), image::ImageFormat::Png)
-            .unwrap_or_default();
-        png_bytes
-    }
 
     /// Re-upload current phase state to the G-texture.
     pub fn update_field(&self) {
@@ -1017,7 +1104,11 @@ impl GpuState {
         let window = Arc::clone(&self.window);
         self.egui.render(&self.device, &self.queue, &mut enc, &view, &window, ppp, ui_fn);
 
+        #[cfg(not(target_arch = "wasm32"))]
+        let capture = self.encode_surface_capture(&mut enc, &output.texture);
         self.queue.submit([enc.finish()]);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.save_surface_capture(capture);
         output.present();
         Ok(())
     }
@@ -1025,56 +1116,185 @@ impl GpuState {
 
 // ── Scene geometry helpers ────────────────────────────────────────────────
 
-fn build_shape_groups(device: &wgpu::Device, crystal: &Crystal, supercell: usize) -> Vec<ShapeGroup> {
+fn build_shape_groups(
+    device: &wgpu::Device,
+    crystal: &Crystal,
+    supercell: usize,
+) -> (Vec<ShapeGroup>, Option<BondMesh>) {
     let n = supercell as i32;
     let lat = &crystal.lattice;
+    let mut instances = Vec::<AtomInstance>::new();
 
-    // Collect instances per shape kind
-    let mut sphere_inst = Vec::<AtomInstance>::new();
-    let mut octa_inst   = Vec::<AtomInstance>::new();
-    let mut cube_inst   = Vec::<AtomInstance>::new();
+    let mut add_atom = |atom: &crate::poscar::Atom, offset: [f32; 3], alpha: f32| {
+        let color = element_color(&atom.species);
+        instances.push(AtomInstance {
+            center_radius: [
+                atom.pos_cart[0] + offset[0],
+                atom.pos_cart[1] + offset[1],
+                atom.pos_cart[2] + offset[2],
+                element_radius(&atom.species) * 0.82,
+            ],
+            color: [color[0], color[1], color[2], alpha],
+        });
+    };
 
+    // Canonical atoms for every requested cell.
     for na in 0..n {
         for nb in 0..n {
             for nc in 0..n {
-                let off = [
-                    na as f32 * lat[0][0] + nb as f32 * lat[1][0] + nc as f32 * lat[2][0],
-                    na as f32 * lat[0][1] + nb as f32 * lat[1][1] + nc as f32 * lat[2][1],
-                    na as f32 * lat[0][2] + nb as f32 * lat[1][2] + nc as f32 * lat[2][2],
-                ];
-                let alpha = if na == 0 && nb == 0 && nc == 0 { 1.0f32 } else { 0.30 };
-
+                let offset = lattice_offset(lat, na, nb, nc);
                 for atom in &crystal.atoms {
-                    let col = element_color(&atom.species);
-                    let rad = element_radius(&atom.species);
-                    let inst = AtomInstance {
-                        center_radius: [
-                            atom.pos_cart[0] + off[0],
-                            atom.pos_cart[1] + off[1],
-                            atom.pos_cart[2] + off[2],
-                            rad,
-                        ],
-                        color: [col[0], col[1], col[2], alpha],
-                    };
-                    match shape_for(&atom.species) {
-                        ShapeKind::Sphere     => sphere_inst.push(inst),
-                        ShapeKind::Octahedron => octa_inst.push(inst),
-                        ShapeKind::Cube       => cube_inst.push(inst),
-                    }
+                    add_atom(atom, offset, 1.0);
                 }
             }
         }
     }
 
-    let (sv, si) = uv_sphere(18, 18);
-    let (ov, oi) = octahedron();
-    let (cv, ci) = cube_mesh();
+    // POSCAR convention stores boundary atoms only once. Mirror atoms that sit
+    // on a zero face onto the opposite outer face so the displayed unit cell
+    // reads as a complete periodic structure (e.g. all eight BCC corners).
+    let basis = glam::Mat3::from_cols(
+        glam::Vec3::from_array(lat[0]),
+        glam::Vec3::from_array(lat[1]),
+        glam::Vec3::from_array(lat[2]),
+    );
+    let inv_basis = basis.inverse();
+    for atom in &crystal.atoms {
+        let frac = inv_basis * glam::Vec3::from_array(atom.pos_cart);
+        let sx: &[i32] = if frac.x.abs() < 1.0e-4 { &[0, n] } else { &[0] };
+        let sy: &[i32] = if frac.y.abs() < 1.0e-4 { &[0, n] } else { &[0] };
+        let sz: &[i32] = if frac.z.abs() < 1.0e-4 { &[0, n] } else { &[0] };
+        for &na in sx {
+            for &nb in sy {
+                for &nc in sz {
+                    if na == 0 && nb == 0 && nc == 0 {
+                        continue;
+                    }
+                    add_atom(atom, lattice_offset(lat, na, nb, nc), 1.0);
+                }
+            }
+        }
+    }
 
-    vec![
-        ShapeGroup::new(device, &sv, &si, &sphere_inst),
-        ShapeGroup::new(device, &ov, &oi, &octa_inst),
-        ShapeGroup::new(device, &cv, &ci, &cube_inst),
+    let bonds = build_bond_mesh(device, &instances);
+    let (vertices, indices) = uv_sphere(24, 32);
+    (
+        vec![ShapeGroup::new(device, &vertices, &indices, &instances)],
+        bonds,
+    )
+}
+
+fn build_bond_mesh(device: &wgpu::Device, atoms: &[AtomInstance]) -> Option<BondMesh> {
+    if atoms.len() < 2 {
+        return None;
+    }
+
+    let positions: Vec<glam::Vec3> = atoms.iter()
+        .map(|atom| glam::Vec3::from_array([
+            atom.center_radius[0],
+            atom.center_radius[1],
+            atom.center_radius[2],
+        ]))
+        .collect();
+    let mut min_distance_sq = f32::INFINITY;
+    for i in 0..positions.len() {
+        for j in i + 1..positions.len() {
+            let distance_sq = positions[i].distance_squared(positions[j]);
+            if distance_sq > 1.0e-6 {
+                min_distance_sq = min_distance_sq.min(distance_sq);
+            }
+        }
+    }
+    if !min_distance_sq.is_finite() {
+        return None;
+    }
+
+    // Nearest-neighbour graph: enough to reveal coordination without turning
+    // dense structures into an indiscriminate web.
+    let cutoff_sq = min_distance_sq * 1.16;
+    let radius = (min_distance_sq.sqrt() * 0.018).clamp(0.018, 0.045);
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    let mut bond_count = 0usize;
+    for i in 0..positions.len() {
+        for j in i + 1..positions.len() {
+            let distance_sq = positions[i].distance_squared(positions[j]);
+            if distance_sq <= cutoff_sq && distance_sq > 1.0e-6 {
+                append_bond_cylinder(
+                    &mut vertices,
+                    &mut indices,
+                    positions[i],
+                    positions[j],
+                    radius,
+                );
+                bond_count += 1;
+                if bond_count == 4096 {
+                    break;
+                }
+            }
+        }
+        if bond_count == 4096 {
+            break;
+        }
+    }
+    if indices.is_empty() {
+        None
+    } else {
+        Some(BondMesh::new(device, &vertices, &indices))
+    }
+}
+
+fn append_bond_cylinder(
+    vertices: &mut Vec<Vertex>,
+    indices: &mut Vec<u32>,
+    start: glam::Vec3,
+    end: glam::Vec3,
+    radius: f32,
+) {
+    const SIDES: u32 = 8;
+    let axis = (end - start).normalize();
+    let helper = if axis.y.abs() < 0.9 { glam::Vec3::Y } else { glam::Vec3::X };
+    let tangent = axis.cross(helper).normalize();
+    let bitangent = axis.cross(tangent);
+    let base = vertices.len() as u32;
+    for side in 0..SIDES {
+        let angle = std::f32::consts::TAU * side as f32 / SIDES as f32;
+        let normal = tangent * angle.cos() + bitangent * angle.sin();
+        vertices.push(Vertex {
+            position: (start + normal * radius).to_array(),
+            normal: normal.to_array(),
+        });
+        vertices.push(Vertex {
+            position: (end + normal * radius).to_array(),
+            normal: normal.to_array(),
+        });
+    }
+    for side in 0..SIDES {
+        let next = (side + 1) % SIDES;
+        let a = base + side * 2;
+        let b = a + 1;
+        let c = base + next * 2;
+        let d = c + 1;
+        indices.extend_from_slice(&[a, c, b, b, c, d]);
+    }
+}
+
+fn lattice_offset(lat: &[[f32; 3]; 3], na: i32, nb: i32, nc: i32) -> [f32; 3] {
+    [
+        na as f32 * lat[0][0] + nb as f32 * lat[1][0] + nc as f32 * lat[2][0],
+        na as f32 * lat[0][1] + nb as f32 * lat[1][1] + nc as f32 * lat[2][1],
+        na as f32 * lat[0][2] + nb as f32 * lat[1][2] + nc as f32 * lat[2][2],
     ]
+}
+
+fn supercell_lines(lat: &[[f32; 3]; 3], supercell: usize) -> Vec<f32> {
+    let scale = supercell as f32;
+    let scaled = [
+        [lat[0][0] * scale, lat[0][1] * scale, lat[0][2] * scale],
+        [lat[1][0] * scale, lat[1][1] * scale, lat[1][2] * scale],
+        [lat[2][0] * scale, lat[2][1] * scale, lat[2][2] * scale],
+    ];
+    cell_lines(&scaled)
 }
 
 fn cell_lines(lat: &[[f32; 3]; 3]) -> Vec<f32> {
@@ -1303,6 +1523,58 @@ fn build_atom_pl(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout, fmt: wgpu::
     })
 }
 
+fn build_bond_pl(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout, fmt: wgpu::TextureFormat) -> wgpu::RenderPipeline {
+    let sm = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("bond"), source: wgpu::ShaderSource::Wgsl(BOND_SHADER.into()),
+    });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None, bind_group_layouts: &[bgl], push_constant_ranges: &[],
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("bond pl"), layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &sm,
+            entry_point: "vs_bond",
+            buffers: &[wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<Vertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &[
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x3,
+                        offset: 0,
+                        shader_location: 0,
+                    },
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x3,
+                        offset: 12,
+                        shader_location: 1,
+                    },
+                ],
+            }],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &sm,
+            entry_point: "fs_bond",
+            targets: &[Some(wgpu::ColorTargetState {
+                format: fmt,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            cull_mode: Some(wgpu::Face::Back),
+            ..Default::default()
+        },
+        depth_stencil: Some(ds_state()),
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+        cache: None,
+    })
+}
+
 fn build_cell_pl(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout, fmt: wgpu::TextureFormat) -> wgpu::RenderPipeline {
     let sm = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("cell"), source: wgpu::ShaderSource::Wgsl(CELL_SHADER.into()),
@@ -1444,31 +1716,58 @@ struct VOut {
 }
 
 @fragment fn fs_atom(f: VOut) -> @location(0) vec4<f32> {
-    let light   = normalize(vec3<f32>(2.0, 3.5, 1.5));
-    let n       = normalize(f.normal);
-    let view    = normalize(sc.eye_pos - f.world_pos);
+    let n = normalize(f.normal);
+    let view = normalize(sc.eye_pos - f.world_pos);
+    let key = normalize(vec3<f32>(0.7, 1.0, 0.55));
+    let fill = normalize(vec3<f32>(-0.8, 0.25, 0.45));
 
-    let diff    = max(dot(n, light), 0.0);
-    let h       = normalize(light + view);
-    let spec    = pow(max(dot(n, h), 0.0), 48.0);
+    let key_diff = max(dot(n, key), 0.0);
+    let fill_diff = max(dot(n, fill), 0.0);
+    let diffuse = key_diff * 0.90 + fill_diff * 0.06;
 
-    // Fresnel rim glow — colour of the crystal-system accent
-    let rim     = 1.0 - max(dot(n, view), 0.0);
-    let fresnel = pow(rim, 2.5);
-    let glow    = sc.accent_col * fresnel * 1.4;
+    let half_dir = normalize(key + view);
+    let specular = pow(max(dot(n, half_dir), 0.0), 48.0) * 0.34;
+    let rim = pow(1.0 - max(dot(n, view), 0.0), 3.0);
 
-    // Subtle per-atom breathing pulse
-    let phase  = dot(f.world_pos, vec3<f32>(0.3, 0.5, 0.2));
-    let pulse  = sin(sc.time * 1.8 + phase) * 0.5 + 0.5;
-
-    let ambient = 0.12;
-    let lit     = f.color * (ambient + diff * 0.70) + vec3(1.0) * spec * 0.4;
-    let emissive = (f.color * 0.15 + glow) * (0.7 + pulse * 0.3);
-
-    return vec4<f32>(lit + emissive, f.alpha);
+    let atom_color = mix(f.color, f.color * f.color, 0.45);
+    let base = atom_color * (0.045 + diffuse * 0.88);
+    let highlight = vec3<f32>(1.0, 0.96, 0.90) * specular;
+    let edge = mix(atom_color, sc.accent_col, 0.22) * rim * 0.10;
+    return vec4<f32>(base + highlight + edge, f.alpha);
 }
 "#;
 
+const BOND_SHADER: &str = r#"
+struct Scene {
+    view_proj:  mat4x4<f32>,
+    eye_pos:    vec3<f32>,
+    time:       f32,
+    accent_col: vec3<f32>,
+}
+@group(0) @binding(0) var<uniform> sc: Scene;
+
+struct VOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) normal: vec3<f32>,
+}
+
+@vertex fn vs_bond(
+    @location(0) position: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+) -> VOut {
+    var o: VOut;
+    o.clip = sc.view_proj * vec4<f32>(position, 1.0);
+    o.normal = normal;
+    return o;
+}
+
+@fragment fn fs_bond(f: VOut) -> @location(0) vec4<f32> {
+    let light = normalize(vec3<f32>(0.7, 1.0, 0.55));
+    let diffuse = abs(dot(normalize(f.normal), light));
+    let base = mix(vec3<f32>(0.07, 0.09, 0.12), sc.accent_col * 0.35, 0.10);
+    return vec4<f32>(base * (0.30 + diffuse * 0.50), 1.0);
+}
+"#;
 const CELL_SHADER: &str = r#"
 struct Scene {
     view_proj:  mat4x4<f32>,
@@ -1487,10 +1786,9 @@ struct VOut { @builtin(position) clip: vec4<f32> }
 }
 
 @fragment fn fs_cell(f: VOut) -> @location(0) vec4<f32> {
-    // Smoothly hue-shift between accent colour and its complement over time
-    let t   = sin(sc.time * 0.4) * 0.5 + 0.5;
-    let col = mix(sc.accent_col, vec3<f32>(1.0) - sc.accent_col * 0.6, t);
-    return vec4<f32>(col * 1.5, 0.90);  // over-bright so bloom picks it up
+    // The cell is a reference scaffold, not an emissive foreground object.
+    let col = mix(sc.accent_col, vec3<f32>(0.72, 0.78, 0.86), 0.45);
+    return vec4<f32>(col * 0.58, 0.62);
 }
 "#;
 

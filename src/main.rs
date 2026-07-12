@@ -236,19 +236,51 @@ pub struct LfoParams {
     pub fb_inject:      LfoSrc,
     pub fb_fold_angle:  LfoSrc,
     pub fb_motion_blur: LfoSrc,
+    /// Total modulation budget (0..1): caps the summed, range-normalized
+    /// LFO + mic swing across every routed target. When routes ask for more
+    /// than the budget allows, all of them are scaled down proportionally —
+    /// "everything moves, nothing explodes".
+    #[serde(default = "flux_default")]
+    pub flux:           f32,
 }
+
+fn flux_default() -> f32 { 0.5 }
 
 impl Default for LfoParams {
     fn default() -> Self {
+        // Routed out of the box: gentle hue/zoom breathing on A, texture sway
+        // on B. Depths are small — the point is "alive at first launch", the
+        // flux budget keeps any later knob-twisting bounded.
+        let mut mp = lfo_mp_default();
+        mp[MP_COLOR_SHIFT] = LfoSrc::A;
+        mp[MP_ZOOM]        = LfoSrc::A;
+        mp[MP_W_MOTIF]     = LfoSrc::B;
         Self {
-            a: LfoEngine { rate: 0.20, depth: 0.30, wave: LfoWave::Sine,     phase: 0.0  },
-            b: LfoEngine { rate: 0.07, depth: 0.20, wave: LfoWave::Triangle, phase: 0.25 },
+            a: LfoEngine { rate: 0.11, depth: 0.10, wave: LfoWave::Sine,     phase: 0.0  },
+            b: LfoEngine { rate: 0.045, depth: 0.14, wave: LfoWave::Triangle, phase: 0.25 },
+            mp,
+            fb_zoom: LfoSrc::Off, fb_decay: LfoSrc::Off, fb_offset_x: LfoSrc::Off,
+            fb_offset_y: LfoSrc::Off, fb_rotation: LfoSrc::B,
+            fb_color_shift: LfoSrc::Off, fb_saturation: LfoSrc::Off,
+            fb_brightness: LfoSrc::Off, fb_inject: LfoSrc::Off,
+            fb_fold_angle: LfoSrc::Off, fb_motion_blur: LfoSrc::Off,
+            flux: flux_default(),
+        }
+    }
+}
+
+impl LfoParams {
+    /// Engines configured but every route off — the base for generators that
+    /// build routing incrementally (trip levels) and for routing-free tests.
+    pub fn unrouted() -> Self {
+        Self {
             mp: lfo_mp_default(),
             fb_zoom: LfoSrc::Off, fb_decay: LfoSrc::Off, fb_offset_x: LfoSrc::Off,
             fb_offset_y: LfoSrc::Off, fb_rotation: LfoSrc::Off,
             fb_color_shift: LfoSrc::Off, fb_saturation: LfoSrc::Off,
             fb_brightness: LfoSrc::Off, fb_inject: LfoSrc::Off,
             fb_fold_angle: LfoSrc::Off, fb_motion_blur: LfoSrc::Off,
+            ..Self::default()
         }
     }
 }
@@ -405,18 +437,31 @@ impl TripLevel {
 // ── Sequencer ────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
-pub enum TranCurve { Linear, EaseInOut, Snap, Bounce }
+pub enum TranCurve { Linear, EaseInOut, Silk, Snap, Bounce, Over }
 
 impl TranCurve {
     fn apply(self, t: f32) -> f32 {
         match self {
             Self::Linear    => t,
             Self::EaseInOut => t * t * (3.0 - 2.0 * t),
+            Self::Silk      => {
+                // Double smoothstep: long soft ends, brisk middle — buttery.
+                let s = t * t * (3.0 - 2.0 * t);
+                s * s * (3.0 - 2.0 * s)
+            }
             Self::Snap      => if t >= 1.0 { 1.0 } else { 0.0 },
             Self::Bounce    => {
                 // quartic ease-in-out: quick rush then slow settle
                 if t < 0.5 { 8.0 * t * t * t * t }
                 else { let u = t - 1.0; 1.0 - 8.0 * u * u * u * u }
+            }
+            Self::Over      => {
+                // Ease-out-back: overshoot ~10 % past target, then settle.
+                // Downstream range clamps keep the excursion safe.
+                const C1: f32 = 1.70158;
+                const C3: f32 = C1 + 1.0;
+                let u = t - 1.0;
+                1.0 + C3 * u * u * u + C1 * u * u
             }
         }
     }
@@ -424,18 +469,44 @@ impl TranCurve {
         match self {
             Self::Linear    => "LINEAR",
             Self::EaseInOut => "EASE",
+            Self::Silk      => "SILK",
             Self::Snap      => "SNAP",
             Self::Bounce    => "BOUNCE",
+            Self::Over      => "OVER",
         }
     }
     fn next(self) -> Self {
         match self {
             Self::Linear    => Self::EaseInOut,
-            Self::EaseInOut => Self::Snap,
+            Self::EaseInOut => Self::Silk,
+            Self::Silk      => Self::Snap,
             Self::Snap      => Self::Bounce,
-            Self::Bounce    => Self::Linear,
+            Self::Bounce    => Self::Over,
+            Self::Over      => Self::Linear,
         }
     }
+}
+
+/// Elektron-style cycle condition: step plays on pass `k` of every `n` visits.
+/// `(1,1)` = always. Ratios cycle through `TRIG_CONDS` in the UI.
+pub const TRIG_CONDS: [(u8, u8); 7] =
+    [(1, 1), (1, 2), (2, 2), (1, 3), (1, 4), (4, 4), (1, 8)];
+
+fn cond_default() -> (u8, u8) { (1, 1) }
+
+pub fn cond_label(cond: (u8, u8)) -> String {
+    if cond == (1, 1) { "--".to_string() } else { format!("{}:{}", cond.0, cond.1) }
+}
+
+pub fn cond_passes(cond: (u8, u8), visits: u32) -> bool {
+    let (k, n) = cond;
+    if n <= 1 { return true; }
+    visits.wrapping_sub(1) % n as u32 == (k.max(1) - 1) as u32
+}
+
+fn cond_next(cond: (u8, u8)) -> (u8, u8) {
+    let i = TRIG_CONDS.iter().position(|&c| c == cond).unwrap_or(0);
+    TRIG_CONDS[(i + 1) % TRIG_CONDS.len()]
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -448,11 +519,21 @@ pub struct SeqStep {
     pub curve_override: Option<TranCurve>,
     /// Probability the step plays when advance lands on it (0..1, 1.0 = always).
     pub prob:           f32,
+    /// Elektron cycle condition `(k, n)`: play on visit k of every n.
+    #[serde(default = "cond_default")]
+    pub cond:           (u8, u8),
+    /// Runtime visit counter for `cond` (not persisted).
+    #[serde(skip)]
+    pub visits:         u32,
 }
 
 impl SeqStep {
     pub fn new(p: FieldParams) -> Self {
-        Self { params: p, muted: false, dur_mul: 1.0, curve_override: None, prob: 1.0 }
+        Self {
+            params: p, muted: false, dur_mul: 1.0,
+            curve_override: None, prob: 1.0,
+            cond: cond_default(), visits: 0,
+        }
     }
 }
 
@@ -522,6 +603,29 @@ fn lerp_fp(a: &FieldParams, b: &FieldParams, t: f32) -> FieldParams {
     }
 }
 
+/// The always-alive micro-motion lane. Slot-aware, deliberately tiny, and
+/// phase-scattered across incommensurate rates so it never settles or repeats.
+/// Every excursion is bounded by construction (≤ a few % of a knob's span at
+/// amt = 1) and the result still passes through `apply_modulation`'s range
+/// clamps downstream — controlled motion, not chaos.
+fn apply_drift(fp: &mut FieldParams, clock: f32, amt: f32, step_idx: usize) {
+    if amt <= 0.001 { return; }
+    let ph = step_idx as f32 * 0.618;
+    let osc = |rate: f32, phase: f32| (TAU * (rate * clock) + phase).sin();
+    // Hue crawl: slow monotonic rotation — the surest "something is happening".
+    fp.mp[MP_COLOR_SHIFT] = (fp.mp[MP_COLOR_SHIFT] + amt * 0.010 * clock).rem_euclid(1.0);
+    // Breathing: proportional wobble keeps scale relationships intact.
+    fp.mp[MP_ZOOM]   *= 1.0 + amt * 0.045 * osc(0.050, ph);
+    fp.mp[MP_KSCALE] *= 1.0 + amt * 0.030 * osc(0.017, ph * 2.0);
+    fp.mp[MP_SPEED]  *= 1.0 + amt * 0.100 * osc(0.023, 1.7);
+    fp.mp[MP_W_MOTIF] += amt * 0.120 * osc(0.031, ph);
+    fp.mp[MP_W_BAND]  += amt * 0.100 * osc(0.041, ph + 2.1);
+    if fp.fb_enabled {
+        fp.fb_rotation += amt * 0.030 * osc(0.019, 0.0);
+        fp.fb_zoom     += amt * 0.006 * osc(0.043, ph);
+    }
+}
+
 // Compact builder used by presets. The 9 positional args map to the canonical
 // generator slots (0..8); free slots (9..15) stay at their defaults.
 fn sp(mode: u32, ks: f32, sp: f32, fm: f32, il: f32, cs: f32, zm: f32, wl: f32, wm: f32, wb: f32) -> SeqStep {
@@ -587,7 +691,51 @@ fn seq_preset_chromatic() -> Vec<SeqStep> {
     }).collect()
 }
 
-const SEQ_PRESETS: [(&str, fn() -> Vec<SeqStep>); 4] = [
+/// Default pattern: built to show the sequencer's articulation vocabulary in
+/// one loop — varied step lengths, cycle conditions, curve accents, and two
+/// feedback scenes — while every step stays readable on its own.
+fn seq_preset_showcase() -> Vec<SeqStep> {
+    let mut steps = vec![
+        sp( 4, 1.8, 0.30, 0.65, 0.40, 0.00, 0.9, 1.2, 1.8, 0.6), // NODAL — home base
+        sp( 2, 2.0, 0.45, 0.50, 0.60, 0.13, 1.1, 0.8, 1.2, 0.8), // FERMI — quick accent
+        sp( 9, 1.0, 0.25, 0.45, 0.60, 0.28, 0.8, 1.0, 1.2, 0.9), // MOIRE — long dwell
+        sp(22, 1.8, 0.45, 0.40, 0.55, 0.42, 1.3, 1.2, 0.5, 1.0), // VORTEX KNOT — snap hit
+        sp(17, 1.5, 0.55, 0.60, 0.65, 0.55, 1.1, 0.7, 1.2, 0.8), // QUASICRYSTAL — fb bloom
+        sp( 6, 2.5, 0.55, 0.40, 0.50, 0.68, 1.3, 0.5, 0.8, 1.8), // STRIPES — every 2nd pass
+        sp(20, 2.0, 0.40, 0.50, 0.55, 0.80, 0.9, 0.8, 1.0, 1.2), // BERRY — overshoot jump
+        sp(12, 2.0, 0.40, 0.70, 0.50, 0.92, 0.9, 0.6, 1.0, 1.5), // KIKUCHI — fb mirror coda
+    ];
+    // Quick accent: half-length, hard cut in.
+    steps[1].dur_mul = 0.5;
+    steps[1].curve_override = Some(TranCurve::Snap);
+    // Long dwell: double-length silk glide.
+    steps[2].dur_mul = 2.0;
+    // Snap hit that only lands on the first of every two passes.
+    steps[3].dur_mul = 0.5;
+    steps[3].curve_override = Some(TranCurve::Snap);
+    steps[3].cond = (1, 2);
+    // Feedback bloom scene.
+    steps[4].params.fb_enabled = true;
+    steps[4].params.fb_mirror = 5;
+    steps[4].params.fb_decay = 0.88;
+    steps[4].params.fb_inject = 0.55;
+    steps[4].params.fb_zoom = 1.012;
+    // Alternating answer to the snap hit: second of every two passes.
+    steps[5].cond = (2, 2);
+    // Big harmonic jump with overshoot-settle.
+    steps[6].curve_override = Some(TranCurve::Over);
+    // Mirrored feedback coda, longer dwell.
+    steps[7].dur_mul = 1.5;
+    steps[7].params.fb_enabled = true;
+    steps[7].params.fb_mirror = 3;
+    steps[7].params.fb_decay = 0.90;
+    steps[7].params.fb_inject = 0.60;
+    steps[7].params.fb_rotation = 0.05;
+    steps
+}
+
+const SEQ_PRESETS: [(&str, fn() -> Vec<SeqStep>); 5] = [
+    ("SHOWCASE", seq_preset_showcase),
     ("PHASE",    seq_preset_phase_space),
     ("QUANTUM",  seq_preset_quantum),
     ("GEO",      seq_preset_geometric),
@@ -607,19 +755,28 @@ pub struct Sequencer {
     pub pp_dir:     i8,           // direction for PingPong: +1 or -1 (0 = not started)
     pub rng_seed:   u32,          // LCG state for Random mode and prob gates
     pub from_params: FieldParams, // pub so preset::apply can rewind to step 0 cleanly
+    /// Fraction of the step spent morphing (Elektron slide-trig feel):
+    /// 0.25 = quick morph then hold; 1.0 = classic wall-to-wall glide.
+    pub morph:      f32,
+    /// Depth of the built-in micro-motion lane (0 = off). Keeps the image
+    /// alive during holds — bounded by construction, never chaotic.
+    pub drift:      f32,
+    /// Free-running clock driving the drift lane (advances with tick).
+    pub clock:      f32,
 }
 
 impl Sequencer {
     fn new() -> Self {
-        let steps = seq_preset_phase_space();
+        let steps = seq_preset_showcase();
         let from_params = steps[0].params.clone();
         Self {
             active: false, manual: false, steps, cur: 0,
-            step_dur: 3.0, step_timer: 0.0,
-            curve: TranCurve::EaseInOut, selected: None,
+            step_dur: 2.6, step_timer: 0.0,
+            curve: TranCurve::Silk, selected: None,
             play_mode: SeqPlayMode::Forward,
             pp_dir: 1, rng_seed: 0x9E3779B9,
             from_params,
+            morph: 0.6, drift: 0.5, clock: 0.0,
         }
     }
 
@@ -638,12 +795,19 @@ impl Sequencer {
 
     fn current_params(&self) -> FieldParams {
         let dur = self.effective_step_dur();
-        let t = self.effective_curve().apply((self.step_timer / dur).clamp(0.0, 1.0));
-        lerp_fp(&self.from_params, &self.steps[self.cur].params, t)
+        let raw = (self.step_timer / dur).clamp(0.0, 1.0);
+        // Morph window: complete the transition within the first `morph`
+        // fraction of the step, then hold the destination.
+        let m = (raw / self.morph.clamp(0.05, 1.0)).clamp(0.0, 1.0);
+        let t = self.effective_curve().apply(m);
+        let mut fp = lerp_fp(&self.from_params, &self.steps[self.cur].params, t);
+        apply_drift(&mut fp, self.clock, self.drift, self.cur);
+        fp
     }
 
     fn tick(&mut self, dt: f32) {
         if !self.active { return; }
+        self.clock += dt;
         self.step_timer += dt;
         let dur = self.effective_step_dur();
         if self.manual {
@@ -696,11 +860,15 @@ impl Sequencer {
     fn advance_next(&mut self) {
         let n = self.steps.len();
         if n == 0 { return; }
-        // Try up to 2n candidates: skip muted and probability-failed steps.
+        // Try up to 2n candidates: skip muted, condition-failed, and
+        // probability-failed steps.
         for _ in 0..(2 * n) {
             let cand = self.raw_next_index();
             self.cur = cand;
             if self.steps[cand].muted { continue; }
+            // Elektron cycle condition: count this playhead visit, then gate.
+            self.steps[cand].visits = self.steps[cand].visits.wrapping_add(1);
+            if !cond_passes(self.steps[cand].cond, self.steps[cand].visits) { continue; }
             if self.steps[cand].prob < 0.999 {
                 if self.rng_unit() > self.steps[cand].prob { continue; }
             }
@@ -868,7 +1036,7 @@ impl TourStyle {
 /// step wires more targets (color first, then geometry, then feedback), and
 /// engine rate/depth/wave all scale up via `TripLevel`.
 pub fn tour_lfo_preset_for_level(level: TripLevel) -> LfoParams {
-    let mut p = LfoParams::default();
+    let mut p = LfoParams::unrouted();
     p.a = LfoEngine {
         rate:  level.lfo_a_rate(),
         depth: level.lfo_a_depth(),
@@ -937,6 +1105,7 @@ fn tour_lfo_preset_fb_heavy() -> LfoParams {
         fb_rotation: LfoSrc::A, fb_offset_x: LfoSrc::B, fb_offset_y: LfoSrc::B,
         fb_inject: LfoSrc::Off, fb_fold_angle: LfoSrc::A,
         fb_motion_blur: LfoSrc::B,
+        flux: flux_default(),
     }
 }
 
@@ -1117,6 +1286,98 @@ fn tour_field_params(t: f32, crystal_idx: usize, style: TourStyle, level: TripLe
     }
 }
 
+/// Range-normalized modulation delta for one target (before the flux budget).
+#[inline]
+fn mod_norm(
+    lfo: &LfoParams, lfo_src: LfoSrc, lfo_a_s: f32, lfo_b_s: f32,
+    mic_src: MicSrc, mic_depth: f32, bands: &audio::AudioBands,
+) -> f32 {
+    let lfo_d = match lfo_src {
+        LfoSrc::Off => 0.0,
+        LfoSrc::A   => lfo.a.depth * lfo_a_s,
+        LfoSrc::B   => lfo.b.depth * lfo_b_s,
+    };
+    lfo_d + mic_src.value(bands) * mic_depth
+}
+
+/// Flux budget in summed normalized units. flux 1.0 admits a total swing of
+/// three full knob-spans across all routes; flux 0.33 ≈ one span.
+fn flux_budget(flux: f32) -> f32 { flux.clamp(0.0, 1.0) * 3.0 }
+
+/// Returns a FieldParams with LFO and mic deltas applied additively from the
+/// base, plus the fraction (0..1+) of the flux budget the routes asked for.
+fn apply_modulation_ex(
+    fp:    &FieldParams,
+    lfo:   &LfoParams,
+    mic:   &MicParams,
+    bands: &audio::AudioBands,
+    t:     f32,
+) -> (FieldParams, f32) {
+    let lfo_a_s = lfo.a.sample(t);
+    let lfo_b_s = lfo.b.sample(t);
+
+    // Pass 1 — normalized deltas for every target.
+    const FB_TARGETS: usize = 11;
+    let mut mp_d = [0.0f32; MP_SLOTS];
+    for i in 0..MP_SLOTS {
+        mp_d[i] = mod_norm(lfo, lfo.mp[i], lfo_a_s, lfo_b_s, mic.mp[i], mic.depth, bands);
+    }
+    let fb_ranges: [(f32, f32); FB_TARGETS] = [
+        (0.90, 1.10), (0.30, 0.99), (-0.10, 0.10), (-0.10, 0.10), (-0.30, 0.30),
+        (-1.00, 1.00), (0.00, 2.00), (0.00, 2.00), (0.00, 1.00), (-3.14, 3.14),
+        (0.00, 0.95),
+    ];
+    let fb_routes = [
+        lfo.fb_zoom, lfo.fb_decay, lfo.fb_offset_x, lfo.fb_offset_y, lfo.fb_rotation,
+        lfo.fb_color_shift, lfo.fb_saturation, lfo.fb_brightness, lfo.fb_inject,
+        lfo.fb_fold_angle, lfo.fb_motion_blur,
+    ];
+    let fb_mics = [
+        mic.fb_zoom, mic.fb_decay, mic.fb_offset_x, mic.fb_offset_y, mic.fb_rotation,
+        mic.fb_color_shift, mic.fb_saturation, mic.fb_brightness, mic.fb_inject,
+        mic.fb_fold_angle, mic.fb_motion_blur,
+    ];
+    let mut fb_d = [0.0f32; FB_TARGETS];
+    for i in 0..FB_TARGETS {
+        fb_d[i] = mod_norm(lfo, fb_routes[i], lfo_a_s, lfo_b_s, fb_mics[i], mic.depth, bands);
+    }
+
+    // Pass 2 — budget: scale everything down proportionally if over cap.
+    let total: f32 = mp_d.iter().chain(fb_d.iter()).map(|d| d.abs()).sum();
+    let budget = flux_budget(lfo.flux);
+    let scale = if total > budget && total > 1e-6 { budget / total } else { 1.0 };
+    let load = if budget > 1e-6 { total / budget } else { 0.0 };
+
+    let mut mp = [0.0f32; MP_SLOTS];
+    for i in 0..MP_SLOTS {
+        let (lo, hi) = slot_range(fp.mode, i);
+        mp[i] = (fp.mp[i] + mp_d[i] * scale * (hi - lo)).clamp(lo, hi);
+    }
+    let fb = |i: usize, base: f32| -> f32 {
+        let (lo, hi) = fb_ranges[i];
+        (base + fb_d[i] * scale * (hi - lo)).clamp(lo, hi)
+    };
+    let out = FieldParams {
+        mode:           fp.mode,
+        mp,
+        fb_enabled:     fp.fb_enabled,
+        fb_mirror:      fp.fb_mirror,
+        fb_blend_mode:  fp.fb_blend_mode,
+        fb_zoom:        fb(0, fp.fb_zoom),
+        fb_decay:       fb(1, fp.fb_decay),
+        fb_offset_x:    fb(2, fp.fb_offset_x),
+        fb_offset_y:    fb(3, fp.fb_offset_y),
+        fb_rotation:    fb(4, fp.fb_rotation),
+        fb_color_shift: fb(5, fp.fb_color_shift),
+        fb_saturation:  fb(6, fp.fb_saturation),
+        fb_brightness:  fb(7, fp.fb_brightness),
+        fb_inject:      fb(8, fp.fb_inject),
+        fb_fold_angle:  fb(9, fp.fb_fold_angle),
+        fb_motion_blur: fb(10, fp.fb_motion_blur),
+    };
+    (out, load)
+}
+
 /// Returns a FieldParams with LFO and mic deltas applied additively from the base.
 fn apply_modulation(
     fp:    &FieldParams,
@@ -1125,47 +1386,7 @@ fn apply_modulation(
     bands: &audio::AudioBands,
     t:     f32,
 ) -> FieldParams {
-    let lfo_a_s = lfo.a.sample(t);
-    let lfo_b_s = lfo.b.sample(t);
-    macro_rules! modulate {
-        ($val:expr, $lfo_src:expr, $mic_src:expr, $min:expr, $max:expr) => {{
-            let range   = ($max as f32) - ($min as f32);
-            let lfo_d   = match $lfo_src {
-                LfoSrc::Off => 0.0,
-                LfoSrc::A   => lfo.a.depth * range * lfo_a_s,
-                LfoSrc::B   => lfo.b.depth * range * lfo_b_s,
-            };
-            let mic_d   = $mic_src.value(bands) * mic.depth * range;
-            ($val + lfo_d + mic_d).clamp($min as f32, $max as f32)
-        }};
-    }
-    // Per-mode param bank: each slot's clamp range comes from the active mode's
-    // metadata (so LFO/mic depth scales to that knob's real span); undeclared
-    // slots fall back to a canonical/wide range.
-    let mut mp = [0.0f32; MP_SLOTS];
-    for i in 0..MP_SLOTS {
-        let (lo, hi) = slot_range(fp.mode, i);
-        mp[i] = modulate!(fp.mp[i], lfo.mp[i], mic.mp[i], lo, hi);
-    }
-    FieldParams {
-        mode:           fp.mode,
-        mp,
-        // feedback params — modulated when fb_enabled
-        fb_enabled:     fp.fb_enabled,
-        fb_mirror:      fp.fb_mirror,
-        fb_blend_mode:  fp.fb_blend_mode,
-        fb_zoom:        modulate!(fp.fb_zoom,        lfo.fb_zoom,        mic.fb_zoom,        0.90, 1.10),
-        fb_decay:       modulate!(fp.fb_decay,       lfo.fb_decay,       mic.fb_decay,       0.30, 0.99),
-        fb_offset_x:    modulate!(fp.fb_offset_x,    lfo.fb_offset_x,    mic.fb_offset_x,   -0.10, 0.10),
-        fb_offset_y:    modulate!(fp.fb_offset_y,    lfo.fb_offset_y,    mic.fb_offset_y,   -0.10, 0.10),
-        fb_rotation:    modulate!(fp.fb_rotation,    lfo.fb_rotation,    mic.fb_rotation,   -0.30, 0.30),
-        fb_color_shift: modulate!(fp.fb_color_shift, lfo.fb_color_shift, mic.fb_color_shift,-1.00, 1.00),
-        fb_saturation:  modulate!(fp.fb_saturation,  lfo.fb_saturation,  mic.fb_saturation,  0.00, 2.00),
-        fb_brightness:  modulate!(fp.fb_brightness,  lfo.fb_brightness,  mic.fb_brightness,  0.00, 2.00),
-        fb_inject:      modulate!(fp.fb_inject,      lfo.fb_inject,      mic.fb_inject,      0.00, 1.00),
-        fb_fold_angle:  modulate!(fp.fb_fold_angle,  lfo.fb_fold_angle,  mic.fb_fold_angle, -3.14, 3.14),
-        fb_motion_blur: modulate!(fp.fb_motion_blur, lfo.fb_motion_blur, mic.fb_motion_blur, 0.00, 0.95),
-    }
+    apply_modulation_ex(fp, lfo, mic, bands, t).0
 }
 
 // ── Tour state machine ────────────────────────────────────────────────────
@@ -1252,7 +1473,10 @@ struct UiReq {
     trip_level_set:   Option<u8>,
     kpath_toggle: bool,
     panel_toggle: bool,
+    sequencer_panel_toggle: bool,
     render_mode:  Option<RenderMode>,
+    supercell:    Option<usize>,
+    auto_rotate_toggle: bool,
     seq_toggle:        bool,
     seq_manual_toggle: bool,
     seq_manual_step:   Option<i32>,   // +1 / -1
@@ -1273,6 +1497,9 @@ struct UiReq {
     seq_step_dur_mul:     Option<(usize, f32)>,
     seq_step_curve_cycle: Option<usize>,
     seq_step_prob:        Option<(usize, f32)>,
+    seq_step_cond_cycle:  Option<usize>,
+    seq_morph:            Option<f32>,
+    seq_drift:            Option<f32>,
     // Preset I/O
     preset_load_bundled:  Option<usize>,
     preset_random:        bool,
@@ -1313,6 +1540,7 @@ struct App {
     all_crystals: Vec<&'static CrystalDef>,
 
     panel_open:   bool,
+    sequencer_panel_open: bool,
     search_str:   String,
     lfo:          LfoParams,
     mic_params:   MicParams,
@@ -1329,6 +1557,10 @@ struct App {
     preset_random_seed: u32,
     #[cfg(not(target_arch = "wasm32"))]
     preset_path_input:  String,
+    /// Dev hook: capture the composed frame once `t` passes the given second
+    /// mark (CRYSTALVIZ_SCREENSHOT + CRYSTALVIZ_SCREENSHOT_DELAY).
+    #[cfg(not(target_arch = "wasm32"))]
+    capture_after:      Option<(f32, String)>,
 }
 
 enum UserEvent {
@@ -1339,22 +1571,47 @@ enum UserEvent {
 impl App {
     fn new(crystal: Crystal) -> Self {
         let all = all_crystals();
+        #[cfg(not(target_arch = "wasm32"))]
+        let render_mode = match std::env::var("CRYSTALVIZ_VIEW").as_deref() {
+            Ok("atoms") => RenderMode::Atoms,
+            _ => RenderMode::Field,
+        };
+        #[cfg(target_arch = "wasm32")]
+        let render_mode = RenderMode::Field;
+        #[cfg(not(target_arch = "wasm32"))]
+        let sequencer = {
+            let mut s = Sequencer::new();
+            if std::env::args().any(|arg| arg == "--play") { s.active = true; }
+            s
+        };
+        #[cfg(target_arch = "wasm32")]
+        let sequencer = Sequencer::new();
+        #[cfg(not(target_arch = "wasm32"))]
+        let capture_after: Option<(f32, String)> = std::env::var("CRYSTALVIZ_SCREENSHOT_DELAY")
+            .ok()
+            .and_then(|d| d.parse::<f32>().ok())
+            .zip(std::env::var("CRYSTALVIZ_SCREENSHOT").ok());
+        #[cfg(not(target_arch = "wasm32"))]
+        let sequencer_panel_open = std::env::args().any(|arg| arg == "--timeline" || arg == "--play");
+        #[cfg(target_arch = "wasm32")]
+        let sequencer_panel_open = false;
         Self {
             gpu: None, start_crystal: crystal,
             #[cfg(target_arch = "wasm32")]
             event_proxy: None,
             start: Instant::now(), prev_t: 0.0,
             dragging: false, last_mouse: None, auto_rotate: true,
-            render_mode: RenderMode::Field,
+            render_mode,
             field_params: FieldParams::default(),
             mouse_norm: [0.5, 0.5], mouse_btn_down: false,
             kpath_active: false, kpt_idx: 0,
             tour: Tour::new(),
             tour_style: TourStyle::default(),
             trip_level: TripLevel::default(),
-            sequencer: Sequencer::new(),
+            sequencer,
             all_crystals: all,
-            panel_open: true,
+            panel_open: !sequencer_panel_open,
+            sequencer_panel_open,
             search_str: String::new(),
             lfo: LfoParams::default(),
             mic_params: MicParams::default(),
@@ -1370,6 +1627,8 @@ impl App {
             preset_random_seed: 0,
             #[cfg(not(target_arch = "wasm32"))]
             preset_path_input: String::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            capture_after,
         }
     }
 
@@ -1383,6 +1642,7 @@ impl App {
         gpu.gpu_field.seed_kpoint([0.0, 0.0, 0.0], 1.0);
         gpu.update_field();
         let sys = symmetry::detect(&crystal.lattice);
+        gpu.set_crystal(crystal);
         gpu.kpath = Some(kpoints::build_kpath(sys));
         self.kpt_idx = 0;
         self.kpath_active = false;
@@ -1431,6 +1691,16 @@ impl ApplicationHandler<UserEvent> for App {
         let sys = gpu.crystal_system();
         gpu.kpath = Some(kpoints::build_kpath(sys));
         self.gpu = Some(gpu);
+        if let Ok(needle) = std::env::var("CRYSTALVIZ_CRYSTAL") {
+            let needle = needle.to_ascii_lowercase();
+            if let Some(idx) = self.all_crystals.iter()
+                .position(|def| def.name.to_ascii_lowercase().contains(&needle))
+            {
+                self.switch_to(idx);
+            } else {
+                log::warn!("Unknown CRYSTALVIZ_CRYSTAL value: {needle}");
+            }
+        }
         }
     }
 
@@ -1464,6 +1734,14 @@ impl ApplicationHandler<UserEvent> for App {
         let render_mode  = self.render_mode;
         let t            = self.time();
         let Some(gpu) = self.gpu.as_mut() else { return };
+
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some((deadline, _)) = self.capture_after {
+            if t >= deadline {
+                let (_, path) = self.capture_after.take().unwrap();
+                gpu.request_screenshot(path);
+            }
+        }
 
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
@@ -1647,12 +1925,14 @@ impl ApplicationHandler<UserEvent> for App {
                 let cur_tour_style    = self.tour_style;
                 let cur_kpath_active  = self.kpath_active;
                 let cur_panel_open    = self.panel_open;
+                let cur_sequencer_panel_open = self.sequencer_panel_open;
                 let cur_fb_auto       = self.fb_auto;
                 let cur_show_keymap   = self.show_keymap;
                 let cur_show_mode_info = self.show_mode_info;
                 let mut cur_mode_area = self.mode_area;
                 #[cfg(not(target_arch = "wasm32"))]
                 let cur_surface_size = gpu.size;
+                let cur_supercell     = gpu.supercell;
                 let cur_crystal_idx   = self.tour.crystal_idx;
                 let cur_trip_level    = self.trip_level;
                 let tour_fp = if self.tour.active {
@@ -1680,11 +1960,17 @@ impl ApplicationHandler<UserEvent> for App {
                 let cur_seq_active    = self.sequencer.active;
                 let cur_seq_manual    = self.sequencer.manual;
                 let cur_seq_selected  = self.sequencer.selected;
-                let cur_seq_steps: Vec<(bool, bool, bool, u32)> = self.sequencer.steps.iter().enumerate()
-                    .map(|(i, s)| (i == self.sequencer.cur, s.muted, Some(i) == self.sequencer.selected, s.params.mode))
+                let cur_seq_steps: Vec<(bool, bool, bool, u32, (u8, u8), f32)> = self.sequencer.steps.iter().enumerate()
+                    .map(|(i, s)| (
+                        i == self.sequencer.cur, s.muted,
+                        Some(i) == self.sequencer.selected, s.params.mode,
+                        s.cond, s.prob,
+                    ))
                     .collect();
                 let cur_seq_dur       = self.sequencer.step_dur;
                 let cur_seq_curve     = self.sequencer.curve;
+                let cur_seq_morph     = self.sequencer.morph;
+                let cur_seq_drift     = self.sequencer.drift;
                 let cur_seq_play_mode = self.sequencer.play_mode;
                 let cur_seq_eff_dur   = self.sequencer.effective_step_dur();
                 let cur_seq_progress  = (self.sequencer.step_timer / cur_seq_eff_dur).clamp(0.0, 1.0);
@@ -1692,9 +1978,9 @@ impl ApplicationHandler<UserEvent> for App {
                 let mut seq_selected_edit: Option<(usize, FieldParams)> = self.sequencer.selected
                     .and_then(|i| self.sequencer.steps.get(i).map(|s| (i, s.params.clone())));
                 // Per-step extras for the selected step editor: (dur_mul, curve_override, prob)
-                let seq_selected_extras: Option<(f32, Option<TranCurve>, f32)> = self.sequencer.selected
+                let seq_selected_extras: Option<(f32, Option<TranCurve>, f32, (u8, u8))> = self.sequencer.selected
                     .and_then(|i| self.sequencer.steps.get(i))
-                    .map(|s| (s.dur_mul, s.curve_override, s.prob));
+                    .map(|s| (s.dur_mul, s.curve_override, s.prob, s.cond));
                 // Snapshot field_params, lfo, mic, and current audio bands.
                 let mut fp  = seq_fp.or(tour_fp).unwrap_or_else(|| self.field_params.clone());
                 // FB AUTO: override every fb_* field with an evolving auto-pilot pattern.
@@ -1724,7 +2010,7 @@ impl ApplicationHandler<UserEvent> for App {
                 let mic_active = self.audio.is_some();
 
                 // Apply LFO + mic modulation to get effective values for this frame.
-                let fp_eff = apply_modulation(&fp, &lfo, &mic, &cur_bands, t);
+                let (fp_eff, cur_flux_load) = apply_modulation_ex(&fp, &lfo, &mic, &cur_bands, t);
 
                 // Pre-build FieldUniform from the LFO-modulated snapshot so the closure can
                 // freely mutate fp.* without conflicting with the match arm below.
@@ -1775,91 +2061,137 @@ impl ApplicationHandler<UserEvent> for App {
 
                 // The closure now captures &mut fp.* freely — no conflict with match below.
                 let ui_fn = |ctx: &egui::Context| {
-                    // ── Top toolbar — pinned transport controls ───────
-                    egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
-                        ui.add_space(2.0);
-                        ui.horizontal(|ui| {
-                            // Panel toggle (◀/▶)
-                            if ui.small_button(if req_panel_open { "◀" } else { "▶" }).clicked() {
-                                req.panel_toggle = true;
-                            }
-                            ui.separator();
-                            // Tour / sequencer transport
-                            let tour_lbl = if cur_tour_active { "■ TOUR" } else { "▶ TOUR" };
-                            let tour_col = if cur_tour_active {
-                                egui::Color32::from_rgb(140, 255, 140)
-                            } else { egui::Color32::from_gray(220) };
-                            if ui.add(egui::Button::new(
-                                egui::RichText::new(tour_lbl).color(tour_col)
-                            )).clicked() { req.tour_toggle = true; }
-                            if ui.small_button(cur_tour_style.label()).clicked() {
-                                req.tour_style_toggle = true;
-                            }
-                            // Trip-level stepper: − [lvl] +
-                            if ui.small_button("−")
-                                .on_hover_text("Lower trip level (-)")
-                                .clicked() { req.trip_level_dec = true; }
-                            let trip_col = {
-                                // Color ramps from cool gray (0) through warm amber to hot magenta (9)
-                                let f = cur_trip_level.t();
-                                let r = (140.0 + 115.0 * f) as u8;
-                                let g = (180.0 - 110.0 * f) as u8;
-                                let b = (220.0 - 100.0 * f) as u8;
-                                egui::Color32::from_rgb(r, g, b)
-                            };
-                            ui.add(egui::Label::new(
-                                egui::RichText::new(cur_trip_level.label())
-                                    .color(trip_col).monospace()
-                            )).on_hover_text("Trip intensity (0 still → 9 madness). Keys: − / =");
-                            if ui.small_button("+")
-                                .on_hover_text("Raise trip level (=)")
-                                .clicked() { req.trip_level_inc = true; }
-                            let seq_lbl = if cur_seq_active { "■ SEQ" } else { "▶ SEQ" };
-                            let seq_col = if cur_seq_active {
-                                egui::Color32::from_rgb(180, 140, 255)
-                            } else { egui::Color32::from_gray(220) };
-                            if ui.add(egui::Button::new(
-                                egui::RichText::new(seq_lbl).color(seq_col)
-                            )).clicked() { req.seq_toggle = true; }
-                            ui.separator();
-                            // K-path walk
-                            let kp_lbl = if cur_kpath_active { "■ K" } else { "▶ K" };
-                            if ui.small_button(kp_lbl).clicked() { req.kpath_toggle = true; }
-                            ui.separator();
-                            // Feedback auto-pilot
-                            let auto_col = if cur_fb_auto {
-                                egui::Color32::from_rgb(255, 180, 80)
-                            } else { egui::Color32::from_gray(180) };
-                            if ui.add(egui::Button::new(
-                                egui::RichText::new(if cur_fb_auto { "■ FB AUTO" } else { "□ FB AUTO" })
-                                    .color(auto_col)
-                            )).clicked() { req.fb_auto_toggle = true; }
-                            ui.separator();
-                            // Right-aligned: screenshot + help
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                let help_col = if cur_show_keymap {
-                                    egui::Color32::from_rgb(160, 200, 255)
-                                } else { egui::Color32::from_gray(180) };
+                    // ── Command bar ───────────────────────────────────
+                    egui::TopBottomPanel::top("command_bar")
+                        .exact_height(42.0)
+                        .show(ctx, |ui| {
+                            ui.add_space(5.0);
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new("CRYSTAL / DIVE")
+                                        .strong()
+                                        .size(13.0)
+                                        .color(egui::Color32::from_rgb(137, 225, 215)),
+                                );
+                                ui.separator();
+
+                                let view_label = match cur_render_mode {
+                                    RenderMode::Atoms => "ATOMS",
+                                    RenderMode::Field => "FIELD",
+                                };
+                                if ui.button(view_label)
+                                    .on_hover_text("Switch between structure and field views")
+                                    .clicked()
+                                {
+                                    req.render_mode = Some(match cur_render_mode {
+                                        RenderMode::Atoms => RenderMode::Field,
+                                        RenderMode::Field => RenderMode::Atoms,
+                                    });
+                                }
+
+                                let inspector_text = egui::RichText::new("INSPECTOR").color(
+                                    if req_panel_open {
+                                        egui::Color32::from_rgb(137, 225, 215)
+                                    } else {
+                                        egui::Color32::from_gray(145)
+                                    },
+                                );
+                                if ui.add(egui::Button::new(inspector_text)).clicked() {
+                                    req.panel_toggle = true;
+                                }
+
+                                let timeline_text = egui::RichText::new("TIMELINE").color(
+                                    if cur_sequencer_panel_open {
+                                        egui::Color32::from_rgb(247, 197, 106)
+                                    } else {
+                                        egui::Color32::from_gray(145)
+                                    },
+                                );
+                                if ui.add(egui::Button::new(timeline_text))
+                                    .on_hover_text("Open the sequencer workspace")
+                                    .clicked()
+                                {
+                                    req.sequencer_panel_toggle = true;
+                                }
+
+                                ui.separator();
+                                let tour_color = if cur_tour_active {
+                                    egui::Color32::from_rgb(137, 225, 215)
+                                } else {
+                                    egui::Color32::from_gray(180)
+                                };
                                 if ui.add(egui::Button::new(
-                                    egui::RichText::new("?").color(help_col).monospace()
-                                )).on_hover_text("Keyboard shortcuts (?, /)").clicked() {
-                                    req.keymap_toggle = true;
+                                    egui::RichText::new(if cur_tour_active { "STOP TOUR" } else { "TOUR" })
+                                        .color(tour_color),
+                                )).clicked() {
+                                    req.tour_toggle = true;
                                 }
-                                if ui.small_button("📷").on_hover_text("Screenshot").clicked() {
-                                    req.screenshot = true;
+                                if ui.small_button(cur_tour_style.label())
+                                    .on_hover_text("Tour direction")
+                                    .clicked()
+                                {
+                                    req.tour_style_toggle = true;
                                 }
+
+                                if ui.small_button("−").clicked() { req.trip_level_dec = true; }
+                                ui.label(
+                                    egui::RichText::new(format!("FLOW {}", cur_trip_level.label()))
+                                        .monospace()
+                                        .color(egui::Color32::from_rgb(247, 197, 106)),
+                                );
+                                if ui.small_button("+").clicked() { req.trip_level_inc = true; }
+
+                                if ui.small_button(if cur_kpath_active { "K PATH ON" } else { "K PATH" })
+                                    .clicked()
+                                {
+                                    req.kpath_toggle = true;
+                                }
+                                if ui.small_button(if cur_fb_auto { "AUTO ON" } else { "AUTO" })
+                                    .clicked()
+                                {
+                                    req.fb_auto_toggle = true;
+                                }
+
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if ui.small_button("?")
+                                        .on_hover_text("Keyboard shortcuts")
+                                        .clicked()
+                                    {
+                                        req.keymap_toggle = true;
+                                    }
+                                    if ui.small_button("CAPTURE")
+                                        .on_hover_text("Save the complete frame, including UI")
+                                        .clicked()
+                                    {
+                                        req.screenshot = true;
+                                    }
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{}  /  {}  /  {}",
+                                            cur_crystal_name, cur_sys_name, cur_mode_name
+                                        ))
+                                        .small()
+                                        .color(egui::Color32::from_gray(155)),
+                                    );
+                                });
                             });
                         });
-                        ui.add_space(2.0);
-                    });
 
                     // Side panel
                     if req_panel_open {
-                        egui::SidePanel::left("ctrl")
-                            .min_width(260.0).max_width(300.0)
-                            .resizable(false)
+                        egui::SidePanel::left("inspector")
+                            .default_width(326.0)
+                            .width_range(300.0..=380.0)
+                            .resizable(true)
                             .show(ctx, |ui| {
-                                // Compact header — crystal name + system on one line
+                                ui.add_space(8.0);
+                                ui.label(
+                                    egui::RichText::new("LIVE INSPECTOR")
+                                        .small()
+                                        .strong()
+                                        .color(egui::Color32::from_rgb(137, 225, 215)),
+                                );
+                                ui.add_space(4.0);
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("◇")
                                         .heading().color(egui::Color32::from_rgb(160, 170, 220)));
@@ -1871,6 +2203,10 @@ impl ApplicationHandler<UserEvent> for App {
                                     });
                                 });
                                 ui.separator();
+                                egui::ScrollArea::vertical()
+                                    .id_salt("inspector_scroll")
+                                    .auto_shrink([false, false])
+                                    .show(ui, |ui| {
 
                                 // Shared slider macro for both Field and Feedback sections.
                                 // Defined here in the side-panel scope so sibling CollapsingHeader
@@ -1915,9 +2251,9 @@ impl ApplicationHandler<UserEvent> for App {
                                 }
 
                                 // Crystal library (collapsible)
-                                egui::CollapsingHeader::new(egui::RichText::new("🔍 Crystal library")
-                                    .color(egui::Color32::from_rgb(150, 160, 200)))
-                                    .id_source("sec_library").default_open(false)
+                                egui::CollapsingHeader::new(egui::RichText::new("CRYSTAL LIBRARY")
+                                    .strong().color(egui::Color32::from_gray(175)))
+                                    .id_salt("sec_library").default_open(false)
                                     .show(ui, |ui| {
                                         ui.text_edit_singleline(&mut search);
                                         let q = search.to_ascii_lowercase();
@@ -1946,10 +2282,11 @@ impl ApplicationHandler<UserEvent> for App {
                                             });
                                     });
 
+                                if cur_render_mode == RenderMode::Field {
                                 // Field params (collapsible, open by default)
-                                egui::CollapsingHeader::new(egui::RichText::new("🎨 Field")
-                                    .color(egui::Color32::from_rgb(180, 200, 200)))
-                                    .id_source("sec_field").default_open(true)
+                                egui::CollapsingHeader::new(egui::RichText::new("FIELD")
+                                    .strong().color(egui::Color32::from_rgb(137, 225, 215)))
+                                    .id_salt("sec_field").default_open(true)
                                     .show(ui, |ui| {
                                         let mode_before = fp.mode;
                                         ui.horizontal_wrapped(|ui| {
@@ -1977,7 +2314,7 @@ impl ApplicationHandler<UserEvent> for App {
                                         // Compact mode picker: ComboBox + arrow buttons
                                         ui.horizontal(|ui| {
                                             ui.label(egui::RichText::new("mode").small().monospace());
-                                            egui::ComboBox::from_id_source("mode_combo")
+                                            egui::ComboBox::from_id_salt("mode_combo")
                                                 .selected_text(MODE_NAMES[fp.mode as usize])
                                                 .width(160.0)
                                                 .show_ui(ui, |ui| {
@@ -2037,9 +2374,9 @@ impl ApplicationHandler<UserEvent> for App {
                                     }); // end Field collapsible
 
                                 // ── FEEDBACK / SELF-SIMILARITY ────────────────────────────
-                                egui::CollapsingHeader::new(egui::RichText::new("🔁 Feedback")
-                                    .color(egui::Color32::from_rgb(220, 140, 80)))
-                                    .id_source("sec_feedback").default_open(true)
+                                egui::CollapsingHeader::new(egui::RichText::new("FEEDBACK")
+                                    .strong().color(egui::Color32::from_rgb(247, 197, 106)))
+                                    .id_salt("sec_feedback").default_open(false)
                                     .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     let fb_label = if fp.fb_enabled { "■ ON" } else { "□ OFF" };
@@ -2082,9 +2419,9 @@ impl ApplicationHandler<UserEvent> for App {
                                     }); // end Feedback collapsible
 
                                 // ── MODULATION (LFO A/B side-by-side + mic) ───────────────
-                                egui::CollapsingHeader::new(egui::RichText::new("🌊 Modulation")
-                                    .color(egui::Color32::from_rgb(150, 200, 200)))
-                                    .id_source("sec_modulation").default_open(false)
+                                egui::CollapsingHeader::new(egui::RichText::new("MODULATION")
+                                    .strong().color(egui::Color32::from_rgb(159, 186, 220)))
+                                    .id_salt("sec_modulation").default_open(false)
                                     .show(ui, |ui| {
                                         // Compact two-column LFO row.
                                         // Each column shows: wave button, rate / depth / phase sliders.
@@ -2140,7 +2477,7 @@ impl ApplicationHandler<UserEvent> for App {
                                         });
                                         if mic_active {
                                             ui.horizontal(|ui| {
-                                                let mut band = |ui: &mut egui::Ui, lbl: &str, c: egui::Color32, v: f32| {
+                                                let band = |ui: &mut egui::Ui, lbl: &str, c: egui::Color32, v: f32| {
                                                     ui.label(egui::RichText::new(lbl).small().color(c).monospace());
                                                     ui.add(egui::ProgressBar::new(v).desired_width(28.0));
                                                 };
@@ -2187,6 +2524,69 @@ impl ApplicationHandler<UserEvent> for App {
                                         .color(egui::Color32::from_gray(150)));
                                     ui.monospace(cur_kpt_label.to_string());
                                 });
+                                } else {
+                                    egui::CollapsingHeader::new(
+                                        egui::RichText::new("STRUCTURE")
+                                            .strong()
+                                            .color(egui::Color32::from_rgb(137, 225, 215)),
+                                    )
+                                    .id_salt("sec_structure")
+                                    .default_open(true)
+                                    .show(ui, |ui| {
+                                        egui::Grid::new("structure_metadata")
+                                            .num_columns(2)
+                                            .spacing(egui::vec2(16.0, 6.0))
+                                            .show(ui, |ui| {
+                                                ui.label(egui::RichText::new("SPACE GROUP").small()
+                                                    .color(egui::Color32::from_gray(125)));
+                                                ui.monospace(format!(
+                                                    "{}  ·  No. {}",
+                                                    cdef.space_group, cdef.sp_number
+                                                ));
+                                                ui.end_row();
+                                                ui.label(egui::RichText::new("POINT GROUP").small()
+                                                    .color(egui::Color32::from_gray(125)));
+                                                ui.monospace(cdef.point_group);
+                                                ui.end_row();
+                                                ui.label(egui::RichText::new("CENTERING").small()
+                                                    .color(egui::Color32::from_gray(125)));
+                                                ui.monospace(cdef.lattice_type);
+                                                ui.end_row();
+                                            });
+
+                                        ui.add_space(8.0);
+                                        ui.label(
+                                            egui::RichText::new("SUPERCELL")
+                                                .small()
+                                                .color(egui::Color32::from_gray(125)),
+                                        );
+                                        ui.horizontal(|ui| {
+                                            for n in 1..=3 {
+                                                let selected = cur_supercell == n;
+                                                if ui.selectable_label(
+                                                    selected,
+                                                    format!("{n} × {n} × {n}"),
+                                                ).clicked() {
+                                                    req.supercell = Some(n);
+                                                }
+                                            }
+                                        });
+
+                                        ui.add_space(6.0);
+                                        let rotation_label =
+                                            if auto_rotate { "AUTO ROTATE ON" } else { "AUTO ROTATE" };
+                                        if ui.button(rotation_label).clicked() {
+                                            req.auto_rotate_toggle = true;
+                                        }
+                                        ui.label(
+                                            egui::RichText::new(
+                                                "Drag to orbit  ·  wheel to zoom  ·  Space pauses rotation",
+                                            )
+                                            .small()
+                                            .color(egui::Color32::from_gray(120)),
+                                        );
+                                    });
+                                }
 
                                 ui.separator();
 
@@ -2198,36 +2598,64 @@ impl ApplicationHandler<UserEvent> for App {
 
                                 ui.separator();
 
+                                    });
                             });
                     }
 
                     // ── Consolidated bottom sequencer panel ─────────────
                     // One source of truth: transport, grid, presets, and (when a
                     // step is selected) an inline editor — all in a single dock.
+                    if cur_sequencer_panel_open {
                     egui::TopBottomPanel::bottom("sequencer_panel")
-                        .resizable(false)
+                        .resizable(true)
+                        .default_height(if seq_selected_edit.is_some() { 340.0 } else { 132.0 })
+                        .height_range(112.0..=390.0)
                         .show(ctx, |ui| {
-                            ui.add_space(2.0);
-                            // ── Status line (replaces the old bottom OSD)
+                            ui.add_space(4.0);
                             ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new(format!(
-                                    "{cur_crystal_name}  ·  {cur_sys_name}  ·  {cur_mode_name}  ·  k={cur_kpt_label}"
-                                )).monospace().size(11.0)
-                                  .color(egui::Color32::from_rgba_unmultiplied(210, 210, 255, 210)));
+                                ui.label(
+                                    egui::RichText::new("SEQUENCE")
+                                        .strong()
+                                        .color(egui::Color32::from_rgb(247, 197, 106)),
+                                );
+                                let state = if cur_seq_active { "PLAYING" } else { "READY" };
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{state}  ·  {} STEPS  ·  {:.1}s",
+                                        cur_seq_steps.len(),
+                                        cur_seq_dur
+                                    ))
+                                    .small()
+                                    .color(egui::Color32::from_gray(145)),
+                                );
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if ui.small_button("CLOSE").clicked() {
+                                        req.sequencer_panel_toggle = true;
+                                    }
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{}  /  {}",
+                                            cur_crystal_name, cur_mode_name
+                                        ))
+                                        .small()
+                                        .color(egui::Color32::from_gray(125)),
+                                    );
+                                });
                             });
+                            ui.separator();
 
                             // ── Inline step editor — only when a step is selected
                             if let Some((edit_idx, ref mut ep)) = seq_selected_edit {
                                 let is_muted = cur_seq_steps.get(edit_idx)
-                                    .map(|&(_, m, _, _)| m).unwrap_or(false);
+                                    .map(|&(_, m, _, _, _, _)| m).unwrap_or(false);
                                 egui::Frame::none()
                                     .fill(egui::Color32::from_rgba_unmultiplied(20, 16, 36, 200))
                                     .rounding(4.0)
                                     .inner_margin(egui::vec2(8.0, 6.0))
                                     .show(ui, |ui| {
                                         ui.horizontal(|ui| {
-                                            ui.label(egui::RichText::new(format!("◆ STEP {}", edit_idx + 1))
-                                                .strong().color(egui::Color32::from_rgb(255, 210, 60)));
+                                            ui.label(egui::RichText::new(format!("STEP {:02}", edit_idx + 1))
+                                                .strong().color(egui::Color32::from_rgb(247, 197, 106)));
                                             egui::ComboBox::from_id_salt("step_mode_combo")
                                                 .selected_text(MODE_NAMES[ep.mode as usize])
                                                 .width(160.0)
@@ -2243,7 +2671,7 @@ impl ApplicationHandler<UserEvent> for App {
                                                 egui::RichText::new(if is_muted { "MUTED" } else { "MUTE" }).color(mute_col)
                                             )).clicked() { req.seq_mute_step = Some(edit_idx); }
                                             if ui.small_button("RAND").clicked() { req.seq_randomize = Some(edit_idx); }
-                                            if ui.small_button("✕").on_hover_text("Close step editor").clicked() {
+                                            if ui.small_button("DONE").on_hover_text("Close step editor").clicked() {
                                                 req.seq_select_step = Some(edit_idx); // toggles off
                                             }
                                         });
@@ -2276,7 +2704,7 @@ impl ApplicationHandler<UserEvent> for App {
                                         });
 
                                         // Per-step timing/curve/prob overrides
-                                        if let Some((mut dm, curve_ov, mut pr)) = seq_selected_extras {
+                                        if let Some((mut dm, curve_ov, mut pr, cond)) = seq_selected_extras {
                                             ui.horizontal(|ui| {
                                                 ui.label(egui::RichText::new("dur×").small().monospace());
                                                 if ui.add(egui::Slider::new(&mut dm, 0.25_f32..=4.0_f32)
@@ -2290,6 +2718,18 @@ impl ApplicationHandler<UserEvent> for App {
                                                 };
                                                 if ui.small_button(lbl).clicked() {
                                                     req.seq_step_curve_cycle = Some(edit_idx);
+                                                }
+                                                ui.label(egui::RichText::new("cond").small().monospace());
+                                                let cond_active = cond != (1, 1);
+                                                let cond_col = if cond_active {
+                                                    egui::Color32::from_rgb(247, 197, 106)
+                                                } else { egui::Color32::from_gray(150) };
+                                                if ui.add(egui::Button::new(
+                                                    egui::RichText::new(cond_label(cond)).color(cond_col).monospace()
+                                                ).small()).on_hover_text(
+                                                    "Cycle condition: play on pass k of every n visits (Elektron trig condition)"
+                                                ).clicked() {
+                                                    req.seq_step_cond_cycle = Some(edit_idx);
                                                 }
                                                 ui.label(egui::RichText::new("prob").small().monospace());
                                                 if ui.add(egui::Slider::new(&mut pr, 0.0_f32..=1.0_f32)
@@ -2344,6 +2784,44 @@ impl ApplicationHandler<UserEvent> for App {
                                     .show_value(true).suffix("s")).changed() {
                                     req.seq_dur = Some(dur);
                                 }
+
+                                // Morph window: how much of the step is transition vs hold.
+                                let mut morph = cur_seq_morph;
+                                ui.label(egui::RichText::new("morph").small());
+                                if ui.add(egui::Slider::new(&mut morph, 0.05_f32..=1.0_f32)
+                                    .show_value(false))
+                                    .on_hover_text("Transition window: 0.1 = hard cut then hold, 1.0 = continuous glide")
+                                    .changed() {
+                                    req.seq_morph = Some(morph);
+                                }
+
+                                // Drift lane: bounded always-alive micro-motion.
+                                let mut drift = cur_seq_drift;
+                                let drift_col = if drift > 0.001 {
+                                    egui::Color32::from_rgb(137, 225, 215)
+                                } else { egui::Color32::from_gray(140) };
+                                ui.label(egui::RichText::new("drift").small().color(drift_col));
+                                if ui.add(egui::Slider::new(&mut drift, 0.0_f32..=1.0_f32)
+                                    .show_value(false))
+                                    .on_hover_text("Micro-motion lane: keeps holds alive (hue crawl, breathing). Bounded — never chaotic.")
+                                    .changed() {
+                                    req.seq_drift = Some(drift);
+                                }
+
+                                // Flux budget: total modulation cap with live load meter.
+                                let flux_load = cur_flux_load.min(1.5);
+                                let flux_col = if flux_load >= 1.0 {
+                                    egui::Color32::from_rgb(255, 140, 90)  // saturated: routes being scaled
+                                } else {
+                                    egui::Color32::from_rgb(159, 186, 220)
+                                };
+                                ui.label(egui::RichText::new("flux").small().color(flux_col));
+                                ui.add(egui::Slider::new(&mut lfo.flux, 0.0_f32..=1.0_f32).show_value(false))
+                                    .on_hover_text("Modulation budget: caps the summed LFO+mic swing across every route. \
+                                                    Orange = routes asking for more than the cap; all get scaled proportionally.");
+                                ui.add(egui::ProgressBar::new(flux_load / 1.5).desired_width(42.0)
+                                    .fill(flux_col))
+                                    .on_hover_text(format!("Modulation load: {:.0} % of budget", cur_flux_load * 100.0));
                                 ui.separator();
 
                                 // Step count + add/remove/capture
@@ -2360,8 +2838,8 @@ impl ApplicationHandler<UserEvent> for App {
                                     req.seq_remove_step = true;
                                 }
                                 if ui.add_enabled(can_add, egui::Button::new(
-                                    egui::RichText::new("📸 CAPTURE")
-                                        .color(egui::Color32::from_rgb(255, 200, 120))
+                                    egui::RichText::new("CAPTURE STEP")
+                                        .color(egui::Color32::from_rgb(247, 197, 106))
                                 )).on_hover_text("Append a new step from the current live state").clicked() {
                                     req.seq_capture = true;
                                 }
@@ -2380,8 +2858,8 @@ impl ApplicationHandler<UserEvent> for App {
                                     });
 
                                 if ui.add(egui::Button::new(
-                                    egui::RichText::new("🎲 RANDOM")
-                                        .color(egui::Color32::from_rgb(255, 180, 255))
+                                    egui::RichText::new("RANDOMIZE")
+                                        .color(egui::Color32::from_rgb(206, 153, 216))
                                 )).on_hover_text("Roll a fresh random preset (steps + LFO + trip level)").clicked() {
                                     req.preset_random = true;
                                 }
@@ -2411,8 +2889,8 @@ impl ApplicationHandler<UserEvent> for App {
                                     let cell_h = 32.0_f32;
 
                                     let cells = ui.horizontal(|ui| {
-                                        let mut cells: Vec<(usize, egui::Rect, bool, bool, bool, u32)> = Vec::new();
-                                        for (i, &(is_cur, muted, is_sel, mode)) in cur_seq_steps.iter().enumerate() {
+                                        let mut cells: Vec<(usize, egui::Rect, bool, bool, bool, u32, (u8, u8), f32)> = Vec::new();
+                                        for (i, &(is_cur, muted, is_sel, mode, cond, prob)) in cur_seq_steps.iter().enumerate() {
                                             let (rect, resp) = ui.allocate_exact_size(
                                                 egui::vec2(cell_w, cell_h),
                                                 egui::Sense::click(),
@@ -2422,14 +2900,14 @@ impl ApplicationHandler<UserEvent> for App {
                                             } else if resp.clicked() {
                                                 req.seq_select_step = Some(i);
                                             }
-                                            cells.push((i, rect, is_cur, muted, is_sel, mode));
+                                            cells.push((i, rect, is_cur, muted, is_sel, mode, cond, prob));
                                             ui.add_space(3.0);
                                         }
                                         cells
                                     }).inner;
 
                                     let painter = ui.painter();
-                                    for &(_i, rect, is_cur, muted, is_sel, mode) in &cells {
+                                    for &(_i, rect, is_cur, muted, is_sel, mode, cond, prob) in &cells {
                                         let base_col = mode_color(mode);
                                         let dim = if muted { 4 } else { 1 };
                                         let fill = egui::Color32::from_rgba_unmultiplied(
@@ -2464,10 +2942,29 @@ impl ApplicationHandler<UserEvent> for App {
                                             else { egui::Color32::from_gray(220) };
                                         painter.text(rect.center(), egui::Align2::CENTER_CENTER,
                                             label, egui::FontId::monospace(9.0), txt_col);
+                                        // Elektron-style trig-condition badge, top-right.
+                                        if cond != (1, 1) {
+                                            painter.text(
+                                                rect.right_top() + egui::vec2(-2.0, 1.0),
+                                                egui::Align2::RIGHT_TOP,
+                                                cond_label(cond),
+                                                egui::FontId::monospace(7.0),
+                                                egui::Color32::from_rgb(247, 197, 106),
+                                            );
+                                        }
+                                        // Probability pip, bottom-left, when < 100 %.
+                                        if prob < 0.999 {
+                                            painter.circle_filled(
+                                                rect.left_bottom() + egui::vec2(4.0, -4.0),
+                                                2.0,
+                                                egui::Color32::from_rgb(206, 153, 216),
+                                            );
+                                        }
                                     }
                                 });
                             ui.add_space(2.0);
                         });
+                    }
 
                     // (OSD is now folded into the bottom sequencer panel header above.)
 
@@ -2699,7 +3196,18 @@ impl ApplicationHandler<UserEvent> for App {
                     }
                 }
 
-                if req.panel_toggle { self.panel_open = !cur_panel_open; }
+                if req.panel_toggle {
+                    self.panel_open = !cur_panel_open;
+                    if self.panel_open {
+                        self.sequencer_panel_open = false;
+                    }
+                }
+                if req.sequencer_panel_toggle {
+                    self.sequencer_panel_open = !cur_sequencer_panel_open;
+                    if self.sequencer_panel_open {
+                        self.panel_open = false;
+                    }
+                }
                 if req.keymap_toggle { self.show_keymap = !cur_show_keymap; }
                 if req.mode_info_toggle { self.show_mode_info = !cur_show_mode_info; }
                 if req.fb_auto_toggle {
@@ -2712,6 +3220,12 @@ impl ApplicationHandler<UserEvent> for App {
                 }
 
                 if let Some(rm) = req.render_mode { self.render_mode = rm; }
+                if req.auto_rotate_toggle { self.auto_rotate = !auto_rotate; }
+                if let Some(n) = req.supercell {
+                    if let Some(gpu2) = &mut self.gpu {
+                        gpu2.set_supercell(n);
+                    }
+                }
                 if req.kpath_toggle {
                     self.kpath_active = !cur_kpath_active;
                     if self.kpath_active {
@@ -2928,11 +3442,9 @@ impl ApplicationHandler<UserEvent> for App {
                 if let Some(i) = req.seq_step_curve_cycle {
                     if let Some(s) = self.sequencer.steps.get_mut(i) {
                         s.curve_override = match s.curve_override {
-                            None                          => Some(TranCurve::Linear),
-                            Some(TranCurve::Linear)       => Some(TranCurve::EaseInOut),
-                            Some(TranCurve::EaseInOut)    => Some(TranCurve::Snap),
-                            Some(TranCurve::Snap)         => Some(TranCurve::Bounce),
-                            Some(TranCurve::Bounce)       => None,
+                            None            => Some(TranCurve::Linear),
+                            Some(c) if c == TranCurve::Over => None,
+                            Some(c)         => Some(c.next()),
                         };
                     }
                 }
@@ -2940,6 +3452,18 @@ impl ApplicationHandler<UserEvent> for App {
                     if let Some(s) = self.sequencer.steps.get_mut(i) {
                         s.prob = v.clamp(0.0, 1.0);
                     }
+                }
+                if let Some(i) = req.seq_step_cond_cycle {
+                    if let Some(s) = self.sequencer.steps.get_mut(i) {
+                        s.cond = cond_next(s.cond);
+                        s.visits = 0;
+                    }
+                }
+                if let Some(v) = req.seq_morph {
+                    self.sequencer.morph = v.clamp(0.05, 1.0);
+                }
+                if let Some(v) = req.seq_drift {
+                    self.sequencer.drift = v.clamp(0.0, 1.0);
                 }
                 if req.fb_reset {
                     if let Some(gpu) = &mut self.gpu { gpu.fb_clear = true; }
@@ -2967,12 +3491,7 @@ impl ApplicationHandler<UserEvent> for App {
                     }
                     #[cfg(not(target_arch = "wasm32"))]
                     if let Some(gpu2) = &mut self.gpu {
-                        let png = gpu2.screenshot_field(&field_params_uniform);
-                        let path = format!("crystal-viz-{}.png", chrono_stamp());
-                        match std::fs::write(&path, &png) {
-                            Ok(_)  => log::info!("Saved screenshot → {path}"),
-                            Err(e) => log::error!("Screenshot save failed: {e}"),
-                        }
+                        gpu2.request_screenshot(format!("crystal-viz-{}.png", chrono_stamp()));
                     }
                 }
             }
@@ -3366,6 +3885,9 @@ mod seq_tests {
             pp_dir: 1, rng_seed: 0x9E3779B9,
             steps,
             from_params,
+            // Legacy semantics for the existing invariants: wall-to-wall
+            // glide, no drift lane. Dedicated tests cover morph/drift.
+            morph: 1.0, drift: 0.0, clock: 0.0,
         }
     }
 
@@ -3778,6 +4300,122 @@ mod seq_tests {
         assert!(r.is_none(), "capture must refuse beyond 32 steps");
         assert_eq!(seq.steps.len(), 32);
     }
+
+    // ── Morph window ─────────────────────────────────────────────────────
+    // After the morph fraction elapses, the step must HOLD its destination —
+    // the articulation that separates trig-style steps from a constant glide.
+    #[test]
+    fn morph_holds_destination_after_window() {
+        let mut seq = make_seq(4);
+        seq.morph = 0.5;
+        seq.manual_step(1);                      // cur=1, from=arrived step 0
+        seq.step_timer = seq.step_dur * 0.75;    // past the 50 % morph point
+        let got = seq.current_params();
+        let want = &seq.steps[1].params;
+        assert!((got.mp[crate::MP_KSCALE] - want.mp[crate::MP_KSCALE]).abs() < 1e-4,
+            "kscale must sit exactly on the destination during the hold");
+        assert!((got.mp[crate::MP_W_BAND] - want.mp[crate::MP_W_BAND]).abs() < 1e-4);
+    }
+
+    #[test]
+    fn morph_full_matches_classic_glide() {
+        let mut a = make_seq(4);
+        let mut b = make_seq(4);
+        a.morph = 1.0;
+        b.morph = 1.0;
+        a.manual_step(1); b.manual_step(1);
+        a.step_timer = a.step_dur * 0.5;
+        b.step_timer = b.step_dur * 0.5;
+        let pa = a.current_params();
+        let pb = b.current_params();
+        assert!((pa.mp[crate::MP_KSCALE] - pb.mp[crate::MP_KSCALE]).abs() < 1e-6);
+        // And mid-glide is strictly between the endpoints.
+        let from = a.from_params.mp[crate::MP_KSCALE];
+        let to   = a.steps[1].params.mp[crate::MP_KSCALE];
+        let mid  = pa.mp[crate::MP_KSCALE];
+        assert!((mid - from) * (to - mid) > 0.0, "mid-glide must sit between endpoints");
+    }
+
+    // ── Trig conditions ──────────────────────────────────────────────────
+    #[test]
+    fn cond_one_of_two_plays_alternate_visits() {
+        assert!(cond_passes((1, 2), 1));
+        assert!(!cond_passes((1, 2), 2));
+        assert!(cond_passes((1, 2), 3));
+        assert!(!cond_passes((2, 2), 1));
+        assert!(cond_passes((2, 2), 2));
+        assert!(cond_passes((1, 1), 7), "(1,1) must always pass");
+    }
+
+    #[test]
+    fn advance_skips_condition_failed_step() {
+        let mut seq = make_seq(3);
+        seq.manual = false;
+        // Step 1 plays only on its 2nd visit → the first pass must skip to 2.
+        seq.steps[1].cond = (2, 2);
+        seq.advance_next();
+        assert_eq!(seq.cur, 2, "first visit to a (2,2) step must skip it");
+        // Wrap around: 2 → 0 → second visit of 1 passes.
+        seq.advance_next();
+        assert_eq!(seq.cur, 0);
+        seq.advance_next();
+        assert_eq!(seq.cur, 1, "second visit must play the (2,2) step");
+    }
+
+    // ── Drift lane ───────────────────────────────────────────────────────
+    #[test]
+    fn drift_moves_but_stays_bounded() {
+        let mut seq = make_seq(2);
+        seq.morph = 1.0;
+        seq.step_timer = seq.step_dur; // fully arrived: lerp t = 1
+        seq.drift = 0.0;
+        let still = seq.current_params();
+        seq.drift = 1.0;
+        seq.clock = 7.3; // arbitrary point on the drift clock
+        let alive = seq.current_params();
+        // It moves…
+        let moved = (alive.mp[crate::MP_ZOOM] - still.mp[crate::MP_ZOOM]).abs() > 1e-6
+            || (alive.mp[crate::MP_COLOR_SHIFT] - still.mp[crate::MP_COLOR_SHIFT]).abs() > 1e-6;
+        assert!(moved, "drift at full depth must actually move the image");
+        // …but stays near the base: bounded micro-motion, not chaos.
+        assert!((alive.mp[crate::MP_ZOOM] - still.mp[crate::MP_ZOOM]).abs()
+            <= still.mp[crate::MP_ZOOM] * 0.05 + 1e-4,
+            "zoom drift must stay within ~5 %");
+        assert!((alive.mp[crate::MP_KSCALE] - still.mp[crate::MP_KSCALE]).abs()
+            <= still.mp[crate::MP_KSCALE] * 0.04 + 1e-4,
+            "kscale drift must stay within ~3 %");
+    }
+
+    #[test]
+    fn drift_zero_is_exact_passthrough() {
+        let mut seq = make_seq(2);
+        seq.step_timer = seq.step_dur;
+        seq.drift = 0.0;
+        seq.clock = 123.4;
+        let got = seq.current_params();
+        let want = &seq.steps[0].params;
+        assert!((got.mp[crate::MP_ZOOM] - want.mp[crate::MP_ZOOM]).abs() < 1e-6);
+        assert!((got.mp[crate::MP_COLOR_SHIFT] - want.mp[crate::MP_COLOR_SHIFT]).abs() < 1e-6);
+    }
+
+    // ── Curves ───────────────────────────────────────────────────────────
+    #[test]
+    fn curves_settle_exactly_at_endpoints() {
+        for c in [TranCurve::Linear, TranCurve::EaseInOut, TranCurve::Silk,
+                  TranCurve::Snap, TranCurve::Bounce, TranCurve::Over] {
+            assert!((c.apply(0.0)).abs() < 1e-4, "{} must start at 0", c.label());
+            assert!((c.apply(1.0) - 1.0).abs() < 1e-4, "{} must end at 1", c.label());
+        }
+    }
+
+    #[test]
+    fn over_curve_overshoots_then_settles() {
+        let peak = (0..100)
+            .map(|i| TranCurve::Over.apply(i as f32 / 99.0))
+            .fold(f32::MIN, f32::max);
+        assert!(peak > 1.02 && peak < 1.25,
+            "OVER must overshoot a bounded amount, got peak {peak}");
+    }
 }
 
 // ── Tests for parameter routing, LFO, lerp_fp, and fb_auto ───────────────
@@ -3894,7 +4532,7 @@ mod routing_tests {
         fp.mp[crate::MP_FIELD_MIX]   = 0.6;
         fp.mp[crate::MP_ISO_LEVEL]   = 0.31;
         fp.mp[crate::MP_COLOR_SHIFT] = 0.77;
-        let lfo = LfoParams::default();
+        let lfo = LfoParams::unrouted();
         let mic = MicParams::default();
         let bands = audio::AudioBands::default();
         let eff = apply_modulation(&fp, &lfo, &mic, &bands, 1.23);
@@ -4044,7 +4682,8 @@ mod routing_tests {
         let fp = FieldParams::default();
         let mic = MicParams::default();
         let bands = audio::AudioBands::default();
-        let mut lfo = LfoParams::default();
+        let mut lfo = LfoParams::unrouted();
+        lfo.flux = 1.0; // generous budget: this test is about routing, not the cap
         // LFO A: square at +1 → bumps kscale upward; LFO B: square at -1 → pulls speed down.
         lfo.a = LfoEngine { rate: 0.5, depth: 1.0, wave: LfoWave::Square, phase: 0.0 };
         lfo.b = LfoEngine { rate: 0.5, depth: 1.0, wave: LfoWave::Square, phase: 0.5 };
@@ -4070,6 +4709,60 @@ mod routing_tests {
         let eff = apply_modulation(&fp, &lfo, &mic, &bands, 0.0);
         assert!((eff.mp[crate::MP_KSCALE] - 2.0).abs() < 1e-5,
             "LfoSrc::Off must not change the param");
+    }
+
+    // ── Flux budget ──────────────────────────────────────────────────────
+    // With many maxed routes, total requested modulation must be scaled down
+    // to the budget — no single frame can move the image more than the cap.
+    #[test]
+    fn flux_budget_scales_down_over_asking_routes() {
+        let fp = FieldParams::default();
+        let mic = MicParams::default();
+        let bands = audio::AudioBands::default();
+        let mut lfo = LfoParams::unrouted();
+        lfo.a = LfoEngine { rate: 0.5, depth: 1.0, wave: LfoWave::Square, phase: 0.0 };
+        lfo.mp = [LfoSrc::A; MP_SLOTS]; // 16 routes × depth 1.0 = 16 units requested
+        lfo.flux = 0.5;                 // budget = 1.5 units
+        let (eff, load) = apply_modulation_ex(&fp, &lfo, &mic, &bands, 0.0);
+        assert!(load > 1.0, "16 maxed routes must overload a 0.5 flux budget, got {load}");
+        // kscale asked for a full-range swing (+4.9) but the budget admits
+        // only 1.5/16 of it per route ≈ 0.46 — far from the 5.0 rail.
+        let delta = eff.mp[crate::MP_KSCALE] - fp.mp[crate::MP_KSCALE];
+        assert!(delta > 0.0, "scaled route must still move in its direction");
+        assert!(delta < 1.0, "budget must prevent the full-range jump, got +{delta}");
+    }
+
+    #[test]
+    fn flux_budget_leaves_underbudget_routes_untouched() {
+        let fp = FieldParams::default();
+        let mic = MicParams::default();
+        let bands = audio::AudioBands::default();
+        let mut lfo = LfoParams::unrouted();
+        lfo.a = LfoEngine { rate: 0.5, depth: 0.2, wave: LfoWave::Square, phase: 0.0 };
+        lfo.mp[crate::MP_KSCALE] = LfoSrc::A; // one small route: 0.2 units
+        lfo.flux = 0.5;                       // budget 1.5 — plenty
+        let (eff, load) = apply_modulation_ex(&fp, &lfo, &mic, &bands, 0.0);
+        assert!(load < 1.0, "a single 0.2-unit route must not saturate, got {load}");
+        let (lo, hi) = slot_range(fp.mode, crate::MP_KSCALE);
+        let want = fp.mp[crate::MP_KSCALE] + 0.2 * (hi - lo);
+        assert!((eff.mp[crate::MP_KSCALE] - want.min(hi)).abs() < 1e-4,
+            "under budget the delta must be applied unscaled");
+    }
+
+    #[test]
+    fn flux_zero_freezes_all_modulation() {
+        let fp = FieldParams::default();
+        let mic = MicParams::default();
+        let bands = audio::AudioBands::default();
+        let mut lfo = LfoParams::unrouted();
+        lfo.a = LfoEngine { rate: 0.5, depth: 1.0, wave: LfoWave::Square, phase: 0.0 };
+        lfo.mp = [LfoSrc::A; MP_SLOTS];
+        lfo.flux = 0.0;
+        let eff = apply_modulation(&fp, &lfo, &mic, &bands, 0.0);
+        for i in 0..MP_SLOTS {
+            assert!((eff.mp[i] - fp.mp[i]).abs() < 1e-5,
+                "flux 0 must freeze slot {i}");
+        }
     }
 
     // ── tour_lfo_preset wiring ────────────────────────────────────────────

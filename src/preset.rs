@@ -29,10 +29,19 @@ pub struct Preset {
     pub trip_level:  TripLevel,
     pub lfo:         LfoParams,
     pub steps:       Vec<SeqStep>,
+    /// Morph window (v2): fraction of each step spent transitioning.
+    /// Old presets default to 1.0 — the classic wall-to-wall glide.
+    #[serde(default = "morph_default")]
+    pub morph:       f32,
+    /// Drift lane depth (v2). Old presets default to 0 (off).
+    #[serde(default)]
+    pub drift:       f32,
 }
 
+fn morph_default() -> f32 { 1.0 }
+
 impl Preset {
-    pub const VERSION: u32 = 1;
+    pub const VERSION: u32 = 2;
 
     /// Snapshot the current app state (sequencer + LFO + trip level + name).
     pub fn from_state(name: &str, seq: &Sequencer, lfo: &LfoParams, level: TripLevel) -> Self {
@@ -45,6 +54,8 @@ impl Preset {
             trip_level: level,
             lfo:        lfo.clone(),
             steps:      seq.steps.clone(),
+            morph:      seq.morph,
+            drift:      seq.drift,
         }
     }
 
@@ -61,6 +72,9 @@ impl Preset {
         seq.play_mode  = self.play_mode;
         seq.pp_dir     = 1;
         seq.selected   = None;
+        seq.morph      = self.morph;
+        seq.drift      = self.drift;
+        for s in &mut seq.steps { s.visits = 0; }
         *lfo   = self.lfo.clone();
         *level = self.trip_level;
     }
@@ -128,14 +142,20 @@ pub fn random_preset(seed: u32) -> Preset {
         s.prob    = r.pick(&[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.85, 0.6]);
         s.muted   = r.unit() < 0.02;
         s.curve_override = if r.unit() < 0.25 {
-            Some(r.pick(&[TranCurve::Linear, TranCurve::EaseInOut, TranCurve::Snap, TranCurve::Bounce]))
+            Some(r.pick(&[TranCurve::Linear, TranCurve::EaseInOut, TranCurve::Silk,
+                          TranCurve::Snap, TranCurve::Bounce, TranCurve::Over]))
         } else { None };
+        // Elektron cycle conditions on a small minority — rhythmic variation
+        // across pattern passes without routinely hollowing the loop out.
+        s.cond = if r.unit() < 0.15 {
+            r.pick(&[(1u8, 2u8), (2, 2), (1, 3), (1, 4)])
+        } else { (1, 1) };
         steps.push(s);
     }
 
     let step_dur  = r.range(0.6, 6.0);
-    let curve     = r.pick(&[TranCurve::Linear, TranCurve::EaseInOut, TranCurve::EaseInOut,
-                             TranCurve::EaseInOut, TranCurve::Snap, TranCurve::Bounce]);
+    let curve     = r.pick(&[TranCurve::Linear, TranCurve::EaseInOut, TranCurve::Silk,
+                             TranCurve::Silk, TranCurve::Snap, TranCurve::Bounce, TranCurve::Over]);
     let play_mode = r.pick(&[SeqPlayMode::Forward, SeqPlayMode::Forward, SeqPlayMode::Forward,
                              SeqPlayMode::Reverse, SeqPlayMode::PingPong, SeqPlayMode::Random]);
 
@@ -178,14 +198,18 @@ pub fn random_preset(seed: u32) -> Preset {
     maybe_reroute(&mut lfo.fb_color_shift, &mut r);
     maybe_reroute(&mut lfo.fb_saturation, &mut r);
     maybe_reroute(&mut lfo.fb_fold_angle, &mut r);
+    // Flux budget: mid-range so dense routing stays bounded but audible.
+    lfo.flux = r.range(0.30, 0.65);
 
     let _ = bz_hash; // keep import warning-free if unused below
 
+    let morph = r.range(0.35, 1.0);
+    let drift = r.range(0.25, 0.75);
     let name = format!("RND-{seed:08x}");
     Preset {
         version: Preset::VERSION,
         name, step_dur, curve, play_mode, trip_level,
-        lfo, steps,
+        lfo, steps, morph, drift,
     }
 }
 
@@ -247,6 +271,40 @@ mod tests {
     }
 
     #[test]
+    fn roundtrip_preserves_v2_fields() {
+        let mut p = random_preset(777);
+        p.morph = 0.42;
+        p.drift = 0.63;
+        p.lfo.flux = 0.71;
+        p.steps[0].cond = (2, 2);
+        let q = Preset::from_json(&p.to_pretty_json()).expect("parse own output");
+        assert!((q.morph - 0.42).abs() < 1e-5);
+        assert!((q.drift - 0.63).abs() < 1e-5);
+        assert!((q.lfo.flux - 0.71).abs() < 1e-5);
+        assert_eq!(q.steps[0].cond, (2, 2));
+    }
+
+    #[test]
+    fn v1_preset_without_new_fields_gets_defaults() {
+        // Simulate a v1 file: serialize, strip the new keys, reparse.
+        let p = random_preset(31337);
+        let mut v: serde_json::Value = serde_json::from_str(&p.to_pretty_json()).unwrap();
+        let obj = v.as_object_mut().unwrap();
+        obj.remove("morph");
+        obj.remove("drift");
+        obj["version"] = 1.into();
+        obj["lfo"].as_object_mut().unwrap().remove("flux");
+        for s in obj["steps"].as_array_mut().unwrap() {
+            s.as_object_mut().unwrap().remove("cond");
+        }
+        let q = Preset::from_json(&v.to_string()).expect("v1 shape must parse");
+        assert!((q.morph - 1.0).abs() < 1e-5, "v1 defaults to wall-to-wall glide");
+        assert!(q.drift.abs() < 1e-5,         "v1 defaults to drift off");
+        assert!((q.lfo.flux - 0.5).abs() < 1e-5, "flux defaults to 0.5");
+        assert!(q.steps.iter().all(|s| s.cond == (1, 1)), "cond defaults to always");
+    }
+
+    #[test]
     fn rejects_future_version() {
         let mut p = random_preset(7);
         p.version = Preset::VERSION + 1;
@@ -304,6 +362,7 @@ mod tests {
             for s in &mut p.steps {
                 s.muted = false;
                 s.prob  = 1.0;
+                s.cond  = (1, 1);
             }
             let path = format!("presets/{slug}.preset.json");
             std::fs::write(&path, p.to_pretty_json())
@@ -336,6 +395,8 @@ mod tests {
                     "'{name}' step {i} is muted — bundled presets must play every step");
                 assert!((s.prob - 1.0).abs() < 1e-6,
                     "'{name}' step {i} has prob={} — bundles must use prob=1.0", s.prob);
+                assert_eq!(s.cond, (1, 1),
+                    "'{name}' step {i} has cond {:?} — bundles must play every pass", s.cond);
             }
         }
     }
