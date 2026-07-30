@@ -265,6 +265,45 @@ const KURAMOTO_PARAMS: &[ParamDesc] = &[
     ParamDesc::new(11, "seed", 0.0, 1.0, 0.5),
 ];
 
+// 37 THERMAL DIFFUSE — reciprocal-space one-phonon scattering proxy.
+const THERMAL_DIFFUSE_PARAMS: &[ParamDesc] = &[
+    P_KSCALE, P_SPEED, P_ZOOM, p(2, "temperature", 0.55),
+    p(3, "soft_mode", 0.5), p(4, "hue", 0.0),
+    p(6, "longitud", 1.0), p(7, "diffuse", 0.6), p(8, "sharpness", 0.4),
+];
+// 38 LAUE CONSTELLATION — polychromatic Ewald-shell spot detector.
+const LAUE_PARAMS: &[ParamDesc] = &[
+    P_KSCALE, P_SPEED, P_ZOOM, p(2, "bandwidth", 0.55),
+    p(3, "mosaicity", 0.5), p(4, "hue", 0.0),
+    p(6, "spot_gain", 1.0), p(7, "streaks", 0.6), p(8, "exposure", 0.4),
+];
+
+// 39 BRAGG DIVE — crystal-seeded volumetric morphing octagram tunnel.
+const BRAGG_DIVE_PARAMS: &[ParamDesc] = &[
+    ParamDesc::new(0, "cell_scl", 0.35, 3.0, 1.4),
+    ParamDesc::new(1, "speed", 0.0, 2.0, 0.3),
+    ParamDesc::new(2, "morph", 0.0, 1.0, 0.55),
+    ParamDesc::new(3, "beam_w", 0.0, 1.0, 0.5),
+    ParamDesc::new(4, "hue", 0.0, 1.0, 0.0),
+    ParamDesc::new(5, "fov", 0.2, 5.0, 1.0),
+    ParamDesc::new(6, "crys_tw", 0.0, 2.0, 1.0),
+    ParamDesc::new(7, "glow", 0.0, 2.0, 0.6),
+    ParamDesc::new(8, "depth", 0.0, 2.0, 0.4),
+];
+
+// 40 CRYSTAL CASCADE — recursive reciprocal-field fractal.
+const CRYSTAL_CASCADE_PARAMS: &[ParamDesc] = &[
+    ParamDesc::new(0, "inflation", 1.15, 2.45, 1.618),
+    ParamDesc::new(1, "speed", 0.0, 2.0, 0.3),
+    ParamDesc::new(2, "warp", 0.0, 1.0, 0.68),
+    ParamDesc::new(3, "sharpness", 3.0, 24.0, 12.0),
+    ParamDesc::new(4, "hue", 0.0, 1.0, 0.0),
+    ParamDesc::new(5, "zoom", 0.2, 5.0, 1.0),
+    ParamDesc::new(6, "g_star", 4.0, 16.0, 12.0),
+    ParamDesc::new(7, "phase_mix", 0.0, 2.0, 0.85),
+    ParamDesc::new(8, "depth", 3.0, 7.0, 6.0),
+];
+
 pub fn mode_params(mode: u32) -> &'static [ParamDesc] {
     match mode {
         0  => ISO_PARAMS,
@@ -304,6 +343,10 @@ pub fn mode_params(mode: u32) -> &'static [ParamDesc] {
         34 => STRAIN_FIELD_PARAMS,
         35 => SPIN_DENSITY_PARAMS,
         36 => KURAMOTO_PARAMS,
+        37 => THERMAL_DIFFUSE_PARAMS,
+        38 => LAUE_PARAMS,
+        39 => BRAGG_DIVE_PARAMS,
+        40 => CRYSTAL_CASCADE_PARAMS,
         _  => CANONICAL,
     }
 }
@@ -329,16 +372,18 @@ pub enum ModeArea {
     Materials,
     Classical,
     Fields,
+    Fractal,
 }
 
 impl ModeArea {
-    pub const ALL: [ModeArea; 6] = [
+    pub const ALL: [ModeArea; 7] = [
         ModeArea::Crystal,
         ModeArea::Reciprocal,
         ModeArea::Electronic,
         ModeArea::Materials,
         ModeArea::Classical,
         ModeArea::Fields,
+        ModeArea::Fractal,
     ];
 
     pub const fn label(self) -> &'static str {
@@ -349,6 +394,7 @@ impl ModeArea {
             ModeArea::Materials => "Materials",
             ModeArea::Classical => "Classical",
             ModeArea::Fields => "Fields",
+            ModeArea::Fractal => "Fractal",
         }
     }
 
@@ -360,6 +406,7 @@ impl ModeArea {
             ModeArea::Materials => "Materials & Order",
             ModeArea::Classical => "Classical Continuum",
             ModeArea::Fields => "Fields & Relativity",
+            ModeArea::Fractal => "Crystal Fractals",
         }
     }
 }
@@ -367,18 +414,19 @@ impl ModeArea {
 impl ModeInfo {
     pub const fn area(&self) -> ModeArea {
         match self.idx {
-            0..=9 | 17 | 31 => ModeArea::Crystal,
-            12 => ModeArea::Reciprocal,
+            0..=9 | 17 | 31 | 39 => ModeArea::Crystal,
+            12 | 37 | 38 => ModeArea::Reciprocal,
             10 | 14 | 15 | 20 | 21 | 22 | 24 | 25 => ModeArea::Electronic,
             11 | 13 | 16 | 18 | 19 | 23 | 32 | 33 | 34 | 35 => ModeArea::Materials,
             27 | 28 | 36 => ModeArea::Classical,
             26 | 29 | 30 => ModeArea::Fields,
+            40 => ModeArea::Fractal,
             _ => ModeArea::Crystal,
         }
     }
 }
 
-pub const MODES: [ModeInfo; 37] = [
+pub const MODES: [ModeInfo; 41] = [
     ModeInfo {
         idx: 0, name: "3D ISO",
         tagline: "Ray-marched isosurface of the crystal-field scalar.",
@@ -753,6 +801,47 @@ pub const MODES: [ModeInfo; 37] = [
         notes: "A population of Kuramoto oscillators is released from a random seed blended with the crystal's reciprocal-lattice data, biased toward a class, and integrated by Euler to a snapshot time T — Unconventional AI's Un-0 image model — yielding the synchronisation order parameter r·e^{iψ}. The readout then treats every pixel as an oscillator entrained by that mean field (Adler equation, solved closed-form): its initial phase is the argument of the complex crystal field ψ_c = cf₀ + i·cf₁, whose zeros are genuine phase vortices. Pixels whose crystal detuning ω(x) is small vs the drive K·r lock to the class-warped mean phase; the rest keep drifting — locked and drifting regions coexisting is a chimera state. The look borrows three sibling modes: PHASE (cyclic domain colour + bright vortex cores), SPIN TEXTURE (oriented oscillator 'hands' — the metronome arms, golden when locked), and NEMATIC (magenta defect-core glow). coupling = K, class_bias = Kc, class picks the template (6 classes), crys_init weights the crystalline structure, hands/cores tune the glyph and defect overlays, seed re-rolls the generation. Each 6 s cycle re-seeds and replays order emerging from chaos. Hold the mouse to pick the class by cursor-x.",
     },
 
+    ModeInfo {
+        idx: 37, name: "THERMAL DIFFUSE",
+        tagline: "One-phonon diffuse halos around the loaded reciprocal lattice.",
+        equations: &[
+            "I₁(Q) ∝ Σᵥ (nᵥ + ½)·|Q·eᵥ|² / ωᵥ",
+            "soft mode: ω(q) ↓  →  diffuse halo ↑",
+            "Bragg centres: Q = Gᵢ  (from loaded crystal)",
+        ],
+        notes: "A crystal-specific reciprocal detector: every halo is anchored to a loaded G-vector. temperature raises the phonon population; soft_mode lowers the branch energy and broadens/brightens its scattering; longitud changes the longitudinal/transverse anisotropy proxy; diffuse and sharpness balance halo against Bragg core. This is a phenomenological one-phonon model, not a substitute for material-specific DFPT eigenvectors.",
+    },
+    ModeInfo {
+        idx: 38, name: "LAUE CONSTELLATION",
+        tagline: "Polychromatic Ewald-shell spots from the loaded reciprocal lattice.",
+        equations: &[
+            "k_out = k_in + Gᵢ",
+            "|k_out| = |k_in|   (Bragg / Ewald condition)",
+            "I ∝ |F(Gᵢ)|² · exp[−Δk² / σ_E²]",
+        ],
+        notes: "A moving Laue-style diffraction detector. Reciprocal vectors become discrete spots whenever their rotated k_out lands inside the finite energy band. bandwidth admits more Ewald shells; mosaicity controls spot width; spot_gain, streaks, and exposure shape the detector response. Mouse-drag orbits the crystal; every crystal produces its own symmetry constellation.",
+    },
+    ModeInfo {
+        idx: 39, name: "BRAGG DIVE",
+        tagline: "Volumetric flight through crystal-seeded morphing octagram cells.",
+        equations: &[
+            "cell: p ↦ mod(p, L),    gate = minᵢ sdBox(Rᵢp, bᵢ)",
+            "m(z,t) = ½ + ½ sin(ωt − 0.74 z + φ_G)",
+            "d = mix(d_octagram, d_petals, smoothstep(m))",
+            "I(ray) = Σₛ exp(−κ |d(pₛ)|) · palette(cellₛ)",
+        ],
+        notes: "A true emissive-volume dive rather than LATTICE WALK's opaque isosurface. Each repeating cell is an open octagram gate that continuously splits into four petals; a travelling morph wave opens cells ahead of the camera. The first loaded reciprocal vector sets gate orientation and roll, so each crystal produces a distinct tunnel. morph biases the topology cycle, beam_w changes beam thickness, crys_tw scales crystal orientation, glow controls emission, depth extends the sampled corridor, fov changes the camera lens, and mouse-drag looks around.",
+    },
+    ModeInfo {
+        idx: 40, name: "CRYSTAL CASCADE",
+        tagline: "Recursive reciprocal-field fractal seeded by the loaded crystal.",
+        equations: &[
+            "ψₙ(x) = Σⱼ |F(Gⱼ)| · exp[i Gⱼ·Tₙ(x) + iφⱼ]",
+            "Tₙ₊₁ = R_G ( inflation·|Tₙ| + warp·ψₙ )",
+            "I(x) = Σₙ orbit_trap(|ψₙ|) / (1 + 0.28n)",
+        ],
+        notes: "A crystal-specific feedback-free fractal. Each recursion level samples a different stride through the strongest loaded G-vectors, turns the resulting complex field into luminous zero sets and shells, then folds and inflates the domain for the next level. inflation controls self-similar scale, warp bends child levels with their parent field, sharpness tightens filaments, g_star chooses how many reciprocal vectors participate, phase_mix changes cross-level rotation, and depth adds generations. Hold the mouse to relocate the recursion centre. Crystal morph, strain, and heterostructure changes flow through the same G-vector buffer, so they reshape the hierarchy rather than merely recolor it.",
+    },
 ];
 
 /// Static array of mode display names, derived from `MODES`. Kept as a `[&str;

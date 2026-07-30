@@ -1,9 +1,9 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "Total Madness",
   "step_dur": 0.7,
-  "curve": "EaseInOut",
-  "play_mode": "PingPong",
+  "curve": "Silk",
+  "play_mode": "Forward",
   "trip_level": 9,
   "lfo": {
     "a": {
@@ -46,12 +46,13 @@
     "fb_brightness": "A",
     "fb_inject": "A",
     "fb_fold_angle": "B",
-    "fb_motion_blur": "B"
+    "fb_motion_blur": "B",
+    "flux": 0.5
   },
   "steps": [
     {
       "params": {
-        "mode": 5,
+        "mode": 6,
         "mp": [
           0.87927914,
           0.2648133,
@@ -88,11 +89,15 @@
       "muted": false,
       "dur_mul": 2.0,
       "curve_override": null,
-      "prob": 1.0
+      "prob": 1.0,
+      "cond": [
+        1,
+        1
+      ]
     },
     {
       "params": {
-        "mode": 5,
+        "mode": 6,
         "mp": [
           0.87927914,
           0.2648133,
@@ -129,11 +134,15 @@
       "muted": false,
       "dur_mul": 2.0,
       "curve_override": null,
-      "prob": 1.0
+      "prob": 1.0,
+      "cond": [
+        1,
+        1
+      ]
     },
     {
       "params": {
-        "mode": 26,
+        "mode": 29,
         "mp": [
           2.9060767,
           1.1913494,
@@ -170,11 +179,15 @@
       "muted": false,
       "dur_mul": 2.0,
       "curve_override": null,
-      "prob": 1.0
+      "prob": 1.0,
+      "cond": [
+        1,
+        1
+      ]
     },
     {
       "params": {
-        "mode": 26,
+        "mode": 29,
         "mp": [
           2.9060767,
           1.1913494,
@@ -209,13 +222,62 @@
         "fb_motion_blur": 0.5990181
       },
       "muted": false,
-      "dur_mul": 1.5,
+      "dur_mul": 2.0,
       "curve_override": null,
-      "prob": 1.0
+      "prob": 1.0,
+      "cond": [
+        1,
+        1
+      ]
     },
     {
       "params": {
-        "mode": 26,
+        "mode": 29,
+        "mp": [
+          2.9060767,
+          1.1913494,
+          0.7445934,
+          0.720134,
+          0.7445934,
+          1.8147274,
+          1.4891868,
+          1.4891868,
+          1.9967269,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "fb_enabled": true,
+        "fb_mirror": 9,
+        "fb_zoom": 1.0198528,
+        "fb_offset_x": 0.019934537,
+        "fb_offset_y": 0.019934537,
+        "fb_rotation": 0.029901806,
+        "fb_decay": 0.9793781,
+        "fb_color_shift": 0.29901809,
+        "fb_inject": 0.99918175,
+        "fb_fold_angle": 0.9967269,
+        "fb_saturation": 1.2990181,
+        "fb_brightness": 1.1993454,
+        "fb_blend_mode": 3,
+        "fb_motion_blur": 0.5990181
+      },
+      "muted": false,
+      "dur_mul": 2.0,
+      "curve_override": null,
+      "prob": 1.0,
+      "cond": [
+        1,
+        1
+      ]
+    },
+    {
+      "params": {
+        "mode": 29,
         "mp": [
           2.9060767,
           1.1913494,
@@ -252,21 +314,25 @@
       "muted": false,
       "dur_mul": 1.0,
       "curve_override": null,
-      "prob": 1.0
+      "prob": 1.0,
+      "cond": [
+        1,
+        1
+      ]
     },
     {
       "params": {
-        "mode": 26,
+        "mode": 39,
         "mp": [
-          2.9060767,
-          1.1913494,
-          0.7445934,
-          0.720134,
-          0.7445934,
-          1.8147274,
-          1.4891868,
-          1.4891868,
+          3.794272,
+          1.5973815,
+          0.99836344,
+          0.9485271,
+          0.99836344,
+          2.2968905,
           1.9967269,
+          1.9967269,
+          1.6318914,
           0.0,
           0.0,
           0.0,
@@ -276,28 +342,32 @@
           0.0
         ],
         "fb_enabled": true,
-        "fb_mirror": 9,
-        "fb_zoom": 1.0198528,
-        "fb_offset_x": 0.019934537,
-        "fb_offset_y": 0.019934537,
-        "fb_rotation": 0.029901806,
-        "fb_decay": 0.9793781,
-        "fb_color_shift": 0.29901809,
-        "fb_inject": 0.99918175,
-        "fb_fold_angle": 0.9967269,
-        "fb_saturation": 1.2990181,
-        "fb_brightness": 1.1993454,
+        "fb_mirror": 6,
+        "fb_zoom": 1.0034351,
+        "fb_offset_x": 0.012637828,
+        "fb_offset_y": 0.012637828,
+        "fb_rotation": 0.018956741,
+        "fb_decay": 0.9100594,
+        "fb_color_shift": 0.18956742,
+        "fb_inject": 0.9079728,
+        "fb_fold_angle": 0.63189137,
+        "fb_saturation": 1.1895674,
+        "fb_brightness": 1.1263783,
         "fb_blend_mode": 3,
-        "fb_motion_blur": 0.5990181
+        "fb_motion_blur": 0.48956743
       },
       "muted": false,
-      "dur_mul": 2.0,
+      "dur_mul": 1.0,
       "curve_override": null,
-      "prob": 1.0
+      "prob": 1.0,
+      "cond": [
+        1,
+        1
+      ]
     },
     {
       "params": {
-        "mode": 35,
+        "mode": 39,
         "mp": [
           3.794272,
           1.5973815,
@@ -332,95 +402,62 @@
         "fb_motion_blur": 0.48956743
       },
       "muted": false,
-      "dur_mul": 2.0,
-      "curve_override": "EaseInOut",
-      "prob": 1.0
-    },
-    {
-      "params": {
-        "mode": 35,
-        "mp": [
-          3.794272,
-          1.5973815,
-          0.99836344,
-          0.9485271,
-          0.99836344,
-          2.2968905,
-          1.9967269,
-          1.9967269,
-          1.6318914,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0
-        ],
-        "fb_enabled": true,
-        "fb_mirror": 6,
-        "fb_zoom": 1.0034351,
-        "fb_offset_x": 0.012637828,
-        "fb_offset_y": 0.012637828,
-        "fb_rotation": 0.018956741,
-        "fb_decay": 0.9100594,
-        "fb_color_shift": 0.18956742,
-        "fb_inject": 0.9079728,
-        "fb_fold_angle": 0.63189137,
-        "fb_saturation": 1.1895674,
-        "fb_brightness": 1.1263783,
-        "fb_blend_mode": 3,
-        "fb_motion_blur": 0.48956743
-      },
-      "muted": false,
-      "dur_mul": 2.0,
-      "curve_override": "EaseInOut",
-      "prob": 1.0
-    },
-    {
-      "params": {
-        "mode": 35,
-        "mp": [
-          3.794272,
-          1.5973815,
-          0.99836344,
-          0.9485271,
-          0.99836344,
-          2.2968905,
-          1.9967269,
-          1.9967269,
-          1.6318914,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0
-        ],
-        "fb_enabled": true,
-        "fb_mirror": 6,
-        "fb_zoom": 1.0034351,
-        "fb_offset_x": 0.012637828,
-        "fb_offset_y": 0.012637828,
-        "fb_rotation": 0.018956741,
-        "fb_decay": 0.9100594,
-        "fb_color_shift": 0.18956742,
-        "fb_inject": 0.9079728,
-        "fb_fold_angle": 0.63189137,
-        "fb_saturation": 1.1895674,
-        "fb_brightness": 1.1263783,
-        "fb_blend_mode": 3,
-        "fb_motion_blur": 0.48956743
-      },
-      "muted": false,
-      "dur_mul": 2.0,
+      "dur_mul": 0.75,
       "curve_override": null,
-      "prob": 1.0
+      "prob": 1.0,
+      "cond": [
+        1,
+        1
+      ]
     },
     {
       "params": {
-        "mode": 29,
+        "mode": 39,
+        "mp": [
+          3.794272,
+          1.5973815,
+          0.99836344,
+          0.9485271,
+          0.99836344,
+          2.2968905,
+          1.9967269,
+          1.9967269,
+          1.6318914,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "fb_enabled": true,
+        "fb_mirror": 6,
+        "fb_zoom": 1.0034351,
+        "fb_offset_x": 0.012637828,
+        "fb_offset_y": 0.012637828,
+        "fb_rotation": 0.018956741,
+        "fb_decay": 0.9100594,
+        "fb_color_shift": 0.18956742,
+        "fb_inject": 0.9079728,
+        "fb_fold_angle": 0.63189137,
+        "fb_saturation": 1.1895674,
+        "fb_brightness": 1.1263783,
+        "fb_blend_mode": 3,
+        "fb_motion_blur": 0.48956743
+      },
+      "muted": false,
+      "dur_mul": 1.0,
+      "curve_override": "Silk",
+      "prob": 1.0,
+      "cond": [
+        1,
+        1
+      ]
+    },
+    {
+      "params": {
+        "mode": 32,
         "mp": [
           3.1558099,
           1.3055131,
@@ -456,8 +493,14 @@
       },
       "muted": false,
       "dur_mul": 1.0,
-      "curve_override": "Snap",
-      "prob": 1.0
+      "curve_override": "Over",
+      "prob": 1.0,
+      "cond": [
+        1,
+        1
+      ]
     }
-  ]
+  ],
+  "morph": 0.5529626,
+  "drift": 0.52992016
 }

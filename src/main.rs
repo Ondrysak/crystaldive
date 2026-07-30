@@ -17,7 +17,10 @@ mod midi;
 mod preset;
 use crystals::{all_crystals, all_groups, CrystalDef};
 use poscar::Crystal;
-use reciprocal::GpuField;
+use reciprocal::{
+    GpuField, GpuFieldMorph, GpuHeterostructure, HeterostructureParams,
+    ReciprocalDeformation, HETERO_ADD, HETERO_INTERFERENCE, HETERO_PRODUCT,
+};
 use renderer::{FieldUniform, GpuState};
 
 #[cfg(target_arch = "wasm32")]
@@ -58,11 +61,77 @@ pub fn default_mp() -> [f32; MP_SLOTS] {
     m
 }
 
+fn is_false(v: &bool) -> bool { !*v }
+fn is_zero_u16(v: &u16) -> bool { *v == 0 }
+fn is_zero_f32(v: &f32) -> bool { *v == 0.0 }
+fn is_zero_u32(v: &u32) -> bool { *v == 0 }
+fn one_f32() -> f32 { 1.0 }
+fn is_one_f32(v: &f32) -> bool { (*v - 1.0).abs() < f32::EPSILON }
+fn default_poisson() -> f32 { 0.28 }
+fn is_default_poisson(v: &f32) -> bool { (*v - default_poisson()).abs() < f32::EPSILON }
+fn default_wave_rate() -> f32 { 0.2 }
+fn is_default_wave_rate(v: &f32) -> bool { (*v - default_wave_rate()).abs() < f32::EPSILON }
+
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct FieldParams {
     pub mode: u32,
     #[serde(default = "default_mp")]
     pub mp: [f32; MP_SLOTS],
+    /// Continuous reciprocal-field interpolation between two catalog crystals.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub crystal_morph_enabled: bool,
+    #[serde(default, skip_serializing_if = "is_zero_u16")]
+    pub crystal_from: u16,
+    #[serde(default, skip_serializing_if = "is_zero_u16")]
+    pub crystal_to: u16,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub crystal_mix: f32,
+    // Global lattice deformation, applied after the selected material source.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub lattice_deform_enabled: bool,
+    #[serde(default = "one_f32", skip_serializing_if = "is_one_f32")]
+    pub deform_mix: f32,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub deform_hydro: f32,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub deform_x: f32,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub deform_y: f32,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub deform_z: f32,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub deform_xy: f32,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub deform_xz: f32,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub deform_yz: f32,
+    #[serde(default = "default_poisson", skip_serializing_if = "is_default_poisson")]
+    pub deform_poisson: f32,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub deform_wave: f32,
+    #[serde(default = "default_wave_rate", skip_serializing_if = "is_default_wave_rate")]
+    pub deform_wave_rate: f32,
+    // Two simultaneous reciprocal layers.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub hetero_enabled: bool,
+    #[serde(default, skip_serializing_if = "is_zero_u16")]
+    pub hetero_a: u16,
+    #[serde(default, skip_serializing_if = "is_zero_u16")]
+    pub hetero_b: u16,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub hetero_twist: f32,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub hetero_mismatch: f32,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub hetero_shift_x: f32,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub hetero_shift_y: f32,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub hetero_separation: f32,
+    #[serde(default = "one_f32", skip_serializing_if = "is_one_f32")]
+    pub hetero_coupling: f32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub hetero_combination: u32,
     // feedback
     pub fb_enabled: bool,
     pub fb_mirror: u32,
@@ -85,6 +154,32 @@ impl Default for FieldParams {
         Self {
             mode: 4,
             mp: default_mp(),
+            crystal_morph_enabled: false,
+            crystal_from: 0,
+            crystal_to: 0,
+            crystal_mix: 0.0,
+            lattice_deform_enabled: false,
+            deform_mix: 1.0,
+            deform_hydro: 0.0,
+            deform_x: 0.0,
+            deform_y: 0.0,
+            deform_z: 0.0,
+            deform_xy: 0.0,
+            deform_xz: 0.0,
+            deform_yz: 0.0,
+            deform_poisson: default_poisson(),
+            deform_wave: 0.0,
+            deform_wave_rate: default_wave_rate(),
+            hetero_enabled: false,
+            hetero_a: 0,
+            hetero_b: 0,
+            hetero_twist: 0.0,
+            hetero_mismatch: 0.0,
+            hetero_shift_x: 0.0,
+            hetero_shift_y: 0.0,
+            hetero_separation: 0.0,
+            hetero_coupling: 1.0,
+            hetero_combination: HETERO_ADD,
             fb_enabled: false,
             fb_mirror: 0,
             fb_zoom: 0.98,
@@ -729,6 +824,32 @@ fn lerp_fp(a: &FieldParams, b: &FieldParams, t: f32) -> FieldParams {
     FieldParams {
         mode: b.mode,
         mp,
+        crystal_morph_enabled: b.crystal_morph_enabled,
+        crystal_from: b.crystal_from,
+        crystal_to: b.crystal_to,
+        crystal_mix: l(a.crystal_mix, b.crystal_mix).clamp(0.0, 1.0),
+        lattice_deform_enabled: b.lattice_deform_enabled,
+        deform_mix: l(a.deform_mix, b.deform_mix).clamp(0.0, 1.0),
+        deform_hydro: l(a.deform_hydro, b.deform_hydro),
+        deform_x: l(a.deform_x, b.deform_x),
+        deform_y: l(a.deform_y, b.deform_y),
+        deform_z: l(a.deform_z, b.deform_z),
+        deform_xy: l(a.deform_xy, b.deform_xy),
+        deform_xz: l(a.deform_xz, b.deform_xz),
+        deform_yz: l(a.deform_yz, b.deform_yz),
+        deform_poisson: l(a.deform_poisson, b.deform_poisson).clamp(0.0, 0.49),
+        deform_wave: l(a.deform_wave, b.deform_wave).clamp(0.0, 1.0),
+        deform_wave_rate: l(a.deform_wave_rate, b.deform_wave_rate).max(0.0),
+        hetero_enabled: b.hetero_enabled,
+        hetero_a: b.hetero_a,
+        hetero_b: b.hetero_b,
+        hetero_twist: l(a.hetero_twist, b.hetero_twist),
+        hetero_mismatch: l(a.hetero_mismatch, b.hetero_mismatch),
+        hetero_shift_x: l(a.hetero_shift_x, b.hetero_shift_x),
+        hetero_shift_y: l(a.hetero_shift_y, b.hetero_shift_y),
+        hetero_separation: l(a.hetero_separation, b.hetero_separation),
+        hetero_coupling: l(a.hetero_coupling, b.hetero_coupling).clamp(0.0, 2.0),
+        hetero_combination: b.hetero_combination,
         fb_enabled: b.fb_enabled,
         fb_mirror: b.fb_mirror,
         fb_zoom: l(a.fb_zoom, b.fb_zoom),
@@ -1708,6 +1829,32 @@ fn apply_modulation_ex(
     let out = FieldParams {
         mode: fp.mode,
         mp,
+        crystal_morph_enabled: fp.crystal_morph_enabled,
+        crystal_from: fp.crystal_from,
+        crystal_to: fp.crystal_to,
+        crystal_mix: fp.crystal_mix,
+        lattice_deform_enabled: fp.lattice_deform_enabled,
+        deform_mix: fp.deform_mix,
+        deform_hydro: fp.deform_hydro,
+        deform_x: fp.deform_x,
+        deform_y: fp.deform_y,
+        deform_z: fp.deform_z,
+        deform_xy: fp.deform_xy,
+        deform_xz: fp.deform_xz,
+        deform_yz: fp.deform_yz,
+        deform_poisson: fp.deform_poisson,
+        deform_wave: fp.deform_wave,
+        deform_wave_rate: fp.deform_wave_rate,
+        hetero_enabled: fp.hetero_enabled,
+        hetero_a: fp.hetero_a,
+        hetero_b: fp.hetero_b,
+        hetero_twist: fp.hetero_twist,
+        hetero_mismatch: fp.hetero_mismatch,
+        hetero_shift_x: fp.hetero_shift_x,
+        hetero_shift_y: fp.hetero_shift_y,
+        hetero_separation: fp.hetero_separation,
+        hetero_coupling: fp.hetero_coupling,
+        hetero_combination: fp.hetero_combination,
         fb_enabled: fp.fb_enabled,
         fb_mirror: fp.fb_mirror,
         fb_blend_mode: fp.fb_blend_mode,
@@ -1987,13 +2134,7 @@ impl SceneTransition {
 }
 
 fn clone_gpu_field(field: &GpuField) -> GpuField {
-    GpuField {
-        gvecs: field.gvecs.clone(),
-        amps: field.amps.clone(),
-        phases: field.phases.clone(),
-        b_mat: field.b_mat,
-        count: field.count,
-    }
+    field.clone()
 }
 
 // ── App ───────────────────────────────────────────────────────────────────
@@ -2058,6 +2199,50 @@ struct UiReq {
     preset_load_path: Option<String>,
 }
 
+struct CrystalMorphCache {
+    from_idx: usize,
+    to_idx: usize,
+    morph: GpuFieldMorph,
+}
+
+impl CrystalMorphCache {
+    fn new(from_idx: usize, to_idx: usize, defs: &[&CrystalDef]) -> Self {
+        let mut from = GpuField::from_crystal(&defs[from_idx].to_crystal(), 3);
+        let mut to = GpuField::from_crystal(&defs[to_idx].to_crystal(), 3);
+        from.seed_kpoint([0.0; 3], 1.0);
+        to.seed_kpoint([0.0; 3], 1.0);
+        Self {
+            from_idx,
+            to_idx,
+            morph: GpuFieldMorph::new(&from, &to),
+        }
+    }
+
+    fn matches(&self, from_idx: usize, to_idx: usize) -> bool {
+        self.from_idx == from_idx && self.to_idx == to_idx
+    }
+}
+
+struct HeterostructureCache {
+    a_idx: usize,
+    b_idx: usize,
+    field: GpuHeterostructure,
+}
+
+impl HeterostructureCache {
+    fn new(a_idx: usize, b_idx: usize, defs: &[&CrystalDef]) -> Self {
+        let mut a = GpuField::from_crystal(&defs[a_idx].to_crystal(), 3);
+        let mut b = GpuField::from_crystal(&defs[b_idx].to_crystal(), 3);
+        a.seed_kpoint([0.0; 3], 1.0);
+        b.seed_kpoint([0.0; 3], 1.0);
+        Self { a_idx, b_idx, field: GpuHeterostructure::new(a, b) }
+    }
+
+    fn matches(&self, a_idx: usize, b_idx: usize) -> bool {
+        self.a_idx == a_idx && self.b_idx == b_idx
+    }
+}
+
 struct App {
     gpu: Option<GpuState>,
     #[cfg(target_arch = "wasm32")]
@@ -2083,6 +2268,10 @@ struct App {
     trip_level: TripLevel,
     sequencer: Sequencer,
     all_crystals: Vec<&'static CrystalDef>,
+    crystal_morph_cache: Option<CrystalMorphCache>,
+    crystal_morph_uploaded: bool,
+    heterostructure_cache: Option<HeterostructureCache>,
+    material_pack: Vec<f32>,
     scene_transition: SceneTransition,
 
     panel_open: bool,
@@ -2144,6 +2333,21 @@ impl App {
             std::env::args().any(|arg| arg == "--timeline" || arg == "--play");
         #[cfg(target_arch = "wasm32")]
         let sequencer_panel_open = false;
+        let mut field_params = FieldParams::default();
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Ok(mode) = std::env::var("CRYSTALVIZ_MODE") {
+            if let Some(idx) = MODES.iter().position(|info| {
+                info.name.eq_ignore_ascii_case(&mode)
+                    || info.idx.to_string() == mode
+            }) {
+                field_params.mode = idx as u32;
+                apply_mode_defaults(&mut field_params);
+            } else {
+                log::warn!("Unknown CRYSTALVIZ_MODE value: {mode}");
+            }
+        }
+        let mode_area = MODES[field_params.mode as usize].area();
+
         Self {
             gpu: None,
             start_crystal: crystal,
@@ -2155,7 +2359,7 @@ impl App {
             last_mouse: None,
             auto_rotate: true,
             render_mode,
-            field_params: FieldParams::default(),
+            field_params,
             mouse_norm: [0.5, 0.5],
             mouse_btn_down: false,
             kpath_active: false,
@@ -2165,6 +2369,10 @@ impl App {
             trip_level: TripLevel::default(),
             sequencer,
             all_crystals: all,
+            crystal_morph_cache: None,
+            crystal_morph_uploaded: false,
+            heterostructure_cache: None,
+            material_pack: vec![0.0; reciprocal::MAX_G * 4 * 2],
             scene_transition: SceneTransition::new(),
             panel_open: !sequencer_panel_open,
             sequencer_panel_open,
@@ -2176,7 +2384,7 @@ impl App {
             fb_auto: false,
             show_keymap: false,
             show_mode_info: false,
-            mode_area: MODES[FieldParams::default().mode as usize].area(),
+            mode_area,
             preset_editor_open: false,
             preset_editor_text: String::new(),
             preset_status: String::new(),
@@ -2453,13 +2661,7 @@ impl ApplicationHandler<UserEvent> for App {
                         self.tour
                             .begin_param_transition(old_params, self.trip_level.fade_dur());
                         self.tour.prev_crystal_idx = Some(old_idx);
-                        self.tour.prev_field = Some(GpuField {
-                            gvecs: gpu.gpu_field.gvecs.clone(),
-                            amps: gpu.gpu_field.amps.clone(),
-                            phases: gpu.gpu_field.phases.clone(),
-                            b_mat: gpu.gpu_field.b_mat,
-                            count: gpu.gpu_field.count,
-                        });
+                        self.tour.prev_field = Some(gpu.gpu_field.clone());
                         self.tour.crystal_idx = next_idx;
                         let def = self.all_crystals[next_idx];
                         let crystal = def.to_crystal();
@@ -2626,20 +2828,190 @@ impl ApplicationHandler<UserEvent> for App {
                 // Apply LFO + mic modulation to get effective values for this frame.
                 let (fp_eff, cur_flux_load) = apply_modulation_ex(&fp, &lfo, &mic, &cur_bands, t);
 
+                // Shared material pipeline. Heterostructure and crystal morph
+                // choose the reciprocal source; lattice deformation then acts
+                // on either source (or on the currently loaded crystal).
+                let hetero_active =
+                    fp_eff.hetero_enabled && self.all_crystals.len() > 1;
+                let morph_active =
+                    fp_eff.crystal_morph_enabled
+                        && !hetero_active
+                        && self.all_crystals.len() > 1;
+                let deform_active = fp_eff.lattice_deform_enabled;
+                let material_active = hetero_active || morph_active || deform_active;
+
+                let morph_from =
+                    (fp_eff.crystal_from as usize).min(self.all_crystals.len() - 1);
+                let morph_to =
+                    (fp_eff.crystal_to as usize).min(self.all_crystals.len() - 1);
+                let hetero_a =
+                    (fp_eff.hetero_a as usize).min(self.all_crystals.len() - 1);
+                let hetero_b =
+                    (fp_eff.hetero_b as usize).min(self.all_crystals.len() - 1);
+
+                let field_num_g = if material_active {
+                    let count = if hetero_active {
+                        let rebuild = self
+                            .heterostructure_cache
+                            .as_ref()
+                            .is_none_or(|cache| !cache.matches(hetero_a, hetero_b));
+                        if rebuild {
+                            self.heterostructure_cache = Some(HeterostructureCache::new(
+                                hetero_a,
+                                hetero_b,
+                                &self.all_crystals,
+                            ));
+                        }
+                        let cache = self.heterostructure_cache.as_ref().unwrap();
+                        cache.field.pack_into(
+                            HeterostructureParams {
+                                twist: fp_eff.hetero_twist.to_radians(),
+                                mismatch: fp_eff.hetero_mismatch.clamp(-0.45, 0.45),
+                                shift: [fp_eff.hetero_shift_x, fp_eff.hetero_shift_y],
+                                separation: fp_eff.hetero_separation,
+                                coupling: fp_eff.hetero_coupling,
+                                combination: fp_eff.hetero_combination,
+                            },
+                            &mut self.material_pack,
+                        )
+                    } else if morph_active {
+                        let rebuild = self
+                            .crystal_morph_cache
+                            .as_ref()
+                            .is_none_or(|cache| !cache.matches(morph_from, morph_to));
+                        if rebuild {
+                            self.crystal_morph_cache = Some(CrystalMorphCache::new(
+                                morph_from,
+                                morph_to,
+                                &self.all_crystals,
+                            ));
+                        }
+                        let cache = self.crystal_morph_cache.as_ref().unwrap();
+                        cache
+                            .morph
+                            .pack_into(fp_eff.crystal_mix, &mut self.material_pack);
+                        cache.morph.count()
+                    } else {
+                        gpu.gpu_field.pack_into(&mut self.material_pack);
+                        gpu.gpu_field.count
+                    };
+
+                    if deform_active {
+                        let wave = 1.0
+                            + fp_eff.deform_wave.clamp(0.0, 1.0)
+                                * (TAU * fp_eff.deform_wave_rate.max(0.0) * t).sin();
+                        let scale = fp_eff.deform_mix.clamp(0.0, 1.0) * wave;
+                        let nu = fp_eff.deform_poisson.clamp(0.0, 0.49);
+                        let x = fp_eff.deform_x;
+                        let y = fp_eff.deform_y;
+                        let z = fp_eff.deform_z;
+                        let _ = reciprocal::deform_pack_in_place(
+                            &mut self.material_pack,
+                            count,
+                            ReciprocalDeformation {
+                                xx: (fp_eff.deform_hydro + x - nu * (y + z)) * scale,
+                                yy: (fp_eff.deform_hydro + y - nu * (x + z)) * scale,
+                                zz: (fp_eff.deform_hydro + z - nu * (x + y)) * scale,
+                                xy: fp_eff.deform_xy * scale,
+                                xz: fp_eff.deform_xz * scale,
+                                yz: fp_eff.deform_yz * scale,
+                            },
+                        );
+                    }
+                    gpu.upload_field_pack(&self.material_pack);
+                    self.crystal_morph_uploaded = true;
+                    count as u32
+                } else {
+                    if self.crystal_morph_uploaded {
+                        gpu.update_field();
+                        self.crystal_morph_uploaded = false;
+                    }
+                    gpu.gpu_field.count as u32
+                };
+
+                let cur_crystal_name = if hetero_active {
+                    format!(
+                        "{} ⊕ {}  {:.1}°",
+                        self.all_crystals[hetero_a].name,
+                        self.all_crystals[hetero_b].name,
+                        fp_eff.hetero_twist,
+                    )
+                } else if morph_active {
+                    format!(
+                        "{} ↔ {}  {:02}%",
+                        self.all_crystals[morph_from].name,
+                        self.all_crystals[morph_to].name,
+                        (fp_eff.crystal_mix.clamp(0.0, 1.0) * 100.0).round() as u32,
+                    )
+                } else if deform_active {
+                    format!("{} · DEFORMED", cur_crystal_name)
+                } else {
+                    cur_crystal_name.to_owned()
+                };
+                let cur_sys_name = if hetero_active {
+                    let combination = match fp_eff.hetero_combination % 3 {
+                        HETERO_PRODUCT => "PRODUCT",
+                        HETERO_INTERFERENCE => "INTERFERENCE",
+                        _ => "ADD",
+                    };
+                    format!("HETEROSTRUCTURE · {combination}")
+                } else if morph_active {
+                    format!(
+                        "{} → {}",
+                        self.all_crystals[morph_from].system.name(),
+                        self.all_crystals[morph_to].system.name(),
+                    )
+                } else {
+                    cur_sys_name.to_owned()
+                };
+                let cdef = self.all_crystals[cur_crystal_idx];
+
                 // Build each pass's independent uniform. Tour transitions use
                 // the same current modulation inputs for both images, while the
                 // mode-specific base params and crystal colour stay distinct.
-                let cdef = self.all_crystals[cur_crystal_idx];
                 let make_field_uniform =
                     |effective: &FieldParams, crystal_idx: usize| FieldUniform {
                         mp: renderer::pack_mp(&effective.mp),
                         time: t,
                         mode: effective.mode,
-                        num_g: gpu.gpu_field.count as u32,
+                        num_g: field_num_g,
                         aspect: gpu.size.width as f32 / gpu.size.height.max(1) as f32,
                         crystal_color: {
-                            let cdef = self.all_crystals[crystal_idx];
-                            [cdef.color[0], cdef.color[1], cdef.color[2], 0.0]
+                            if effective.hetero_enabled && self.all_crystals.len() > 1 {
+                                let a_idx =
+                                    (effective.hetero_a as usize).min(self.all_crystals.len() - 1);
+                                let b_idx =
+                                    (effective.hetero_b as usize).min(self.all_crystals.len() - 1);
+                                let a = self.all_crystals[a_idx].color;
+                                let b = self.all_crystals[b_idx].color;
+                                let weight = effective.hetero_coupling.clamp(0.0, 2.0);
+                                let inv = 1.0 / (1.0 + weight);
+                                [
+                                    (a[0] + b[0] * weight) * inv,
+                                    (a[1] + b[1] * weight) * inv,
+                                    (a[2] + b[2] * weight) * inv,
+                                    0.0,
+                                ]
+                            } else if effective.crystal_morph_enabled
+                                && self.all_crystals.len() > 1
+                            {
+                                let from_idx = (effective.crystal_from as usize)
+                                    .min(self.all_crystals.len() - 1);
+                                let to_idx = (effective.crystal_to as usize)
+                                    .min(self.all_crystals.len() - 1);
+                                let from = self.all_crystals[from_idx].color;
+                                let to = self.all_crystals[to_idx].color;
+                                let mix = effective.crystal_mix.clamp(0.0, 1.0);
+                                [
+                                    from[0] + (to[0] - from[0]) * mix,
+                                    from[1] + (to[1] - from[1]) * mix,
+                                    from[2] + (to[2] - from[2]) * mix,
+                                    0.0,
+                                ]
+                            } else {
+                                let cdef = self.all_crystals[crystal_idx];
+                                [cdef.color[0], cdef.color[1], cdef.color[2], 0.0]
+                            }
                         },
                         mouse: self.mouse_norm,
                         mouse_down: if self.mouse_btn_down { 1.0 } else { 0.0 },
@@ -2660,7 +3032,7 @@ impl ApplicationHandler<UserEvent> for App {
                         _pad: [0.0; 3],
                     };
                 let field_params_uniform = make_field_uniform(&fp_eff, cur_crystal_idx);
-                let tour_field_transition = if self.sequencer.active {
+                let tour_field_transition = if self.sequencer.active || material_active {
                     None
                 } else {
                     tour_transition.map(|(mut previous, mix)| {
@@ -2676,8 +3048,9 @@ impl ApplicationHandler<UserEvent> for App {
                     })
                 };
                 let uses_tour_transition = tour_field_transition.is_some();
-                let default_field_transition = if self.tour.active {
+                let default_field_transition = if self.tour.active || material_active {
                     // Tour owns its longer crystal/mode transition timing.
+                    // A live material morph is already continuous in one pass.
                     self.scene_transition.record(field_params_uniform);
                     None
                 } else if render_mode == RenderMode::Field {
@@ -2866,9 +3239,9 @@ impl ApplicationHandler<UserEvent> for App {
                                     ui.label(egui::RichText::new("◇")
                                         .heading().color(egui::Color32::from_rgb(160, 170, 220)));
                                     ui.vertical(|ui| {
-                                        ui.label(egui::RichText::new(cur_crystal_name)
+                                        ui.label(egui::RichText::new(&cur_crystal_name)
                                             .strong().size(13.0));
-                                        ui.label(egui::RichText::new(cur_sys_name)
+                                        ui.label(egui::RichText::new(&cur_sys_name)
                                             .small().color(egui::Color32::from_gray(150)));
                                     });
                                 });
@@ -2953,6 +3326,348 @@ impl ApplicationHandler<UserEvent> for App {
                                     });
 
                                 if cur_render_mode == RenderMode::Field {
+                                egui::CollapsingHeader::new(
+                                    egui::RichText::new("CRYSTAL MORPH LAB")
+                                        .strong()
+                                        .color(egui::Color32::from_rgb(196, 145, 255)),
+                                )
+                                .id_salt("sec_crystal_morph")
+                                .default_open(false)
+                                .show(ui, |ui| {
+                                    if cur_seq_active {
+                                        ui.label(
+                                            egui::RichText::new(
+                                                "Sequencer owns the material state; edit MORPH in the selected step.",
+                                            )
+                                            .small()
+                                            .color(egui::Color32::from_gray(145)),
+                                        );
+                                    }
+                                    ui.add_enabled_ui(!cur_seq_active, |ui| {
+                                        let changed = ui
+                                            .checkbox(&mut fp.crystal_morph_enabled, "ENABLE MATERIAL MORPH")
+                                            .changed();
+                                        if changed && fp.crystal_morph_enabled {
+                                            fp.hetero_enabled = false;
+                                            fp.crystal_from = cur_crystal_idx as u16;
+                                            fp.crystal_to =
+                                                ((cur_crystal_idx + 1) % all_defs.len()) as u16;
+                                            fp.crystal_mix = 0.0;
+                                        }
+                                        ui.add_enabled_ui(fp.crystal_morph_enabled, |ui| {
+                                            let from_idx = (fp.crystal_from as usize)
+                                                .min(all_defs.len() - 1);
+                                            let to_idx =
+                                                (fp.crystal_to as usize).min(all_defs.len() - 1);
+                                            ui.horizontal(|ui| {
+                                                ui.label(
+                                                    egui::RichText::new("FROM")
+                                                        .small()
+                                                        .monospace(),
+                                                );
+                                                egui::ComboBox::from_id_salt("morph_from")
+                                                    .selected_text(all_defs[from_idx].name)
+                                                    .width(112.0)
+                                                    .show_ui(ui, |ui| {
+                                                        for (i, def) in all_defs.iter().enumerate() {
+                                                            ui.selectable_value(
+                                                                &mut fp.crystal_from,
+                                                                i as u16,
+                                                                def.name,
+                                                            );
+                                                        }
+                                                    });
+                                                if ui.small_button("⇄").clicked() {
+                                                    std::mem::swap(
+                                                        &mut fp.crystal_from,
+                                                        &mut fp.crystal_to,
+                                                    );
+                                                    fp.crystal_mix = 1.0 - fp.crystal_mix;
+                                                }
+                                                ui.label(
+                                                    egui::RichText::new("TO")
+                                                        .small()
+                                                        .monospace(),
+                                                );
+                                                egui::ComboBox::from_id_salt("morph_to")
+                                                    .selected_text(all_defs[to_idx].name)
+                                                    .width(112.0)
+                                                    .show_ui(ui, |ui| {
+                                                        for (i, def) in all_defs.iter().enumerate() {
+                                                            ui.selectable_value(
+                                                                &mut fp.crystal_to,
+                                                                i as u16,
+                                                                def.name,
+                                                            );
+                                                        }
+                                                    });
+                                            });
+                                            ui.horizontal(|ui| {
+                                                ui.label(
+                                                    egui::RichText::new("MIX")
+                                                        .small()
+                                                        .monospace(),
+                                                );
+                                                ui.add(
+                                                    egui::Slider::new(
+                                                        &mut fp.crystal_mix,
+                                                        0.0..=1.0,
+                                                    )
+                                                    .show_value(true),
+                                                );
+                                            });
+                                            ui.label(
+                                                egui::RichText::new(
+                                                    "Matched Miller planes move continuously; unmatched peaks pair by strength.",
+                                                )
+                                                .small()
+                                                .color(egui::Color32::from_gray(125)),
+                                            );
+                                        });
+                                    });
+                                });
+
+                                egui::CollapsingHeader::new(
+                                    egui::RichText::new("LATTICE DEFORMATION LAB")
+                                        .strong()
+                                        .color(egui::Color32::from_rgb(255, 184, 105)),
+                                )
+                                .id_salt("sec_lattice_deform")
+                                .default_open(false)
+                                .show(ui, |ui| {
+                                    if cur_seq_active {
+                                        ui.label(
+                                            egui::RichText::new(
+                                                "Sequencer owns deformation; edit it in the selected step.",
+                                            )
+                                            .small()
+                                            .color(egui::Color32::from_gray(145)),
+                                        );
+                                    }
+                                    ui.add_enabled_ui(!cur_seq_active, |ui| {
+                                        ui.checkbox(
+                                            &mut fp.lattice_deform_enabled,
+                                            "ENABLE GLOBAL DEFORMATION",
+                                        );
+                                        ui.add_enabled_ui(fp.lattice_deform_enabled, |ui| {
+                                            ui.horizontal_wrapped(|ui| {
+                                                if ui.small_button("COMPRESS").clicked() {
+                                                    fp.deform_hydro = -0.16;
+                                                    fp.deform_x = 0.0;
+                                                    fp.deform_y = 0.0;
+                                                    fp.deform_z = 0.0;
+                                                    fp.deform_xy = 0.0;
+                                                    fp.deform_xz = 0.0;
+                                                    fp.deform_yz = 0.0;
+                                                }
+                                                if ui.small_button("STRETCH X").clicked() {
+                                                    fp.deform_hydro = 0.0;
+                                                    fp.deform_x = 0.32;
+                                                    fp.deform_y = 0.0;
+                                                    fp.deform_z = 0.0;
+                                                }
+                                                if ui.small_button("SHEAR XY").clicked() {
+                                                    fp.deform_hydro = 0.0;
+                                                    fp.deform_xy = 0.28;
+                                                }
+                                                if ui.small_button("COLLAPSE Z").clicked() {
+                                                    fp.deform_hydro = 0.0;
+                                                    fp.deform_z = -0.48;
+                                                    fp.deform_wave = 0.2;
+                                                }
+                                                if ui.small_button("RESET").clicked() {
+                                                    fp.deform_hydro = 0.0;
+                                                    fp.deform_x = 0.0;
+                                                    fp.deform_y = 0.0;
+                                                    fp.deform_z = 0.0;
+                                                    fp.deform_xy = 0.0;
+                                                    fp.deform_xz = 0.0;
+                                                    fp.deform_yz = 0.0;
+                                                    fp.deform_wave = 0.0;
+                                                }
+                                            });
+                                            let mut slider = |
+                                                label: &str,
+                                                value: &mut f32,
+                                                range: std::ops::RangeInclusive<f32>,
+                                            | {
+                                                ui.horizontal(|ui| {
+                                                    ui.label(
+                                                        egui::RichText::new(label)
+                                                            .small()
+                                                            .monospace(),
+                                                    );
+                                                    ui.add(
+                                                        egui::Slider::new(value, range)
+                                                            .show_value(true),
+                                                    );
+                                                });
+                                            };
+                                            slider("MIX", &mut fp.deform_mix, 0.0..=1.0);
+                                            slider("HYDRO", &mut fp.deform_hydro, -0.45..=0.45);
+                                            slider("X", &mut fp.deform_x, -0.55..=0.65);
+                                            slider("Y", &mut fp.deform_y, -0.55..=0.65);
+                                            slider("Z", &mut fp.deform_z, -0.55..=0.65);
+                                            slider("SHEAR XY", &mut fp.deform_xy, -0.45..=0.45);
+                                            slider("SHEAR XZ", &mut fp.deform_xz, -0.45..=0.45);
+                                            slider("SHEAR YZ", &mut fp.deform_yz, -0.45..=0.45);
+                                            slider("POISSON", &mut fp.deform_poisson, 0.0..=0.49);
+                                            slider("WAVE", &mut fp.deform_wave, 0.0..=1.0);
+                                            slider("WAVE RATE", &mut fp.deform_wave_rate, 0.0..=1.5);
+                                            ui.label(
+                                                egui::RichText::new(
+                                                    "Transforms every reciprocal vector by G' = (I + ε)^-T G.",
+                                                )
+                                                .small()
+                                                .color(egui::Color32::from_gray(125)),
+                                            );
+                                        });
+                                    });
+                                });
+
+                                egui::CollapsingHeader::new(
+                                    egui::RichText::new("HETEROSTRUCTURE LAB")
+                                        .strong()
+                                        .color(egui::Color32::from_rgb(104, 214, 255)),
+                                )
+                                .id_salt("sec_heterostructure")
+                                .default_open(false)
+                                .show(ui, |ui| {
+                                    if cur_seq_active {
+                                        ui.label(
+                                            egui::RichText::new(
+                                                "Sequencer owns both layers; edit them in the selected step.",
+                                            )
+                                            .small()
+                                            .color(egui::Color32::from_gray(145)),
+                                        );
+                                    }
+                                    ui.add_enabled_ui(!cur_seq_active, |ui| {
+                                        let changed = ui
+                                            .checkbox(
+                                                &mut fp.hetero_enabled,
+                                                "ENABLE TWO-LAYER FIELD",
+                                            )
+                                            .changed();
+                                        if changed && fp.hetero_enabled {
+                                            fp.crystal_morph_enabled = false;
+                                            fp.hetero_a = cur_crystal_idx as u16;
+                                            fp.hetero_b =
+                                                ((cur_crystal_idx + 1) % all_defs.len()) as u16;
+                                        }
+                                        ui.add_enabled_ui(fp.hetero_enabled, |ui| {
+                                            let a_idx =
+                                                (fp.hetero_a as usize).min(all_defs.len() - 1);
+                                            let b_idx =
+                                                (fp.hetero_b as usize).min(all_defs.len() - 1);
+                                            ui.horizontal(|ui| {
+                                                ui.label(
+                                                    egui::RichText::new("LAYER A")
+                                                        .small()
+                                                        .monospace(),
+                                                );
+                                                egui::ComboBox::from_id_salt("hetero_a")
+                                                    .selected_text(all_defs[a_idx].name)
+                                                    .width(125.0)
+                                                    .show_ui(ui, |ui| {
+                                                        for (i, def) in all_defs.iter().enumerate() {
+                                                            ui.selectable_value(
+                                                                &mut fp.hetero_a,
+                                                                i as u16,
+                                                                def.name,
+                                                            );
+                                                        }
+                                                    });
+                                                if ui.small_button("⇄").clicked() {
+                                                    std::mem::swap(
+                                                        &mut fp.hetero_a,
+                                                        &mut fp.hetero_b,
+                                                    );
+                                                    fp.hetero_twist = -fp.hetero_twist;
+                                                    fp.hetero_shift_x = -fp.hetero_shift_x;
+                                                    fp.hetero_shift_y = -fp.hetero_shift_y;
+                                                }
+                                                ui.label(
+                                                    egui::RichText::new("B")
+                                                        .small()
+                                                        .monospace(),
+                                                );
+                                                egui::ComboBox::from_id_salt("hetero_b")
+                                                    .selected_text(all_defs[b_idx].name)
+                                                    .width(125.0)
+                                                    .show_ui(ui, |ui| {
+                                                        for (i, def) in all_defs.iter().enumerate() {
+                                                            ui.selectable_value(
+                                                                &mut fp.hetero_b,
+                                                                i as u16,
+                                                                def.name,
+                                                            );
+                                                        }
+                                                    });
+                                            });
+                                            ui.horizontal_wrapped(|ui| {
+                                                ui.selectable_value(
+                                                    &mut fp.hetero_combination,
+                                                    HETERO_ADD,
+                                                    "ADD",
+                                                );
+                                                ui.selectable_value(
+                                                    &mut fp.hetero_combination,
+                                                    HETERO_PRODUCT,
+                                                    "PRODUCT",
+                                                );
+                                                ui.selectable_value(
+                                                    &mut fp.hetero_combination,
+                                                    HETERO_INTERFERENCE,
+                                                    "INTERFERENCE",
+                                                );
+                                            });
+                                            let mut slider = |
+                                                label: &str,
+                                                value: &mut f32,
+                                                range: std::ops::RangeInclusive<f32>,
+                                            | {
+                                                ui.horizontal(|ui| {
+                                                    ui.label(
+                                                        egui::RichText::new(label)
+                                                            .small()
+                                                            .monospace(),
+                                                    );
+                                                    ui.add(
+                                                        egui::Slider::new(value, range)
+                                                            .show_value(true),
+                                                    );
+                                                });
+                                            };
+                                            slider("TWIST °", &mut fp.hetero_twist, -30.0..=30.0);
+                                            slider(
+                                                "MISMATCH",
+                                                &mut fp.hetero_mismatch,
+                                                -0.35..=0.35,
+                                            );
+                                            slider("SHIFT X", &mut fp.hetero_shift_x, -4.0..=4.0);
+                                            slider("SHIFT Y", &mut fp.hetero_shift_y, -4.0..=4.0);
+                                            slider(
+                                                "SEPARATION",
+                                                &mut fp.hetero_separation,
+                                                -6.0..=6.0,
+                                            );
+                                            slider(
+                                                "COUPLING",
+                                                &mut fp.hetero_coupling,
+                                                0.0..=2.0,
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(
+                                                    "ADD overlays peaks; PRODUCT creates sum/difference harmonics; INTERFERENCE adds moiré beats.",
+                                                )
+                                                .small()
+                                                .color(egui::Color32::from_gray(125)),
+                                            );
+                                        });
+                                    });
+                                });
+
                                 // Field params (collapsible, open by default)
                                 egui::CollapsingHeader::new(egui::RichText::new("FIELD")
                                     .strong().color(egui::Color32::from_rgb(137, 225, 215)))
@@ -3372,6 +4087,181 @@ impl ApplicationHandler<UserEvent> for App {
                                                 }
                                             });
                                         });
+
+                                        ui.horizontal(|ui| {
+                                            let changed = ui
+                                                .checkbox(
+                                                    &mut ep.crystal_morph_enabled,
+                                                    "MORPH",
+                                                )
+                                                .changed();
+                                            if changed && ep.crystal_morph_enabled {
+                                                ep.hetero_enabled = false;
+                                                ep.crystal_from = cur_crystal_idx as u16;
+                                                ep.crystal_to =
+                                                    ((cur_crystal_idx + 1) % all_defs.len()) as u16;
+                                                ep.crystal_mix = 0.0;
+                                            }
+                                            ui.add_enabled_ui(ep.crystal_morph_enabled, |ui| {
+                                                let from_idx = (ep.crystal_from as usize)
+                                                    .min(all_defs.len() - 1);
+                                                let to_idx = (ep.crystal_to as usize)
+                                                    .min(all_defs.len() - 1);
+                                                egui::ComboBox::from_id_salt((
+                                                    "step_morph_from",
+                                                    edit_idx,
+                                                ))
+                                                .selected_text(all_defs[from_idx].name)
+                                                .width(120.0)
+                                                .show_ui(ui, |ui| {
+                                                    for (i, def) in all_defs.iter().enumerate() {
+                                                        ui.selectable_value(
+                                                            &mut ep.crystal_from,
+                                                            i as u16,
+                                                            def.name,
+                                                        );
+                                                    }
+                                                });
+                                                ui.label("→");
+                                                egui::ComboBox::from_id_salt((
+                                                    "step_morph_to",
+                                                    edit_idx,
+                                                ))
+                                                .selected_text(all_defs[to_idx].name)
+                                                .width(120.0)
+                                                .show_ui(ui, |ui| {
+                                                    for (i, def) in all_defs.iter().enumerate() {
+                                                        ui.selectable_value(
+                                                            &mut ep.crystal_to,
+                                                            i as u16,
+                                                            def.name,
+                                                        );
+                                                    }
+                                                });
+                                                ui.label(
+                                                    egui::RichText::new("mix").small().monospace(),
+                                                );
+                                                ui.add(
+                                                    egui::Slider::new(
+                                                        &mut ep.crystal_mix,
+                                                        0.0..=1.0,
+                                                    )
+                                                    .show_value(true),
+                                                );
+                                            });
+                                        });
+
+                                        egui::CollapsingHeader::new("STEP DEFORMATION")
+                                            .id_salt(("step_deform", edit_idx))
+                                            .default_open(ep.lattice_deform_enabled)
+                                            .show(ui, |ui| {
+                                                ui.checkbox(
+                                                    &mut ep.lattice_deform_enabled,
+                                                    "ENABLE",
+                                                );
+                                                ui.add_enabled_ui(
+                                                    ep.lattice_deform_enabled,
+                                                    |ui| {
+                                                        ui.horizontal_wrapped(|ui| {
+                                                            esl!(ui, "mix", &mut ep.deform_mix, 0.0, 1.0);
+                                                            esl!(ui, "hydro", &mut ep.deform_hydro, -0.45, 0.45);
+                                                            esl!(ui, "x", &mut ep.deform_x, -0.55, 0.65);
+                                                            esl!(ui, "y", &mut ep.deform_y, -0.55, 0.65);
+                                                            esl!(ui, "z", &mut ep.deform_z, -0.55, 0.65);
+                                                        });
+                                                        ui.horizontal_wrapped(|ui| {
+                                                            esl!(ui, "xy", &mut ep.deform_xy, -0.45, 0.45);
+                                                            esl!(ui, "xz", &mut ep.deform_xz, -0.45, 0.45);
+                                                            esl!(ui, "yz", &mut ep.deform_yz, -0.45, 0.45);
+                                                            esl!(ui, "poisson", &mut ep.deform_poisson, 0.0, 0.49);
+                                                            esl!(ui, "wave", &mut ep.deform_wave, 0.0, 1.0);
+                                                            esl!(ui, "rate", &mut ep.deform_wave_rate, 0.0, 1.5);
+                                                        });
+                                                    },
+                                                );
+                                            });
+
+                                        egui::CollapsingHeader::new("STEP HETEROSTRUCTURE")
+                                            .id_salt(("step_hetero", edit_idx))
+                                            .default_open(ep.hetero_enabled)
+                                            .show(ui, |ui| {
+                                                let changed = ui
+                                                    .checkbox(&mut ep.hetero_enabled, "ENABLE")
+                                                    .changed();
+                                                if changed && ep.hetero_enabled {
+                                                    ep.crystal_morph_enabled = false;
+                                                    ep.hetero_a = cur_crystal_idx as u16;
+                                                    ep.hetero_b =
+                                                        ((cur_crystal_idx + 1) % all_defs.len())
+                                                            as u16;
+                                                }
+                                                ui.add_enabled_ui(ep.hetero_enabled, |ui| {
+                                                    let a_idx = (ep.hetero_a as usize)
+                                                        .min(all_defs.len() - 1);
+                                                    let b_idx = (ep.hetero_b as usize)
+                                                        .min(all_defs.len() - 1);
+                                                    ui.horizontal(|ui| {
+                                                        egui::ComboBox::from_id_salt((
+                                                            "step_hetero_a",
+                                                            edit_idx,
+                                                        ))
+                                                        .selected_text(all_defs[a_idx].name)
+                                                        .width(140.0)
+                                                        .show_ui(ui, |ui| {
+                                                            for (i, def) in
+                                                                all_defs.iter().enumerate()
+                                                            {
+                                                                ui.selectable_value(
+                                                                    &mut ep.hetero_a,
+                                                                    i as u16,
+                                                                    def.name,
+                                                                );
+                                                            }
+                                                        });
+                                                        ui.label("⊕");
+                                                        egui::ComboBox::from_id_salt((
+                                                            "step_hetero_b",
+                                                            edit_idx,
+                                                        ))
+                                                        .selected_text(all_defs[b_idx].name)
+                                                        .width(140.0)
+                                                        .show_ui(ui, |ui| {
+                                                            for (i, def) in
+                                                                all_defs.iter().enumerate()
+                                                            {
+                                                                ui.selectable_value(
+                                                                    &mut ep.hetero_b,
+                                                                    i as u16,
+                                                                    def.name,
+                                                                );
+                                                            }
+                                                        });
+                                                        ui.selectable_value(
+                                                            &mut ep.hetero_combination,
+                                                            HETERO_ADD,
+                                                            "ADD",
+                                                        );
+                                                        ui.selectable_value(
+                                                            &mut ep.hetero_combination,
+                                                            HETERO_PRODUCT,
+                                                            "PRODUCT",
+                                                        );
+                                                        ui.selectable_value(
+                                                            &mut ep.hetero_combination,
+                                                            HETERO_INTERFERENCE,
+                                                            "INTERFERENCE",
+                                                        );
+                                                    });
+                                                    ui.horizontal_wrapped(|ui| {
+                                                        esl!(ui, "twist°", &mut ep.hetero_twist, -30.0, 30.0);
+                                                        esl!(ui, "mismatch", &mut ep.hetero_mismatch, -0.35, 0.35);
+                                                        esl!(ui, "shift x", &mut ep.hetero_shift_x, -4.0, 4.0);
+                                                        esl!(ui, "shift y", &mut ep.hetero_shift_y, -4.0, 4.0);
+                                                        esl!(ui, "separation", &mut ep.hetero_separation, -6.0, 6.0);
+                                                        esl!(ui, "coupling", &mut ep.hetero_coupling, 0.0, 2.0);
+                                                    });
+                                                });
+                                            });
 
                                         // Per-step timing/curve/prob overrides
                                         if let Some((mut dm, curve_ov, mut pr, cond)) = seq_selected_extras {
@@ -4521,8 +5411,14 @@ fn run_render_cli(args: &[String]) -> Result<(), String> {
     let bands = audio::AudioBands::default();
     let aspect = width as f32 / height.max(1) as f32;
     let accent = crystal_color(&crystal);
+    let all_defs = all_crystals();
+    let mut morph_cache: Option<CrystalMorphCache> = None;
+    let mut hetero_cache: Option<HeterostructureCache> = None;
+    let mut base_field = GpuField::from_crystal(&crystal, 3);
+    base_field.seed_kpoint([0.0; 3], 1.0);
+    let mut material_pack = vec![0.0; reciprocal::MAX_G * 4 * 2];
 
-    let eval = move |t: f32| -> FieldUniform {
+    let eval = move |t: f32| -> bench::ClipFrame {
         let dt = (t - prev_t).max(0.0);
         prev_t = t;
         seq.tick(dt);
@@ -4531,7 +5427,102 @@ fn run_render_cli(args: &[String]) -> Result<(), String> {
         // Headless render skips the feedback pass, so blank fb_enabled regardless.
         let mut fp = fp;
         fp.fb_enabled = false;
-        field_params_to_uniform(&fp, t, aspect, &accent)
+        let mut uniform = field_params_to_uniform(&fp, t, aspect, &accent);
+
+        let hetero_active = fp.hetero_enabled && all_defs.len() > 1;
+        let morph_active =
+            fp.crystal_morph_enabled && !hetero_active && all_defs.len() > 1;
+        let material_active =
+            hetero_active || morph_active || fp.lattice_deform_enabled;
+        let gfield = if material_active {
+            let count = if hetero_active {
+                let a_idx = (fp.hetero_a as usize).min(all_defs.len() - 1);
+                let b_idx = (fp.hetero_b as usize).min(all_defs.len() - 1);
+                let rebuild = hetero_cache
+                    .as_ref()
+                    .is_none_or(|cache| !cache.matches(a_idx, b_idx));
+                if rebuild {
+                    hetero_cache = Some(HeterostructureCache::new(a_idx, b_idx, &all_defs));
+                }
+                let cache = hetero_cache.as_ref().unwrap();
+                let count = cache.field.pack_into(
+                    HeterostructureParams {
+                        twist: fp.hetero_twist.to_radians(),
+                        mismatch: fp.hetero_mismatch.clamp(-0.45, 0.45),
+                        shift: [fp.hetero_shift_x, fp.hetero_shift_y],
+                        separation: fp.hetero_separation,
+                        coupling: fp.hetero_coupling,
+                        combination: fp.hetero_combination,
+                    },
+                    &mut material_pack,
+                );
+                let a = all_defs[a_idx].color;
+                let b = all_defs[b_idx].color;
+                let weight = fp.hetero_coupling.clamp(0.0, 2.0);
+                let inv = 1.0 / (1.0 + weight);
+                uniform.crystal_color = [
+                    (a[0] + b[0] * weight) * inv,
+                    (a[1] + b[1] * weight) * inv,
+                    (a[2] + b[2] * weight) * inv,
+                    0.0,
+                ];
+                count
+            } else if morph_active {
+                let from_idx = (fp.crystal_from as usize).min(all_defs.len() - 1);
+                let to_idx = (fp.crystal_to as usize).min(all_defs.len() - 1);
+                let rebuild = morph_cache
+                    .as_ref()
+                    .is_none_or(|cache| !cache.matches(from_idx, to_idx));
+                if rebuild {
+                    morph_cache = Some(CrystalMorphCache::new(from_idx, to_idx, &all_defs));
+                }
+                let cache = morph_cache.as_ref().unwrap();
+                cache.morph.pack_into(fp.crystal_mix, &mut material_pack);
+                let from = all_defs[from_idx].color;
+                let to = all_defs[to_idx].color;
+                let mix = fp.crystal_mix.clamp(0.0, 1.0);
+                uniform.crystal_color = [
+                    from[0] + (to[0] - from[0]) * mix,
+                    from[1] + (to[1] - from[1]) * mix,
+                    from[2] + (to[2] - from[2]) * mix,
+                    0.0,
+                ];
+                cache.morph.count()
+            } else {
+                base_field.pack_into(&mut material_pack);
+                base_field.count
+            };
+
+            if fp.lattice_deform_enabled {
+                let wave = 1.0
+                    + fp.deform_wave.clamp(0.0, 1.0)
+                        * (TAU * fp.deform_wave_rate.max(0.0) * t).sin();
+                let scale = fp.deform_mix.clamp(0.0, 1.0) * wave;
+                let nu = fp.deform_poisson.clamp(0.0, 0.49);
+                let x = fp.deform_x;
+                let y = fp.deform_y;
+                let z = fp.deform_z;
+                let _ = reciprocal::deform_pack_in_place(
+                    &mut material_pack,
+                    count,
+                    ReciprocalDeformation {
+                        xx: (fp.deform_hydro + x - nu * (y + z)) * scale,
+                        yy: (fp.deform_hydro + y - nu * (x + z)) * scale,
+                        zz: (fp.deform_hydro + z - nu * (x + y)) * scale,
+                        xy: fp.deform_xy * scale,
+                        xz: fp.deform_xz * scale,
+                        yz: fp.deform_yz * scale,
+                    },
+                );
+            }
+            Some(bench::ClipGField {
+                packed: material_pack.clone(),
+                count: count as u32,
+            })
+        } else {
+            None
+        };
+        bench::ClipFrame { uniform, gfield }
     };
 
     let opts = bench::ClipOpts {
@@ -5592,6 +6583,60 @@ mod routing_tests {
             assert_eq!(r.fb_mirror, 5, "fb_mirror must snap to b at t={t}");
             assert!(r.fb_enabled, "fb_enabled must snap to b at t={t}");
         }
+    }
+
+    #[test]
+    fn lerp_fp_automates_crystal_mix_and_snaps_material_pair() {
+        let mut a = FieldParams::default();
+        a.crystal_morph_enabled = true;
+        a.crystal_from = 2;
+        a.crystal_to = 9;
+        a.crystal_mix = 0.0;
+        let mut b = a.clone();
+        b.crystal_mix = 1.0;
+
+        let midpoint = lerp_fp(&a, &b, 0.5);
+        assert!(midpoint.crystal_morph_enabled);
+        assert_eq!(midpoint.crystal_from, 2);
+        assert_eq!(midpoint.crystal_to, 9);
+        assert!(approx_eq(midpoint.crystal_mix, 0.5, 1e-6));
+
+        b.crystal_from = 4;
+        b.crystal_to = 12;
+        for t in [0.0_f32, 0.5, 1.0] {
+            let transitioned = lerp_fp(&a, &b, t);
+            assert_eq!(transitioned.crystal_from, 4);
+            assert_eq!(transitioned.crystal_to, 12);
+        }
+        let mut deform_from = FieldParams::default();
+        deform_from.lattice_deform_enabled = true;
+        deform_from.deform_hydro = -0.2;
+        deform_from.deform_wave = 0.0;
+        let mut deform_to = deform_from.clone();
+        deform_to.deform_hydro = 0.4;
+        deform_to.deform_wave = 0.8;
+        let deform_midpoint = lerp_fp(&deform_from, &deform_to, 0.5);
+        assert!(deform_midpoint.lattice_deform_enabled);
+        assert!(approx_eq(deform_midpoint.deform_hydro, 0.1, 1e-6));
+        assert!(approx_eq(deform_midpoint.deform_wave, 0.4, 1e-6));
+
+        let mut hetero_from = FieldParams::default();
+        hetero_from.hetero_enabled = true;
+        hetero_from.hetero_a = 2;
+        hetero_from.hetero_b = 7;
+        hetero_from.hetero_twist = 0.0;
+        hetero_from.hetero_combination = HETERO_ADD;
+        let mut hetero_to = hetero_from.clone();
+        hetero_to.hetero_a = 4;
+        hetero_to.hetero_b = 9;
+        hetero_to.hetero_twist = 12.0;
+        hetero_to.hetero_combination = HETERO_INTERFERENCE;
+        let hetero_midpoint = lerp_fp(&hetero_from, &hetero_to, 0.5);
+        assert!(hetero_midpoint.hetero_enabled);
+        assert_eq!(hetero_midpoint.hetero_a, 4);
+        assert_eq!(hetero_midpoint.hetero_b, 9);
+        assert_eq!(hetero_midpoint.hetero_combination, HETERO_INTERFERENCE);
+        assert!(approx_eq(hetero_midpoint.hetero_twist, 6.0, 1e-6));
     }
 
     // fb_auto_params must override every fb_* field of base, and only those.

@@ -575,12 +575,22 @@ pub fn slow_modes(results: &[ModeTiming], max_ratio: f64) -> (f64, Vec<ModeTimin
 //
 // `render_clip` is the workhorse behind `crystal-viz --render preset.json …`:
 // it spins up an offscreen wgpu device sized to the requested resolution,
-// renders one frame per fps tick by calling `eval(t)` to get a FieldUniform,
-// copies the framebuffer back, and writes a PNG per frame.
+// renders one frame per fps tick by calling `eval(t)` for a uniform and optional
+// morphed G-block, copies the framebuffer back, and writes a PNG per frame.
 //
 // Feedback path is intentionally NOT wired in here — the headless renderer
 // does the single-pass field shader only. Adding feedback would mean keeping a
 // persistent ping-pong texture across frames; doable but out of scope for v1.
+
+pub struct ClipGField {
+    pub packed: Vec<f32>,
+    pub count: u32,
+}
+
+pub struct ClipFrame {
+    pub uniform: crate::renderer::FieldUniform,
+    pub gfield: Option<ClipGField>,
+}
 
 pub struct ClipOpts {
     pub width:    u32,
@@ -593,14 +603,14 @@ pub struct ClipOpts {
 
 pub fn render_clip<F>(opts: ClipOpts, crystal: &Crystal, eval: F) -> Result<(), String>
 where
-    F: FnMut(f32) -> crate::renderer::FieldUniform,
+    F: FnMut(f32) -> ClipFrame,
 {
     pollster::block_on(render_clip_async(opts, crystal, eval))
 }
 
 async fn render_clip_async<F>(opts: ClipOpts, crystal: &Crystal, mut eval: F) -> Result<(), String>
 where
-    F: FnMut(f32) -> crate::renderer::FieldUniform,
+    F: FnMut(f32) -> ClipFrame,
 {
     type FU = crate::renderer::FieldUniform;
     use std::io::Write;
@@ -672,6 +682,7 @@ where
     let num_g = field.count as u32;
     let packed = field.pack();
     queue.write_buffer(&g_buf, 0, bytemuck::cast_slice(&packed));
+    let mut custom_gfield_uploaded = false;
 
     let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("clip bgl"),
@@ -733,10 +744,26 @@ where
     let t_start = Instant::now();
     for frame_idx in 0..total_frames {
         let t = opts.start + frame_idx as f32 / opts.fps as f32;
-        let mut u = eval(t);
-        // Caller can't know num_g (it's set inside this fn from the crystal),
-        // so we patch it on every frame.
-        u.num_g = num_g;
+        let frame = eval(t);
+        let mut u = frame.uniform;
+        if let Some(gfield) = frame.gfield {
+            if gfield.packed.len() != MAX_G * 4 * 2 {
+                return Err(format!(
+                    "frame {frame_idx}: G-block has {} floats, expected {}",
+                    gfield.packed.len(),
+                    MAX_G * 4 * 2,
+                ));
+            }
+            queue.write_buffer(&g_buf, 0, bytemuck::cast_slice(&gfield.packed));
+            u.num_g = gfield.count.min(MAX_G as u32);
+            custom_gfield_uploaded = true;
+        } else {
+            if custom_gfield_uploaded {
+                queue.write_buffer(&g_buf, 0, bytemuck::cast_slice(&packed));
+                custom_gfield_uploaded = false;
+            }
+            u.num_g = num_g;
+        }
         queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&u));
 
         let mut enc = device.create_command_encoder(&Default::default());
@@ -860,7 +887,7 @@ mod tests {
     #[test]
     fn mode_names_count_matches_dispatch() {
         // Sanity: the mode name table must match the count rendered by the shader
-        // (dispatch cases 0..36).
-        assert_eq!(MODE_NAMES.len(), 37);
+        // (dispatch cases 0..40).
+        assert_eq!(MODE_NAMES.len(), 41);
     }
 }

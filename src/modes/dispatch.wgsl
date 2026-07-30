@@ -48,6 +48,13 @@
         case 35u { col = render_spin_density(uv); }
         // ── generative dynamics (36) ──────────────────────────────────────
         case 36u { col = render_kuramoto(uv); }
+        // ── reciprocal diffraction observables (37..38) ───────────────────
+        case 37u { col = render_thermal_diffuse(uv); }
+        case 38u { col = render_laue(uv); }
+        // ── volumetric crystal traversal (39) ──────────────────────────────
+        case 39u { col = render_bragg_dive(uv); }
+        // ── recursive crystal fractals (40) ────────────────────────────────
+        case 40u { col = render_crystal_cascade(uv); }
         default  { col = render_rm(uv); }
     }
     // vignette — skip for KIKUCHI (draws its own boundaries)

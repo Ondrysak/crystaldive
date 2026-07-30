@@ -1,8 +1,8 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "Quantum Pulse",
   "step_dur": 2.0,
-  "curve": "Linear",
+  "curve": "Snap",
   "play_mode": "Forward",
   "trip_level": 5,
   "lfo": {
@@ -46,7 +46,8 @@
     "fb_brightness": "Off",
     "fb_inject": "Off",
     "fb_fold_angle": "B",
-    "fb_motion_blur": "Off"
+    "fb_motion_blur": "Off",
+    "flux": 0.5
   },
   "steps": [
     {
@@ -88,7 +89,11 @@
       "muted": false,
       "dur_mul": 1.0,
       "curve_override": null,
-      "prob": 1.0
+      "prob": 1.0,
+      "cond": [
+        1,
+        1
+      ]
     },
     {
       "params": {
@@ -127,132 +132,13 @@
         "fb_motion_blur": 0.44675604
       },
       "muted": false,
-      "dur_mul": 1.0,
-      "curve_override": "EaseInOut",
-      "prob": 1.0
-    },
-    {
-      "params": {
-        "mode": 22,
-        "mp": [
-          2.9060767,
-          1.1913494,
-          0.7445934,
-          0.720134,
-          0.7445934,
-          1.8147274,
-          1.4891868,
-          1.4891868,
-          1.9967269,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0
-        ],
-        "fb_enabled": true,
-        "fb_mirror": 9,
-        "fb_zoom": 1.0198528,
-        "fb_offset_x": 0.019934537,
-        "fb_offset_y": 0.019934537,
-        "fb_rotation": 0.029901806,
-        "fb_decay": 0.9793781,
-        "fb_color_shift": 0.29901809,
-        "fb_inject": 0.99918175,
-        "fb_fold_angle": 0.9967269,
-        "fb_saturation": 1.2990181,
-        "fb_brightness": 1.1993454,
-        "fb_blend_mode": 3,
-        "fb_motion_blur": 0.5990181
-      },
-      "muted": false,
-      "dur_mul": 0.5,
+      "dur_mul": 2.0,
       "curve_override": null,
-      "prob": 1.0
-    },
-    {
-      "params": {
-        "mode": 22,
-        "mp": [
-          2.9060767,
-          1.1913494,
-          0.7445934,
-          0.720134,
-          0.7445934,
-          1.8147274,
-          1.4891868,
-          1.4891868,
-          1.9967269,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0
-        ],
-        "fb_enabled": true,
-        "fb_mirror": 9,
-        "fb_zoom": 1.0198528,
-        "fb_offset_x": 0.019934537,
-        "fb_offset_y": 0.019934537,
-        "fb_rotation": 0.029901806,
-        "fb_decay": 0.9793781,
-        "fb_color_shift": 0.29901809,
-        "fb_inject": 0.99918175,
-        "fb_fold_angle": 0.9967269,
-        "fb_saturation": 1.2990181,
-        "fb_brightness": 1.1993454,
-        "fb_blend_mode": 3,
-        "fb_motion_blur": 0.5990181
-      },
-      "muted": false,
-      "dur_mul": 0.5,
-      "curve_override": null,
-      "prob": 1.0
-    },
-    {
-      "params": {
-        "mode": 22,
-        "mp": [
-          2.9060767,
-          1.1913494,
-          0.7445934,
-          0.720134,
-          0.7445934,
-          1.8147274,
-          1.4891868,
-          1.4891868,
-          1.9967269,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0
-        ],
-        "fb_enabled": true,
-        "fb_mirror": 9,
-        "fb_zoom": 1.0198528,
-        "fb_offset_x": 0.019934537,
-        "fb_offset_y": 0.019934537,
-        "fb_rotation": 0.029901806,
-        "fb_decay": 0.9793781,
-        "fb_color_shift": 0.29901809,
-        "fb_inject": 0.99918175,
-        "fb_fold_angle": 0.9967269,
-        "fb_saturation": 1.2990181,
-        "fb_brightness": 1.1993454,
-        "fb_blend_mode": 3,
-        "fb_motion_blur": 0.5990181
-      },
-      "muted": false,
-      "dur_mul": 1.0,
-      "curve_override": "Bounce",
-      "prob": 1.0
+      "prob": 1.0,
+      "cond": [
+        1,
+        1
+      ]
     },
     {
       "params": {
@@ -293,7 +179,146 @@
       "muted": false,
       "dur_mul": 1.0,
       "curve_override": null,
-      "prob": 1.0
+      "prob": 1.0,
+      "cond": [
+        1,
+        1
+      ]
+    },
+    {
+      "params": {
+        "mode": 22,
+        "mp": [
+          2.9060767,
+          1.1913494,
+          0.7445934,
+          0.720134,
+          0.7445934,
+          1.8147274,
+          1.4891868,
+          1.4891868,
+          1.9967269,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "fb_enabled": true,
+        "fb_mirror": 9,
+        "fb_zoom": 1.0198528,
+        "fb_offset_x": 0.019934537,
+        "fb_offset_y": 0.019934537,
+        "fb_rotation": 0.029901806,
+        "fb_decay": 0.9793781,
+        "fb_color_shift": 0.29901809,
+        "fb_inject": 0.99918175,
+        "fb_fold_angle": 0.9967269,
+        "fb_saturation": 1.2990181,
+        "fb_brightness": 1.1993454,
+        "fb_blend_mode": 3,
+        "fb_motion_blur": 0.5990181
+      },
+      "muted": false,
+      "dur_mul": 1.0,
+      "curve_override": null,
+      "prob": 1.0,
+      "cond": [
+        1,
+        1
+      ]
+    },
+    {
+      "params": {
+        "mode": 22,
+        "mp": [
+          2.9060767,
+          1.1913494,
+          0.7445934,
+          0.720134,
+          0.7445934,
+          1.8147274,
+          1.4891868,
+          1.4891868,
+          1.9967269,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "fb_enabled": true,
+        "fb_mirror": 9,
+        "fb_zoom": 1.0198528,
+        "fb_offset_x": 0.019934537,
+        "fb_offset_y": 0.019934537,
+        "fb_rotation": 0.029901806,
+        "fb_decay": 0.9793781,
+        "fb_color_shift": 0.29901809,
+        "fb_inject": 0.99918175,
+        "fb_fold_angle": 0.9967269,
+        "fb_saturation": 1.2990181,
+        "fb_brightness": 1.1993454,
+        "fb_blend_mode": 3,
+        "fb_motion_blur": 0.5990181
+      },
+      "muted": false,
+      "dur_mul": 1.0,
+      "curve_override": null,
+      "prob": 1.0,
+      "cond": [
+        1,
+        1
+      ]
+    },
+    {
+      "params": {
+        "mode": 22,
+        "mp": [
+          2.9060767,
+          1.1913494,
+          0.7445934,
+          0.720134,
+          0.7445934,
+          1.8147274,
+          1.4891868,
+          1.4891868,
+          1.9967269,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "fb_enabled": true,
+        "fb_mirror": 9,
+        "fb_zoom": 1.0198528,
+        "fb_offset_x": 0.019934537,
+        "fb_offset_y": 0.019934537,
+        "fb_rotation": 0.029901806,
+        "fb_decay": 0.9793781,
+        "fb_color_shift": 0.29901809,
+        "fb_inject": 0.99918175,
+        "fb_fold_angle": 0.9967269,
+        "fb_saturation": 1.2990181,
+        "fb_brightness": 1.1993454,
+        "fb_blend_mode": 3,
+        "fb_motion_blur": 0.5990181
+      },
+      "muted": false,
+      "dur_mul": 1.5,
+      "curve_override": null,
+      "prob": 1.0,
+      "cond": [
+        1,
+        1
+      ]
     },
     {
       "params": {
@@ -334,7 +359,11 @@
       "muted": false,
       "dur_mul": 1.0,
       "curve_override": null,
-      "prob": 1.0
+      "prob": 1.0,
+      "cond": [
+        1,
+        1
+      ]
     },
     {
       "params": {
@@ -373,9 +402,13 @@
         "fb_motion_blur": 0.48956743
       },
       "muted": false,
-      "dur_mul": 1.0,
-      "curve_override": null,
-      "prob": 1.0
+      "dur_mul": 1.5,
+      "curve_override": "Silk",
+      "prob": 1.0,
+      "cond": [
+        1,
+        1
+      ]
     },
     {
       "params": {
@@ -414,9 +447,15 @@
         "fb_motion_blur": 0.48956743
       },
       "muted": false,
-      "dur_mul": 0.5,
+      "dur_mul": 2.0,
       "curve_override": null,
-      "prob": 1.0
+      "prob": 1.0,
+      "cond": [
+        1,
+        1
+      ]
     }
-  ]
+  ],
+  "morph": 0.7566629,
+  "drift": 0.641763
 }

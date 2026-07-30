@@ -282,6 +282,40 @@ mod tests {
         assert!((q.drift - 0.63).abs() < 1e-5);
         assert!((q.lfo.flux - 0.71).abs() < 1e-5);
         assert_eq!(q.steps[0].cond, (2, 2));
+        p.steps[0].params.crystal_morph_enabled = true;
+        p.steps[0].params.crystal_from = 3;
+        p.steps[0].params.crystal_to = 11;
+        p.steps[0].params.crystal_mix = 0.64;
+        p.steps[0].params.lattice_deform_enabled = true;
+        p.steps[0].params.deform_hydro = -0.18;
+        p.steps[0].params.deform_xy = 0.27;
+        p.steps[0].params.deform_wave = 0.44;
+        p.steps[0].params.hetero_enabled = true;
+        p.steps[0].params.hetero_a = 5;
+        p.steps[0].params.hetero_b = 17;
+        p.steps[0].params.hetero_twist = 8.5;
+        p.steps[0].params.hetero_mismatch = 0.07;
+        p.steps[0].params.hetero_separation = 2.2;
+        p.steps[0].params.hetero_combination = crate::HETERO_INTERFERENCE;
+        let q = Preset::from_json(&p.to_pretty_json()).expect("parse morph state");
+        assert!(q.steps[0].params.crystal_morph_enabled);
+        assert_eq!(q.steps[0].params.crystal_from, 3);
+        assert_eq!(q.steps[0].params.crystal_to, 11);
+        assert!((q.steps[0].params.crystal_mix - 0.64).abs() < 1e-5);
+        assert!(q.steps[0].params.lattice_deform_enabled);
+        assert!((q.steps[0].params.deform_hydro + 0.18).abs() < 1e-5);
+        assert!((q.steps[0].params.deform_xy - 0.27).abs() < 1e-5);
+        assert!((q.steps[0].params.deform_wave - 0.44).abs() < 1e-5);
+        assert!(q.steps[0].params.hetero_enabled);
+        assert_eq!(q.steps[0].params.hetero_a, 5);
+        assert_eq!(q.steps[0].params.hetero_b, 17);
+        assert!((q.steps[0].params.hetero_twist - 8.5).abs() < 1e-5);
+        assert!((q.steps[0].params.hetero_mismatch - 0.07).abs() < 1e-5);
+        assert!((q.steps[0].params.hetero_separation - 2.2).abs() < 1e-5);
+        assert_eq!(
+            q.steps[0].params.hetero_combination,
+            crate::HETERO_INTERFERENCE
+        );
     }
 
     #[test]
@@ -302,6 +336,8 @@ mod tests {
         assert!(q.drift.abs() < 1e-5,         "v1 defaults to drift off");
         assert!((q.lfo.flux - 0.5).abs() < 1e-5, "flux defaults to 0.5");
         assert!(q.steps.iter().all(|s| s.cond == (1, 1)), "cond defaults to always");
+        assert!(q.steps.iter().all(|s| !s.params.crystal_morph_enabled));
+        assert!(q.steps.iter().all(|s| s.params.crystal_mix == 0.0));
     }
 
     #[test]

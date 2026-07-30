@@ -1,8 +1,8 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "Slow Zen",
   "step_dur": 5.0,
-  "curve": "EaseInOut",
+  "curve": "Silk",
   "play_mode": "Forward",
   "trip_level": 1,
   "lfo": {
@@ -46,7 +46,8 @@
     "fb_brightness": "Off",
     "fb_inject": "Off",
     "fb_fold_angle": "Off",
-    "fb_motion_blur": "Off"
+    "fb_motion_blur": "Off",
+    "flux": 0.5
   },
   "steps": [
     {
@@ -88,7 +89,11 @@
       "muted": false,
       "dur_mul": 0.5,
       "curve_override": null,
-      "prob": 1.0
+      "prob": 1.0,
+      "cond": [
+        1,
+        1
+      ]
     },
     {
       "params": {
@@ -127,9 +132,13 @@
         "fb_motion_blur": 0.0
       },
       "muted": false,
-      "dur_mul": 2.0,
-      "curve_override": "Snap",
-      "prob": 1.0
+      "dur_mul": 0.5,
+      "curve_override": null,
+      "prob": 1.0,
+      "cond": [
+        1,
+        1
+      ]
     },
     {
       "params": {
@@ -168,9 +177,13 @@
         "fb_motion_blur": 0.0
       },
       "muted": false,
-      "dur_mul": 1.0,
-      "curve_override": "Bounce",
-      "prob": 1.0
+      "dur_mul": 1.5,
+      "curve_override": null,
+      "prob": 1.0,
+      "cond": [
+        1,
+        1
+      ]
     },
     {
       "params": {
@@ -209,9 +222,13 @@
         "fb_motion_blur": 0.0
       },
       "muted": false,
-      "dur_mul": 1.0,
+      "dur_mul": 0.75,
       "curve_override": null,
-      "prob": 1.0
+      "prob": 1.0,
+      "cond": [
+        1,
+        1
+      ]
     },
     {
       "params": {
@@ -250,9 +267,13 @@
         "fb_motion_blur": 0.0
       },
       "muted": false,
-      "dur_mul": 1.0,
-      "curve_override": "Bounce",
-      "prob": 1.0
+      "dur_mul": 2.0,
+      "curve_override": null,
+      "prob": 1.0,
+      "cond": [
+        1,
+        1
+      ]
     },
     {
       "params": {
@@ -291,9 +312,13 @@
         "fb_motion_blur": 0.56312084
       },
       "muted": false,
-      "dur_mul": 1.5,
-      "curve_override": "Bounce",
-      "prob": 1.0
+      "dur_mul": 1.0,
+      "curve_override": null,
+      "prob": 1.0,
+      "cond": [
+        1,
+        1
+      ]
     },
     {
       "params": {
@@ -332,9 +357,13 @@
         "fb_motion_blur": 0.32021105
       },
       "muted": false,
-      "dur_mul": 2.0,
-      "curve_override": "EaseInOut",
-      "prob": 1.0
+      "dur_mul": 0.5,
+      "curve_override": null,
+      "prob": 1.0,
+      "cond": [
+        1,
+        1
+      ]
     },
     {
       "params": {
@@ -373,9 +402,15 @@
         "fb_motion_blur": 0.42929515
       },
       "muted": false,
-      "dur_mul": 1.5,
+      "dur_mul": 1.0,
       "curve_override": null,
-      "prob": 1.0
+      "prob": 1.0,
+      "cond": [
+        1,
+        1
+      ]
     }
-  ]
+  ],
+  "morph": 0.6819901,
+  "drift": 0.30591187
 }

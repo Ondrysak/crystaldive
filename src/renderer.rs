@@ -1439,6 +1439,11 @@ impl GpuState {
             .upload_gfield(&self.queue, &self.gpu_field.pack());
     }
 
+    /// Upload a caller-produced G-block, used by continuous crystal morphs.
+    pub fn upload_field_pack(&self, packed: &[f32]) {
+        self.field_pl.upload_gfield(&self.queue, packed);
+    }
+
     /// Render the crystal field (bypasses atom/bloom pipeline — writes straight to swapchain).
     /// Render one field image. Call [`render_field_transition`] when a tour
     /// changes mode or crystal and needs to crossfade two independently shaded

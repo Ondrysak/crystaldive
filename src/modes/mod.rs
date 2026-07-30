@@ -96,6 +96,14 @@ pub const FIELD_SHADER: &str = concat!(
     include_str!("mode_kuramoto.wgsl"),
     "\n",
     "\n",
+    include_str!("mode_thermal_diffuse.wgsl"),
+    "\n",
+    include_str!("mode_laue.wgsl"),
+    "\n",
+    include_str!("mode_bragg_dive.wgsl"),
+    "\n",
+    include_str!("mode_crystal_cascade.wgsl"),
+    "\n",
     include_str!("dispatch.wgsl"),
 );
 
