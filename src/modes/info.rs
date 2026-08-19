@@ -304,6 +304,66 @@ const CRYSTAL_CASCADE_PARAMS: &[ParamDesc] = &[
     ParamDesc::new(8, "depth", 3.0, 7.0, 6.0),
 ];
 
+const JULIA_LATTICE_PARAMS: &[ParamDesc] = &[
+    ParamDesc::new(0, "crys_seed", 0.0, 2.0, 0.9),
+    ParamDesc::new(1, "speed", 0.0, 2.0, 0.3),
+    ParamDesc::new(2, "breathe", 0.0, 1.0, 0.55),
+    ParamDesc::new(3, "iterations", 12.0, 42.0, 30.0),
+    ParamDesc::new(4, "hue", 0.0, 1.0, 0.0),
+    ParamDesc::new(5, "zoom", 0.2, 5.0, 1.0),
+    ParamDesc::new(6, "orbit", 0.0, 2.0, 1.0),
+    ParamDesc::new(7, "glow", 0.0, 2.0, 0.9),
+    ParamDesc::new(8, "crys_twist", 0.0, 2.0, 1.0),
+];
+
+const NEWTON_BASIN_PARAMS: &[ParamDesc] = &[
+    ParamDesc::new(0, "roots", 3.0, 7.0, 5.0),
+    ParamDesc::new(1, "speed", 0.0, 2.0, 0.3),
+    ParamDesc::new(2, "relax", 0.35, 1.35, 0.95),
+    ParamDesc::new(3, "iterations", 8.0, 28.0, 18.0),
+    ParamDesc::new(4, "hue", 0.0, 1.0, 0.0),
+    ParamDesc::new(5, "zoom", 0.2, 5.0, 1.0),
+    ParamDesc::new(6, "boundary", 0.0, 2.0, 1.2),
+    ParamDesc::new(7, "crys_bias", 0.0, 2.0, 1.0),
+    ParamDesc::new(8, "pulse", 0.0, 1.0, 0.55),
+];
+
+const APOLLONIAN_PARAMS: &[ParamDesc] = &[
+    ParamDesc::new(0, "inversion", 0.65, 1.75, 1.05),
+    ParamDesc::new(1, "speed", 0.0, 2.0, 0.3),
+    ParamDesc::new(2, "drift", 0.0, 1.0, 0.45),
+    ParamDesc::new(3, "iterations", 6.0, 18.0, 12.0),
+    ParamDesc::new(4, "hue", 0.0, 1.0, 0.0),
+    ParamDesc::new(5, "zoom", 0.2, 5.0, 1.0),
+    ParamDesc::new(6, "circles", 0.0, 2.0, 1.1),
+    ParamDesc::new(7, "lattice", 0.0, 2.0, 1.0),
+    ParamDesc::new(8, "fold", 0.0, 1.0, 0.65),
+];
+
+const BRAGG_KALEIDO_PARAMS: &[ParamDesc] = &[
+    ParamDesc::new(0, "symmetry", 3.0, 12.0, 6.0),
+    ParamDesc::new(1, "speed", 0.0, 2.0, 0.3),
+    ParamDesc::new(2, "bend", 0.0, 1.0, 0.55),
+    ParamDesc::new(3, "iterations", 4.0, 14.0, 10.0),
+    ParamDesc::new(4, "hue", 0.0, 1.0, 0.0),
+    ParamDesc::new(5, "zoom", 0.2, 5.0, 1.0),
+    ParamDesc::new(6, "inflation", 1.05, 2.1, 1.42),
+    ParamDesc::new(7, "crys_lock", 0.0, 2.0, 1.0),
+    ParamDesc::new(8, "beams", 0.0, 2.0, 1.1),
+];
+
+const MULTIBROT_FIELD_PARAMS: &[ParamDesc] = &[
+    ParamDesc::new(0, "power", 2.0, 6.0, 3.0),
+    ParamDesc::new(1, "speed", 0.0, 2.0, 0.3),
+    ParamDesc::new(2, "crys_warp", 0.0, 1.0, 0.65),
+    ParamDesc::new(3, "iterations", 16.0, 48.0, 34.0),
+    ParamDesc::new(4, "hue", 0.0, 1.0, 0.0),
+    ParamDesc::new(5, "zoom", 0.2, 5.0, 1.0),
+    ParamDesc::new(6, "orbit", 0.0, 2.0, 1.0),
+    ParamDesc::new(7, "drift", 0.0, 1.0, 0.5),
+    ParamDesc::new(8, "interior", 0.0, 2.0, 0.9),
+];
+
 pub fn mode_params(mode: u32) -> &'static [ParamDesc] {
     match mode {
         0  => ISO_PARAMS,
@@ -347,6 +407,11 @@ pub fn mode_params(mode: u32) -> &'static [ParamDesc] {
         38 => LAUE_PARAMS,
         39 => BRAGG_DIVE_PARAMS,
         40 => CRYSTAL_CASCADE_PARAMS,
+        41 => JULIA_LATTICE_PARAMS,
+        42 => NEWTON_BASIN_PARAMS,
+        43 => APOLLONIAN_PARAMS,
+        44 => BRAGG_KALEIDO_PARAMS,
+        45 => MULTIBROT_FIELD_PARAMS,
         _  => CANONICAL,
     }
 }
@@ -420,13 +485,13 @@ impl ModeInfo {
             11 | 13 | 16 | 18 | 19 | 23 | 32 | 33 | 34 | 35 => ModeArea::Materials,
             27 | 28 | 36 => ModeArea::Classical,
             26 | 29 | 30 => ModeArea::Fields,
-            40 => ModeArea::Fractal,
+            40..=45 => ModeArea::Fractal,
             _ => ModeArea::Crystal,
         }
     }
 }
 
-pub const MODES: [ModeInfo; 41] = [
+pub const MODES: [ModeInfo; 46] = [
     ModeInfo {
         idx: 0, name: "3D ISO",
         tagline: "Ray-marched isosurface of the crystal-field scalar.",
@@ -841,6 +906,56 @@ pub const MODES: [ModeInfo; 41] = [
             "I(x) = Σₙ orbit_trap(|ψₙ|) / (1 + 0.28n)",
         ],
         notes: "A crystal-specific feedback-free fractal. Each recursion level samples a different stride through the strongest loaded G-vectors, turns the resulting complex field into luminous zero sets and shells, then folds and inflates the domain for the next level. inflation controls self-similar scale, warp bends child levels with their parent field, sharpness tightens filaments, g_star chooses how many reciprocal vectors participate, phase_mix changes cross-level rotation, and depth adds generations. Hold the mouse to relocate the recursion centre. Crystal morph, strain, and heterostructure changes flow through the same G-vector buffer, so they reshape the hierarchy rather than merely recolor it.",
+    },
+    ModeInfo {
+        idx: 41, name: "JULIA LATTICE",
+        tagline: "Crystal-seeded Julia set with luminous reciprocal orbit traps.",
+        equations: &[
+            "zₙ₊₁ = zₙ² + c(G₀,G₁,t)",
+            "trap = minₙ ||zₙ| − r_G|",
+            "color ← escape time + orbit distance",
+        ],
+        notes: "A classic Julia fractal whose complex seed, orientation, and orbit-trap radius come from the loaded crystal's strongest reciprocal vectors. crys_seed controls material influence, breathe moves between connected and dust-like sets, orbit and glow expose internal filaments, and crys_twist rotates the lattice imprint.",
+    },
+    ModeInfo {
+        idx: 42, name: "NEWTON BASIN",
+        tagline: "Crystal-rotated Newton fractal with three to seven competing roots.",
+        equations: &[
+            "f(z) = zᴺ − a(G),    N = roots",
+            "zₙ₊₁ = zₙ − relax · f(zₙ)/f′(zₙ)",
+            "color ← converged root + convergence rate",
+        ],
+        notes: "Each pixel solves a crystal-rotated complex polynomial. Root count changes the basin symmetry; relax destabilizes or smooths convergence; boundary reveals the infinitely interleaved basin borders; crys_bias and pulse make reciprocal orientation and time reshape the roots.",
+    },
+    ModeInfo {
+        idx: 43, name: "APOLLONIAN",
+        tagline: "Recursive circle inversions directed by the crystal's reciprocal star.",
+        equations: &[
+            "q = p − cᵢ(G),    p′ = cᵢ + inversion·q/|q|²",
+            "cᵢ ∈ {directions of G₀,G₁,G₀−G₁}",
+            "I ← minimum circle and seam orbit traps",
+        ],
+        notes: "Three reciprocal-vector directions become moving inversion centres, recursively packing luminous circles and seams. inversion changes gasket topology, circles tightens the ring trap, lattice amplifies crystal alignment, fold blends in a mirrored Kleinian-style domain, and drift slowly rotates the packing.",
+    },
+    ModeInfo {
+        idx: 44, name: "BRAGG KALEIDO",
+        tagline: "Inflating kaleidoscopic folds locked to reciprocal-lattice directions.",
+        equations: &[
+            "θ′ = |mod(θ + θ_G, 2π/N) − π/N|",
+            "pₙ₊₁ = R_G ( inflation·pₙ − offset_G )",
+            "I ← polar seams + Σᵢ |F(Gᵢ)| cos(Gᵢ·p)",
+        ],
+        notes: "A fast polar-fold fractal whose reflections rotate with the loaded reciprocal star. symmetry chooses the mirror order, inflation controls recursive scale, bend lets Bragg waves curve later folds, crys_lock controls material orientation, and beams sharpens the kaleidoscope rays.",
+    },
+    ModeInfo {
+        idx: 45, name: "MULTIBROT FIELD",
+        tagline: "Power-two through power-six escape fractals warped by crystal geometry.",
+        equations: &[
+            "zₙ₊₁ = zₙᴾ + c,    P ∈ {2,…,6}",
+            "c = R_G(uv) + offset(G₀,G₁,t)",
+            "color ← smooth escape + angular stripe + orbit trap",
+        ],
+        notes: "The Mandelbrot family, made material-specific: reciprocal vectors rotate the complex plane and perturb c, so changing crystal reshapes bulbs and filaments. power selects the Multibrot order; crys_warp controls material influence; orbit exposes nested contour traps; drift moves c; interior illuminates bounded regions.",
     },
 ];
 

@@ -104,6 +104,16 @@ pub const FIELD_SHADER: &str = concat!(
     "\n",
     include_str!("mode_crystal_cascade.wgsl"),
     "\n",
+    include_str!("mode_julia_lattice.wgsl"),
+    "\n",
+    include_str!("mode_newton_basin.wgsl"),
+    "\n",
+    include_str!("mode_apollonian.wgsl"),
+    "\n",
+    include_str!("mode_bragg_kaleido.wgsl"),
+    "\n",
+    include_str!("mode_multibrot_field.wgsl"),
+    "\n",
     include_str!("dispatch.wgsl"),
 );
 

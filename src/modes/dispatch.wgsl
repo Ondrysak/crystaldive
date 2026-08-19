@@ -53,8 +53,13 @@
         case 38u { col = render_laue(uv); }
         // ── volumetric crystal traversal (39) ──────────────────────────────
         case 39u { col = render_bragg_dive(uv); }
-        // ── recursive crystal fractals (40) ────────────────────────────────
+        // ── crystal fractals (40..45) ─────────────────────────────────────
         case 40u { col = render_crystal_cascade(uv); }
+        case 41u { col = render_julia_lattice(uv); }
+        case 42u { col = render_newton_basin(uv); }
+        case 43u { col = render_apollonian(uv); }
+        case 44u { col = render_bragg_kaleido(uv); }
+        case 45u { col = render_multibrot_field(uv); }
         default  { col = render_rm(uv); }
     }
     // vignette — skip for KIKUCHI (draws its own boundaries)
