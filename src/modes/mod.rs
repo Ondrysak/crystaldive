@@ -114,6 +114,8 @@ pub const FIELD_SHADER: &str = concat!(
     "\n",
     include_str!("mode_multibrot_field.wgsl"),
     "\n",
+    include_str!("mode_mobility_edge.wgsl"),
+    "\n",
     include_str!("dispatch.wgsl"),
 );
 

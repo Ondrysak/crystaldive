@@ -364,6 +364,22 @@ const MULTIBROT_FIELD_PARAMS: &[ParamDesc] = &[
     ParamDesc::new(8, "interior", 0.0, 2.0, 0.9),
 ];
 
+const MOBILITY_EDGE_PARAMS: &[ParamDesc] = &[
+    ParamDesc::new(0, "energy span", 1.5, 6.0, 3.4),
+    ParamDesc::new(1, "drift", 0.0, 2.0, 0.35),
+    ParamDesc::new(2, "coupling", 0.4, 4.0, 2.4),
+    ParamDesc::new(3, "sites", 40.0, 120.0, 96.0),
+    ParamDesc::new(4, "hue", 0.0, 1.0, 0.0),
+    ParamDesc::new(5, "zoom", 0.4, 3.0, 1.0),
+    ParamDesc::new(6, "cut spin", 0.0, 1.5, 0.18),
+    ParamDesc::new(7, "contrast", 0.4, 3.0, 1.4),
+    ParamDesc::new(8, "edge glow", 0.0, 2.0, 1.0),
+    ParamDesc::new(9, "warp", 0.0, 2.0, 0.55),
+    ParamDesc::new(10, "tunnel", 0.0, 1.0, 0.30),
+    ParamDesc::new(11, "phason", 0.0, 3.0, 0.80),
+    ParamDesc::new(12, "cut fan", 0.0, 2.0, 0.50),
+];
+
 pub fn mode_params(mode: u32) -> &'static [ParamDesc] {
     match mode {
         0  => ISO_PARAMS,
@@ -412,6 +428,7 @@ pub fn mode_params(mode: u32) -> &'static [ParamDesc] {
         43 => APOLLONIAN_PARAMS,
         44 => BRAGG_KALEIDO_PARAMS,
         45 => MULTIBROT_FIELD_PARAMS,
+        46 => MOBILITY_EDGE_PARAMS,
         _  => CANONICAL,
     }
 }
@@ -481,7 +498,7 @@ impl ModeInfo {
         match self.idx {
             0..=9 | 17 | 31 | 39 => ModeArea::Crystal,
             12 | 37 | 38 => ModeArea::Reciprocal,
-            10 | 14 | 15 | 20 | 21 | 22 | 24 | 25 => ModeArea::Electronic,
+            10 | 14 | 15 | 20 | 21 | 22 | 24 | 25 | 46 => ModeArea::Electronic,
             11 | 13 | 16 | 18 | 19 | 23 | 32 | 33 | 34 | 35 => ModeArea::Materials,
             27 | 28 | 36 => ModeArea::Classical,
             26 | 29 | 30 => ModeArea::Fields,
@@ -491,7 +508,7 @@ impl ModeInfo {
     }
 }
 
-pub const MODES: [ModeInfo; 46] = [
+pub const MODES: [ModeInfo; 47] = [
     ModeInfo {
         idx: 0, name: "3D ISO",
         tagline: "Ray-marched isosurface of the crystal-field scalar.",
@@ -956,6 +973,17 @@ pub const MODES: [ModeInfo; 46] = [
             "color ← smooth escape + angular stripe + orbit trap",
         ],
         notes: "The Mandelbrot family, made material-specific: reciprocal vectors rotate the complex plane and perturb c, so changing crystal reshapes bulbs and filaments. power selects the Multibrot order; crys_warp controls material influence; orbit exposes nested contour traps; drift moves c; interior illuminates bounded regions.",
+    },
+    ModeInfo {
+        idx: 46, name: "MOBILITY EDGE",
+        tagline: "Localization spectrum of a 1D chain cut through the loaded crystal.",
+        equations: &[
+            "ψₙ₊₁ = (E − λV(n))ψₙ − ψₙ₋₁",
+            "V(n) = Σₖ Aₖ cos((Gₖ·d̂)·n + φₖ + phason·(p·ê))",
+            "γ = limₙ ln‖Tₙ⋯T₁‖/n,   hue ← IDOS (Sturm node count)",
+            "chart: swirl ∘ crystal displacement ∘ log-polar blend",
+        ],
+        notes: "Spectral theory instead of field synthesis: every pixel runs a transfer-matrix cocycle for a tight-binding chain whose quasiperiodic potential is the crystal projected onto a 1D cut (a generalized Aubry\u{2013}André model). Brightness is e^{-γ²} from the Lyapunov exponent — bright bands are extended states, darkness is localization and gaps, and the glowing frontier is the mobility edge. Hue tracks the integrated density of states. The screen is a curved slice through the spectral manifold: warp swirls the chart and lets the two strongest G-vectors displace it; tunnel bends it into a mirrored log-polar dive where energy is azimuth and coupling is wrapped log-radius; phason shears the chain's starting point on the phason torus across the screen; cut fan makes each pixel slice reciprocal space in a different direction. drift slides the chain through the crystal; drag to pan energy and bias coupling.",
     },
 ];
 

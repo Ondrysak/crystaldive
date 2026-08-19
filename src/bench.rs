@@ -887,7 +887,7 @@ mod tests {
     #[test]
     fn mode_names_count_matches_dispatch() {
         // Sanity: the mode name table must match the count rendered by the shader
-        // (dispatch cases 0..45).
-        assert_eq!(MODE_NAMES.len(), 46);
+        // (dispatch cases 0..46).
+        assert_eq!(MODE_NAMES.len(), 47);
     }
 }

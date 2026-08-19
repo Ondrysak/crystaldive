@@ -60,6 +60,8 @@
         case 43u { col = render_apollonian(uv); }
         case 44u { col = render_bragg_kaleido(uv); }
         case 45u { col = render_multibrot_field(uv); }
+        // ── spectral theory / localization (46) ───────────────────────────
+        case 46u { col = render_mobility_edge(uv); }
         default  { col = render_rm(uv); }
     }
     // vignette — skip for KIKUCHI (draws its own boundaries)
